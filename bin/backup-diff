@@ -1,0 +1,4 @@
+#!/bin/bash
+set -euo pipefail
+cd ~/.backup
+git diff -U0 --cached | grep '\+\./' | sed 's/^\+//'

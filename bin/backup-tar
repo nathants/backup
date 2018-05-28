@@ -1,0 +1,52 @@
+#!/usr/bin/env python3.6
+import sys
+import tarfile
+import xxhash
+import os
+
+os.chdir(os.path.expanduser('~/'))
+
+with open('.backup/index') as f:
+    index_raw = [x.strip().split('\t') for x in f]
+    index = {path: {'xxh64': xxh64, 'tar': tar} for path, tar, xxh64, _size in index_raw}
+
+changes = {}
+state = {}
+
+def copyfileobj(src, dst, length=None, exception=OSError, bufsize=None):
+    bufsize = 16 * 1024
+    state['size'] = length
+    xxh64 = state['xxh64']
+    if length == 0:
+        return
+    assert length
+    blocks, remainder = divmod(length, bufsize)
+    for b in range(blocks):
+        buf = src.read(bufsize)
+        if len(buf) < bufsize:
+            raise exception("unexpected end of data")
+        xxh64.update(buf)
+        dst.write(buf)
+    if remainder != 0:
+        buf = src.read(remainder)
+        if len(buf) < remainder:
+            raise exception("unexpected end of data")
+        xxh64.update(buf)
+        dst.write(buf)
+tarfile.copyfileobj = copyfileobj
+
+with tarfile.open(fileobj=sys.stdout.buffer, mode='w|') as tar:
+    for path in sys.stdin:
+        path = path.strip()
+        state['xxh64'] = xxhash.xxh64()
+        tar.add(path)
+        xxh64 = state['xxh64'].hexdigest()
+        if index[path]['xxh64'] != xxh64:
+            changes[path] = xxh64, state['size']
+
+with open('.backup/index', 'w') as f:
+    for path, tar, xxh64, size in index_raw:
+        if path in changes:
+            xxh64, size = changes[path]
+            print('changed:', path, xxh64, size, file=sys.stderr)
+        f.write('\t'.join([path, tar, xxh64, str(size)]) + '\n')

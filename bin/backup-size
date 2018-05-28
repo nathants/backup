@@ -1,0 +1,4 @@
+#!/usr/bin/env python3.6
+import subprocess
+stdout = subprocess.check_output('backup-diff | cut -f4', shell=True)
+print(round(sum(map(int, stdout.splitlines())) / 1024. / 1024., 2), 'mb')

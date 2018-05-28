@@ -1,0 +1,15 @@
+#!/usr/bin/env python3.6
+import sys
+files = {}
+for line in sys.stdin:
+    try:
+        path, tar, _xxh64, _size = line.strip().split('\t')
+    except:
+        print('error:', line)
+        raise
+    if tar not in files:
+        files[tar] = open(tar, 'w')
+    files[tar].write(path + '\n')
+for k in sorted(files):
+    print(k)
+    files[k].close()

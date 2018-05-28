@@ -1,0 +1,18 @@
+#!/bin/bash
+set -euo pipefail
+
+export LC_ALL=C
+cd ~/.backup
+
+status() { git status -s | sed -r 's/ +/ /g'; }
+if ! ([ -z "$(status)" ] || [ 'M index' = "$(status)" ]); then
+    echo error: ~/.backup working directory not clean
+    status
+    exit 1
+fi
+
+touch index
+mv index index.old
+cat index.old | backup-index | sort > index
+rm index.old
+git add index

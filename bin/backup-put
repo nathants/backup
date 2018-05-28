@@ -1,0 +1,7 @@
+#!/bin/bash
+set -euo pipefail
+dest=$backup_path/$1
+ssh $backup_host "cat > $dest"
+msg=$backup_host:$dest
+echo backup-put: $msg 1>&2
+echo $msg

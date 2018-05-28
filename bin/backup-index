@@ -1,0 +1,66 @@
+#!/usr/bin/env python3.6
+import datetime
+import os
+import sys
+import time
+import xxhash
+
+os.chdir(os.path.expanduser('~/'))
+
+start = time.time()
+size = 0
+count = 0
+name = datetime.datetime.utcnow().isoformat().split('.')[0] + 'Z.tar.lz4.gpg'
+
+index = (x.strip().split('\t') for x in sys.stdin)
+index = {path: {'xxh64': xxh64, 'tar': tar, 'size': size} for path, tar, xxh64, size in index}
+
+with open('.backup/ignore') as f:
+    ignores = [x.strip() for x in f.read().splitlines() if x.strip()]
+ends = [i.strip('$') for i in ignores if i.endswith('$')]
+subs = [i for i in ignores if not i.endswith('$')]
+print('ignoring:', file=sys.stderr)
+for e in ends:
+    print(' endswith:', e, file=sys.stderr)
+for s in subs:
+    print(' substring:', s, file=sys.stderr)
+
+for path, dirs, files in os.walk('.'):
+    for file in files:
+        count += 1
+        if count % 10_000 == 0:
+            rate = int(count / (time.time() - start))
+            print(f'scanned {count} files at {rate} per second', file=sys.stderr)
+        file_path = os.path.join(path, file)
+
+        if any(s in file_path for s in subs):
+            continue
+        if any(file_path.endswith(e) for e in ends):
+            continue
+        if os.path.islink(file_path):
+            continue
+
+        try:
+            file_size = 0
+            xxh64 = xxhash.xxh64()
+            with open(file_path, 'rb') as f:
+                while True:
+                    data = f.read(1024 ** 2)
+                    if not data:
+                        break
+                    xxh64.update(data)
+                    file_size += len(data)
+            xxh64 = xxh64.hexdigest()
+            if index.get(file_path, {}).get('xxh64') != xxh64:
+                size += file_size
+                chunk = size // 1024 ** 3
+                print('\t'.join([file_path, f'{name}.{chunk}', xxh64, str(file_size)]))
+            else:
+                s = index[file_path]
+                print('\t'.join([file_path, s['tar'], s['xxh64'], s['size']]))
+        except PermissionError as e:
+            print('skipping:', e, file=sys.stderr)
+
+mb = round(size / 1024. / 1024., 2)
+seconds = int(time.time() - start)
+print(f'scanned {count} files finding a diff of {mb} mb in {seconds} seconds', file=sys.stderr)

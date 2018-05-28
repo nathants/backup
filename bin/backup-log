@@ -1,0 +1,4 @@
+#!/bin/bash
+set -euo pipefail
+cd ~/.backup
+git log "$@"
