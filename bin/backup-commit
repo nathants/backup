@@ -1,7 +1,6 @@
 #!/bin/bash
 set -euo pipefail
 
-export LC_ALL=C
 cd ~/.backup
 
 status() { git status -s | sed -r 's/ +/ /g'; }
@@ -14,7 +13,7 @@ fi
 backup-diff | backup-partition | while read path; do
     echo process chunk: $path >&2
     cat $path \
-        | backup-tar  \
+        | backup-tar \
         | lz4 \
         | gpg -esv --no-armor \
         | tee >(backup-blake2b > $path.blake2b) \

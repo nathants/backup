@@ -58,7 +58,7 @@ for path, dirs, files in os.walk('.'):
             else:
                 s = index[file_path]
                 print('\t'.join([file_path, s['tar'], s['blake2b'], s['size']]))
-        except PermissionError as e:
+        except (PermissionError, OSError) as e:
             print('skipping:', e, file=sys.stderr)
 
 mb = round(size / 1024. / 1024., 2)

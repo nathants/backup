@@ -1,7 +1,6 @@
 #!/bin/bash
 set -euo pipefail
 
-export LC_ALL=C
 cd ~/.backup
 
 status() { git status -s | sed -r 's/ +/ /g'; }
@@ -16,11 +15,11 @@ if [ ! -f index ]; then
     git add index
     git commit -m 'init index'
 fi
-cat index | backup-index | sort > index.new
+cat index | backup-index | LC_ALL=C sort > index.new
 mv -f index.new index
 git add index
 backup-diff | backup-dedupe > index.dupes
-sort -m index index.dupes | backup-keeplast > index.new
+LC_ALL=C sort -m index index.dupes | backup-keeplast > index.new
 mv -f index.new index
 git add index
 rm index.*
