@@ -12,7 +12,8 @@ if ! ([ -z "$(status)" ] || [ 'M index' = "$(status)" ]); then
 fi
 
 backup-diff | backup-partition | while read path; do
-        cat $path \
+    echo process chunk: $path >&2
+    cat $path \
         | backup-tar  \
         | lz4 \
         | gpg -esv --no-armor \
