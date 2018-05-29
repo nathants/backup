@@ -7,9 +7,10 @@ for line in sys.stdin:
     except:
         print('error:', line)
         raise
-    if tar not in files:
-        files[tar] = open(tar, 'w')
-    files[tar].write(path + '\n')
+    if not tar.startswith('ref::'):
+        if tar not in files:
+            files[tar] = open(tar, 'w')
+        files[tar].write(path + '\n')
 for k in sorted(files):
     print(k)
     files[k].close()

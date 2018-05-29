@@ -1,0 +1,15 @@
+#!/usr/bin/env python3.6
+import sys
+last_path = None
+last_line = None
+for line in sys.stdin:
+    try:
+        path, _tar, _xxh64, _size = line.strip().split('\t')
+    except:
+        print('error:', line)
+        raise
+    if path != last_path and last_path:
+        print(last_line.strip())
+    last_path = path
+    last_line = line
+print(last_line.strip())

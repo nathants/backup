@@ -1,15 +1,18 @@
 #!/usr/bin/env python3.6
 import sys
-last_path = None
-last_line = None
-for line in sys.stdin:
-    try:
-        path, _tar, _xxh64, _size = line.strip().split('\t')
-    except:
-        print('error:', line)
-        raise
-    if path != last_path and last_path:
-        print(last_line.strip())
-    last_path = path
-    last_line = line
-print(last_line.strip())
+import subprocess
+index_raw = [x.strip().split('\t') for x in sys.stdin]
+index = {xxh64: {'path': path, 'size': size} for path, tar, xxh64, size in index_raw}
+proc = subprocess.Popen("git log -p|grep -P '^\+'|grep -P '.+\t.+\t.+\t.+'|sed 's/^\+//'|cut -f1-3", shell=True, executable='/bin/bash', stdout=subprocess.PIPE)
+while True:
+    line = proc.stdout.readline().decode('utf-8')
+    if not line:
+        break
+    path, tar, xxh64 = line.strip().split('\t')
+    if xxh64 in index:
+        index[xxh64]['ref'] = f'ref::{tar}::{path}'
+proc.wait()
+for path, tar, xxh64, size in index_raw:
+    if 'ref' in index[xxh64]:
+        tar = index[xxh64]['ref']
+    print('\t'.join([path, tar, xxh64, size]))

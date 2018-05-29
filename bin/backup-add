@@ -12,7 +12,12 @@ if ! ([ -z "$(status)" ] || [ 'M index' = "$(status)" ]); then
 fi
 
 touch index
-mv index index.old
-cat index.old | backup-index | sort > index
-rm index.old
+cat index | backup-index | sort > index.new
+mv -f index.new index
 git add index
+backup-diff | backup-dedupe > index.dupes
+sort -m index index.dupes | backup-keeplast > index.new
+mv -f index.new index
+git add index
+rm index.*
+echo novel data to commit: $(backup-size)
