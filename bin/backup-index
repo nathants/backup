@@ -3,7 +3,7 @@ import datetime
 import os
 import sys
 import time
-import xxhash
+import hashlib
 
 os.chdir(os.path.expanduser('~/'))
 
@@ -13,7 +13,7 @@ count = 0
 name = datetime.datetime.utcnow().isoformat().split('.')[0] + 'Z.tar.lz4.gpg'
 
 index = (x.strip().split('\t') for x in sys.stdin)
-index = {path: {'xxh64': xxh64, 'tar': tar, 'size': size} for path, tar, xxh64, size in index}
+index = {path: {'blake2b': blake2b, 'tar': tar, 'size': size} for path, tar, blake2b, size in index}
 
 with open('.backup/ignore') as f:
     ignores = [x.strip() for x in f.read().splitlines() if x.strip()]
@@ -42,22 +42,22 @@ for path, dirs, files in os.walk('.'):
 
         try:
             file_size = 0
-            xxh64 = xxhash.xxh64()
+            blake2b = hashlib.blake2b()
             with open(file_path, 'rb') as f:
                 while True:
                     data = f.read(1024 ** 2)
                     if not data:
                         break
-                    xxh64.update(data)
+                    blake2b.update(data)
                     file_size += len(data)
-            xxh64 = xxh64.hexdigest()
-            if index.get(file_path, {}).get('xxh64') != xxh64:
+            blake2b = blake2b.hexdigest()
+            if index.get(file_path, {}).get('blake2b') != blake2b:
                 size += file_size
                 chunk = size // 1024 ** 3
-                print('\t'.join([file_path, f'{name}.{chunk}', xxh64, str(file_size)]))
+                print('\t'.join([file_path, f'{name}.{chunk}', blake2b, str(file_size)]))
             else:
                 s = index[file_path]
-                print('\t'.join([file_path, s['tar'], s['xxh64'], s['size']]))
+                print('\t'.join([file_path, s['tar'], s['blake2b'], s['size']]))
         except PermissionError as e:
             print('skipping:', e, file=sys.stderr)
 

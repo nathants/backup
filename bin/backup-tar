@@ -1,14 +1,14 @@
 #!/usr/bin/env python3.6
 import sys
 import tarfile
-import xxhash
+import hashlib
 import os
 
 os.chdir(os.path.expanduser('~/'))
 
 with open('.backup/index') as f:
     index_raw = [x.strip().split('\t') for x in f]
-    index = {path: {'xxh64': xxh64, 'tar': tar} for path, tar, xxh64, _size in index_raw}
+    index = {path: {'blake2b': blake2b, 'tar': tar} for path, tar, blake2b, _size in index_raw}
 
 changes = {}
 state = {}
@@ -16,7 +16,7 @@ state = {}
 def copyfileobj(src, dst, length=None, exception=OSError, bufsize=None):
     bufsize = 16 * 1024
     state['size'] = length
-    xxh64 = state['xxh64']
+    blake2b = state['blake2b']
     if length == 0:
         return
     assert length
@@ -25,28 +25,28 @@ def copyfileobj(src, dst, length=None, exception=OSError, bufsize=None):
         buf = src.read(bufsize)
         if len(buf) < bufsize:
             raise exception("unexpected end of data")
-        xxh64.update(buf)
+        blake2b.update(buf)
         dst.write(buf)
     if remainder != 0:
         buf = src.read(remainder)
         if len(buf) < remainder:
             raise exception("unexpected end of data")
-        xxh64.update(buf)
+        blake2b.update(buf)
         dst.write(buf)
 tarfile.copyfileobj = copyfileobj
 
 with tarfile.open(fileobj=sys.stdout.buffer, mode='w|') as tar:
     for path in sys.stdin:
         path = path.strip()
-        state['xxh64'] = xxhash.xxh64()
+        state['blake2b'] = hashlib.blake2b()
         tar.add(path)
-        xxh64 = state['xxh64'].hexdigest()
-        if index[path]['xxh64'] != xxh64:
-            changes[path] = xxh64, state['size']
+        blake2b = state['blake2b'].hexdigest()
+        if index[path]['blake2b'] != blake2b:
+            changes[path] = blake2b, state['size']
 
 with open('.backup/index', 'w') as f:
-    for path, tar, xxh64, size in index_raw:
+    for path, tar, blake2b, size in index_raw:
         if path in changes:
-            xxh64, size = changes[path]
-            print('changed:', path, xxh64, size, file=sys.stderr)
-        f.write('\t'.join([path, tar, xxh64, str(size)]) + '\n')
+            blake2b, size = changes[path]
+            print('changed:', path, blake2b, size, file=sys.stderr)
+        f.write('\t'.join([path, tar, blake2b, str(size)]) + '\n')

@@ -16,7 +16,7 @@ backup-diff | backup-partition | while read path; do
         | backup-tar  \
         | lz4 \
         | gpg -esv --no-armor \
-        | tee >(xxh64 > $path.xxh64) \
+        | tee >(backup-blake2b > $path.blake2b) \
         | pv -r \
         | backup-put $path > put
     rm $path
@@ -28,8 +28,8 @@ git add index
 git commit -m "
 backup-commit
 $dest
-$(for path in *.xxh64; do
-    echo $(echo $path | sed s/\.xxh64//) $(cat $path)
+$(for path in *.blake2b; do
+    echo $(echo $path | sed s/\.blake2b//) $(cat $path)
     rm $path
 done)
 "

@@ -1,11 +1,11 @@
 #!/usr/bin/env python3.6
-import xxhash
+import hashlib
 import sys
-xxh64 = xxhash.xxh64()
+blake2b = hashlib.blake2b()
 while True:
     data = sys.stdin.buffer.read(1024 ** 2)
     if not data:
         break
-    xxh64.update(data)
-xxh64 = xxh64.hexdigest()
-print(xxh64)
+    blake2b.update(data)
+blake2b = blake2b.hexdigest()
+print(blake2b)

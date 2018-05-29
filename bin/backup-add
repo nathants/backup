@@ -11,7 +11,11 @@ if ! ([ -z "$(status)" ] || [ 'M index' = "$(status)" ]); then
     exit 1
 fi
 
-touch index
+if [ ! -f index ]; then
+    touch index
+    git add index
+    git commit -m 'init index'
+fi
 cat index | backup-index | sort > index.new
 mv -f index.new index
 git add index

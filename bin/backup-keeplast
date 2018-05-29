@@ -4,7 +4,7 @@ last_path = None
 last_line = None
 for line in sys.stdin:
     try:
-        path, _tar, _xxh64, _size = line.strip().split('\t')
+        path, _tar, _blake2b, _size = line.strip().split('\t')
     except:
         print('error:', line)
         raise

@@ -3,7 +3,7 @@ import sys
 files = {}
 for line in sys.stdin:
     try:
-        path, tar, _xxh64, _size = line.strip().split('\t')
+        path, tar, _blake2b, _size = line.strip().split('\t')
     except:
         print('error:', line)
         raise
