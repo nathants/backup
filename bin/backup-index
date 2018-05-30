@@ -18,8 +18,11 @@ index = {path: {'blake2b': blake2b, 'tar': tar, 'size': size} for path, tar, bla
 with open('.backup/ignore') as f:
     ignores = [x.strip() for x in f.read().splitlines() if x.strip()]
 ends = [i.strip('$') for i in ignores if i.endswith('$')]
-subs = [i for i in ignores if not i.endswith('$')]
+starts = [i.strip('^') for i in ignores if i.startswith('^')]
+subs = [i for i in ignores if not i.endswith('$') and not i.startswith('^')]
 print('ignoring:', file=sys.stderr)
+for s in starts:
+    print(' startswith:', s, file=sys.stderr)
 for e in ends:
     print(' endswith:', e, file=sys.stderr)
 for s in subs:
@@ -36,6 +39,8 @@ for path, dirs, files in os.walk('.'):
         if any(s in file_path for s in subs):
             continue
         if any(file_path.endswith(e) for e in ends):
+            continue
+        if any(file_path.startswith(s) for s in starts):
             continue
         if os.path.islink(file_path):
             continue
