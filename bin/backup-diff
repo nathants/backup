@@ -1,4 +1,8 @@
 #!/bin/bash
 set -euo pipefail
 cd ~/.backup
-git diff -U0 --cached | grep '\+\./' | sed 's/^\+//' | sed -r 's/\tref::[^\t]+/\tref::/'
+if [ -z "${commit:-}" ]; then
+    git diff -U0 --cached | grep '\+\./' | sed 's/^\+//' | sed -r 's/\tref::[^\t]+/\tref::/'
+else
+    git show -U0 "$commit" | grep '\+\./' | sed 's/^\+//' | sed -r 's/\tref::[^\t]+/\tref::/'
+fi

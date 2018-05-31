@@ -1,71 +1,74 @@
 #!/usr/bin/env python3.6
+import concurrent.futures
 import datetime
 import os
 import sys
-import time
 import hashlib
 
-os.chdir(os.path.expanduser('~/'))
+def main():
+    os.chdir(os.path.expanduser('~/'))
+    name = datetime.datetime.utcnow().isoformat().split('.')[0] + 'Z.tar.lz4.gpg'
+    stdin = (line.strip().split('\t') for line in sys.stdin)
+    index = {path: {'blake2b': blake2b, 'tar': tar, 'size': size} for path, tar, blake2b, size in stdin}
+    total_size = 0
+    num_cpu = int(os.environ.get('backup_numcpu', os.cpu_count()))
+    with concurrent.futures.ProcessPoolExecutor(num_cpu) as pool:
+        results = pool.map(hash_file, paths(), chunksize=500)
+        results = filter(None, results)
+        results = rate(results)
+        for path, blake2b, size in results:
+            if index.get(path, {}).get('blake2b') != blake2b:
+                total_size += size
+                chunk = total_size // 1024 ** 3
+                print('\t'.join([path, f'{name}.{chunk}', blake2b, str(size)]))
+            else:
+                ref = index[path]
+                print('\t'.join([path, ref['tar'], ref['blake2b'], ref['size']]))
 
-start = time.time()
-size = 0
-count = 0
-name = datetime.datetime.utcnow().isoformat().split('.')[0] + 'Z.tar.lz4.gpg'
-
-index = (x.strip().split('\t') for x in sys.stdin)
-index = {path: {'blake2b': blake2b, 'tar': tar, 'size': size} for path, tar, blake2b, size in index}
-
-with open('.backup/ignore') as f:
-    ignores = [x.strip() for x in f.read().splitlines() if x.strip()]
-ends = [i.strip('$') for i in ignores if i.endswith('$')]
-starts = [i.strip('^') for i in ignores if i.startswith('^')]
-subs = [i for i in ignores if not i.endswith('$') and not i.startswith('^')]
-print('ignoring:', file=sys.stderr)
-for s in starts:
-    print(' startswith:', s, file=sys.stderr)
-for e in ends:
-    print(' endswith:', e, file=sys.stderr)
-for s in subs:
-    print(' substring:', s, file=sys.stderr)
-
-for path, dirs, files in os.walk('.'):
-    for file in files:
+def rate(xs):
+    count = 0
+    for x in xs:
+        yield x
         count += 1
         if count % 10_000 == 0:
-            rate = int(count / (time.time() - start))
-            print(f'scanned {count} files at {rate} per second', file=sys.stderr)
-        file_path = os.path.join(path, file)
+            print(f'scanned {count} files', file=sys.stderr)
+    print(f'scanned: {count} files', file=sys.stderr)
 
-        if any(s in file_path for s in subs):
-            continue
-        if any(file_path.endswith(e) for e in ends):
-            continue
-        if any(file_path.startswith(s) for s in starts):
-            continue
-        if os.path.islink(file_path):
-            continue
+def paths():
+    with open('.backup/ignore') as f:
+        ignores = [x.strip() for x in f.read().splitlines() if x.strip()]
+    ends = [i.strip('$') for i in ignores if i.endswith('$')]
+    starts = [i.strip('^') for i in ignores if i.startswith('^')]
+    subs = [i for i in ignores if not i.endswith('$') and not i.startswith('^')]
+    for path, dirs, files in os.walk('.'):
+        for file in files:
+            file_path = os.path.join(path, file)
+            if any(s in file_path for s in subs):
+                continue
+            if any(file_path.endswith(e) for e in ends):
+                continue
+            if any(file_path.startswith(s) for s in starts):
+                continue
+            if os.path.islink(file_path):
+                continue
+            yield file_path
 
-        try:
-            file_size = 0
-            blake2b = hashlib.blake2b()
-            with open(file_path, 'rb') as f:
-                while True:
-                    data = f.read(1024 ** 2)
-                    if not data:
-                        break
-                    blake2b.update(data)
-                    file_size += len(data)
-            blake2b = blake2b.hexdigest()
-            if index.get(file_path, {}).get('blake2b') != blake2b:
-                size += file_size
-                chunk = size // 1024 ** 3
-                print('\t'.join([file_path, f'{name}.{chunk}', blake2b, str(file_size)]))
-            else:
-                s = index[file_path]
-                print('\t'.join([file_path, s['tar'], s['blake2b'], s['size']]))
-        except (PermissionError, OSError) as e:
-            print('skipping:', e, file=sys.stderr)
+def hash_file(path):
+    size = 0
+    blake2b = hashlib.blake2b()
+    try:
+        with open(path, 'rb') as f:
+            while True:
+                data = f.read(1024 ** 2)
+                if not data:
+                    break
+                blake2b.update(data)
+                size += len(data)
+    except (PermissionError, OSError) as e:
+        print('skipping:', os.getcwd(), e, file=sys.stderr)
+    else:
+        blake2b = blake2b.hexdigest()
+        return path, blake2b, size
 
-mb = round(size / 1024. / 1024., 2)
-seconds = int(time.time() - start)
-print(f'scanned {count} files finding a diff of {mb} mb in {seconds} seconds', file=sys.stderr)
+if __name__ == '__main__':
+    main()
