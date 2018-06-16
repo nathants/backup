@@ -11,7 +11,7 @@ with open('.backup/index') as f:
     index = {path: {'blake2b': blake2b, 'tar': tar} for path, tar, blake2b, _size in index_raw}
 
 changes = {}
-state = {}
+state = {'size': 0}
 
 def copyfileobj(src, dst, length=None, exception=OSError, bufsize=None):
     bufsize = 16 * 1024
