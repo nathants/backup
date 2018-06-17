@@ -39,10 +39,14 @@ with tarfile.open(fileobj=sys.stdout.buffer, mode='w|') as tar:
     for path in sys.stdin:
         path = path.strip()
         state['blake2b'] = hashlib.blake2b()
-        tar.add(path)
-        blake2b = state['blake2b'].hexdigest()
-        if index[path]['blake2b'] != blake2b:
-            changes[path] = blake2b, state['size']
+        try:
+            tar.add(path)
+        except Exception as e:
+            print('warning: couldnt add file', str(e), path, file=sys.stderr)
+        else:
+            blake2b = state['blake2b'].hexdigest()
+            if index[path]['blake2b'] != blake2b:
+                changes[path] = blake2b, state['size']
 
 with open('.backup/index', 'w') as f:
     for path, tar, blake2b, size in index_raw:
