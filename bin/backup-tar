@@ -41,8 +41,8 @@ with tarfile.open(fileobj=sys.stdout.buffer, mode='w|') as tar:
         state['blake2b'] = hashlib.blake2b()
         try:
             tar.add(path)
-        except Exception as e:
-            print('warning: couldnt add file', str(e), path, file=sys.stderr)
+        except FileNotFoundError as e:
+            print('warning: file removed after backup-add but before backup-commit', path, file=sys.stderr)
         else:
             blake2b = state['blake2b'].hexdigest()
             if index[path]['blake2b'] != blake2b:
