@@ -1,0 +1,52 @@
+#!/bin/bash
+set -euo pipefail
+
+cd ~/.backup
+
+server_regex='\.tar\.lz4\.gpg$'
+tarball_regex='^(.*\.tar\.lz4\.gpg\.[0-9]+) ([a-z0-9]{128})$'
+blake2b_regex='[a-z0-9]{128}'
+
+fail=false
+verify_last_n_backups=${1:-0}
+backups_checked=0
+for sha in $(git log --format=%H); do
+    msg=$(git log $sha -1 --pretty=%B)
+    cmd=$(echo "$msg" | head -n1)
+    body=$(echo "$msg" | tail -n+2)
+    if [ backup-commit = "$cmd" ]; then
+        if (($verify_last_n_backups != 0)) && (($backups_checked >= $verify_last_n_backups)); then
+            echo -e "\nsuccessfully verified the last $verify_last_n_backups backups"
+            exit 0
+        fi
+        backups_checked=$(($backups_checked + 1))
+        echo -e "\nsha: $sha"
+        echo "$body" | grep "$server_regex" | while read line; do
+            server=$(echo "$line" | cut -d: -f1)
+            prefix=$(dirname $(echo "$line" | cut -d: -f2-))
+            scp $(which backup-blake2b) $server:/tmp >/dev/null
+            echo server: $server
+            echo prefix: $prefix
+            echo "$body" | grep -P " $blake2b_regex$" | while read line; do
+                tarball=$(echo "$line" | sed -r "s/$tarball_regex/\1/")
+                blake2b=$(echo "$line" | sed -r "s/$tarball_regex/\2/")
+                remote_blake2b=$(ssh $server "python3.6 /tmp/backup-blake2b < $prefix/$tarball")
+                echo tarball: $tarball
+                if [ "$blake2b" = "$remote_blake2b" ]; then
+                    echo good: $blake2b
+                else
+                    echo error: should have been $blake2b
+                    fail=true
+                fi
+            done
+        done
+    fi
+done
+
+if [ "$fail" = true ]; then
+    echo -e '\nverification failed. see errors above'
+    exit 1
+else
+    echo -e '\nsuccessfully verified all backups'
+    exit 0
+fi
