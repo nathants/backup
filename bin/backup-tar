@@ -13,6 +13,19 @@ with open('.backup/index') as f:
 changes = {}
 state = {'size': 0}
 
+def hash_file(path):
+    size = 0
+    blake2b = hashlib.blake2b()
+    with open(path, 'rb') as f:
+        while True:
+            data = f.read(1024 ** 2)
+            if not data:
+                break
+            blake2b.update(data)
+            size += len(data)
+    blake2b = blake2b.hexdigest()
+    return path, blake2b, size
+
 def copyfileobj(src, dst, length=None, exception=OSError, bufsize=None):
     bufsize = 16 * 1024
     state['size'] = length
@@ -35,6 +48,8 @@ def copyfileobj(src, dst, length=None, exception=OSError, bufsize=None):
         dst.write(buf)
 tarfile.copyfileobj = copyfileobj
 
+empty_hash = '786a02f742015903c6c6fd852552d272912f4740e15847618a86e217f71f5419d25e1031afee585313896444934eb04b903a685b1448b755d56f701afe9be2ce'
+
 with tarfile.open(fileobj=sys.stdout.buffer, mode='w|') as tar:
     for path in sys.stdin:
         path = path.strip()
@@ -45,8 +60,11 @@ with tarfile.open(fileobj=sys.stdout.buffer, mode='w|') as tar:
             print('warning: file removed after backup-add but before backup-commit', path, file=sys.stderr)
         else:
             blake2b = state['blake2b'].hexdigest()
+            size = state['size']
+            if blake2b == empty_hash:
+                _, blake2b, size = hash_file(path)
             if index[path]['blake2b'] != blake2b:
-                changes[path] = blake2b, state['size']
+                changes[path] = blake2b, size
 
 with open('.backup/index', 'w') as f:
     for path, tar, blake2b, size in index_raw:
