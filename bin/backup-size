@@ -1,4 +1,4 @@
-#!/usr/bin/env python3.6
+#!/usr/bin/env python3
 import subprocess
 stdout = subprocess.check_output('backup-diff | grep -v $"\tref::" |cut -f4', shell=True).decode('utf-8')
 size_bytes = sum(map(int, stdout.splitlines()))

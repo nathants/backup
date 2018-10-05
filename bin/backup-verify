@@ -30,7 +30,7 @@ for sha in $(git log --format=%H); do
             echo "$body" | grep -P " $blake2b_regex$" | while read line; do
                 tarball=$(echo "$line" | sed -r "s/$tarball_regex/\1/")
                 blake2b=$(echo "$line" | sed -r "s/$tarball_regex/\2/")
-                remote_blake2b=$(ssh $server "python3.6 /tmp/backup-blake2b < $prefix/$tarball")
+                remote_blake2b=$(ssh $server "python3 /tmp/backup-blake2b < $prefix/$tarball")
                 echo tarball: $tarball
                 if [ "$blake2b" = "$remote_blake2b" ]; then
                     echo good: $blake2b
