@@ -4,7 +4,7 @@ set -euo pipefail
 cd ~/.backup
 
 status() { git status -s | sed -r 's/ +/ /g'; }
-if ! ([ -z "$(status)" ] || [ 'M index' = "$(status)" ]); then
+if ! [ -z "$(status)" ]; then
     echo error: ~/.backup working directory not clean
     status
     exit 1
