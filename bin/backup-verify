@@ -20,22 +20,21 @@ for git_sha in $(git log --format=%H); do
             exit 0
         fi
         backups_checked=$(($backups_checked + 1))
-        echo -e "\ngit_sha: $git_sha"
-        echo "$body" | grep "$server_regex" | while read line; do
-            server=$(echo "$line" | cut -d: -f1)
-            prefix=$(dirname $(echo "$line" | cut -d: -f2-))
+        echo -e "\ngit: $git_sha"
+        echo "$body" | grep "$server_regex" | while read server_line; do
+            server=$(echo "$server_line" | cut -d: -f1)
+            prefix=$(echo "$server_line" | cut -d: -f2- | sed -E "s:/[^\/\.]+$server_regex::")
             scp $(which backup-blake2b) $server:/tmp >/dev/null
             echo server: $server
             echo prefix: $prefix
-            echo "$body" | grep -P " $blake2b_regex$" | while read line; do
-                tarball=$(echo "$line" | sed -r "s/$tarball_regex/\1/")
-                blake2b=$(echo "$line" | sed -r "s/$tarball_regex/\2/")
-                remote_blake2b=$(ssh $server "python3 /tmp/backup-blake2b < $prefix/$tarball")
-                echo tarball: $tarball
+            echo "$body" | grep -P " $blake2b_regex$" | while read blake2b_line; do
+                tarball=$(echo "$blake2b_line" | sed -r "s/$tarball_regex/\1/")
+                blake2b=$(echo "$blake2b_line" | sed -r "s/$tarball_regex/\2/")
+                remote_blake2b=$(ssh $server "python3 /tmp/backup-blake2b < $prefix/$tarball" </dev/null)
                 if [ "$blake2b" = "$remote_blake2b" ]; then
-                    echo good blake2b: $blake2b
+                    echo good: $tarball $blake2b
                 else
-                    echo error blake2b: should have been $blake2b
+                    echo error: $tarball NOT $blake2b
                     fail=true
                 fi
             done

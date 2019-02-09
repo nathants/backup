@@ -22,7 +22,7 @@ backup-diff | backup-partition | while read path; do
     rm $path
 done
 
-dest=$(cat put | sed -r 's/\.[0-9]+$//')
+dest=$(dirname $(cat put | sed -r 's/\.[0-9]+$//'))
 rm put
 git add index
 git commit -m "
@@ -35,3 +35,5 @@ done)
 "
 
 git push
+
+backup-verify 1
