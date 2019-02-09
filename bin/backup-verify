@@ -10,8 +10,8 @@ blake2b_regex='[a-z0-9]{128}'
 fail=false
 verify_last_n_backups=${1:-0}
 backups_checked=0
-for sha in $(git log --format=%H); do
-    msg=$(git log $sha -1 --pretty=%B)
+for git_sha in $(git log --format=%H); do
+    msg=$(git log $git_sha -1 --pretty=%B)
     cmd=$(echo "$msg" | head -n1)
     body=$(echo "$msg" | tail -n+2)
     if [ backup-commit = "$cmd" ]; then
@@ -20,7 +20,7 @@ for sha in $(git log --format=%H); do
             exit 0
         fi
         backups_checked=$(($backups_checked + 1))
-        echo -e "\nsha: $sha"
+        echo -e "\ngit_sha: $git_sha"
         echo "$body" | grep "$server_regex" | while read line; do
             server=$(echo "$line" | cut -d: -f1)
             prefix=$(dirname $(echo "$line" | cut -d: -f2-))
@@ -33,9 +33,9 @@ for sha in $(git log --format=%H); do
                 remote_blake2b=$(ssh $server "python3 /tmp/backup-blake2b < $prefix/$tarball")
                 echo tarball: $tarball
                 if [ "$blake2b" = "$remote_blake2b" ]; then
-                    echo good: $blake2b
+                    echo good blake2b: $blake2b
                 else
-                    echo error: should have been $blake2b
+                    echo error blake2b: should have been $blake2b
                     fail=true
                 fi
             done
