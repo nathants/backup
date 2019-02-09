@@ -3,9 +3,8 @@ set -euo pipefail
 
 cd ~/.backup
 
-server_regex='\.tar\.lz4\.gpg$'
+suffix_regex='\.tar\.lz4\.gpg$'
 tarball_regex='^(.*\.tar\.lz4\.gpg\.[0-9]+) ([a-z0-9]{128})$'
-blake2b_regex='[a-z0-9]{128}'
 
 fail=false
 verify_last_n_backups=${1:-0}
@@ -13,7 +12,8 @@ backups_checked=0
 for git_sha in $(git log --format=%H); do
     msg=$(git log $git_sha -1 --pretty=%B)
     cmd=$(echo "$msg" | head -n1)
-    body=$(echo "$msg" | tail -n+2)
+    server=$(echo "$msg" | head -n2 | tail -n1)
+    body=$(echo "$msg" | tail -n+3)
     if [ backup-commit = "$cmd" ]; then
         if (($verify_last_n_backups != 0)) && (($backups_checked >= $verify_last_n_backups)); then
             echo -e "\nsuccessfully verified the last $verify_last_n_backups backups"
@@ -21,23 +21,21 @@ for git_sha in $(git log --format=%H); do
         fi
         backups_checked=$(($backups_checked + 1))
         echo -e "\ngit: $git_sha"
-        echo "$body" | grep "$server_regex" | while read server_line; do
-            server=$(echo "$server_line" | cut -d: -f1)
-            prefix=$(echo "$server_line" | cut -d: -f2- | sed -E "s:/[^\/\.]+$server_regex::")
-            scp $(which backup-blake2b) $server:/tmp >/dev/null
-            echo server: $server
-            echo prefix: $prefix
-            echo "$body" | grep -P " $blake2b_regex$" | while read blake2b_line; do
-                tarball=$(echo "$blake2b_line" | sed -r "s/$tarball_regex/\1/")
-                blake2b=$(echo "$blake2b_line" | sed -r "s/$tarball_regex/\2/")
-                remote_blake2b=$(ssh $server "python3 /tmp/backup-blake2b < $prefix/$tarball" </dev/null)
-                if [ "$blake2b" = "$remote_blake2b" ]; then
-                    echo good: $tarball $blake2b
-                else
-                    echo error: $tarball NOT $blake2b
-                    fail=true
-                fi
-            done
+        host=$(echo "$server" | cut -d: -f1)
+        path=$(echo "$server" | cut -d: -f2- | sed -E "s:/[^\/\.]+$suffix_regex::")
+        scp $(which backup-blake2b) $host:/tmp >/dev/null
+        echo host: $host
+        echo path: $path
+        echo "$body" | grep -E "$tarball_regex" | while read blake2b_line; do
+            tarball=$(echo "$blake2b_line" | sed -r "s/$tarball_regex/\1/")
+            blake2b=$(echo "$blake2b_line" | sed -r "s/$tarball_regex/\2/")
+            remote_blake2b=$(ssh $host "python3 /tmp/backup-blake2b < $path/$tarball" </dev/null)
+            if [ "$blake2b" = "$remote_blake2b" ]; then
+                echo good: $tarball $blake2b
+            else
+                echo error: $tarball NOT $blake2b
+                fail=true
+            fi
         done
     fi
 done
