@@ -13,12 +13,12 @@ fi
 backup-diff | backup-partition | while read path; do
     echo process chunk: $path >&2
     cat $path \
-        | backup-tar \
+        | -backup-tar \
         | lz4 \
         | gpg -esv --no-armor \
-        | tee >(backup-blake2b > $path.blake2b) \
+        | tee >(-backup-blake2b > $path.blake2b) \
         | pv -r \
-        | backup-put $path > put
+        | -backup-put $path > put
     rm $path
 done
 

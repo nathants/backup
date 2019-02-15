@@ -23,13 +23,13 @@ for git_sha in $(git log --format=%H); do
         echo -e "\ngit: $git_sha"
         host=$(echo "$server" | cut -d: -f1)
         path=$(echo "$server" | cut -d: -f2- | sed -E "s:/[^\/\.]+$suffix_regex::")
-        scp $(which backup-blake2b) $host:/tmp >/dev/null
+        scp $(which -backup-blake2b) $host:/tmp >/dev/null
         echo host: $host
         echo path: $path
         echo "$body" | grep -E "$tarball_regex" | while read blake2b_line; do
             tarball=$(echo "$blake2b_line" | sed -r "s/$tarball_regex/\1/")
             blake2b=$(echo "$blake2b_line" | sed -r "s/$tarball_regex/\2/")
-            remote_blake2b=$(ssh $host "python3 /tmp/backup-blake2b < $path/$tarball" </dev/null)
+            remote_blake2b=$(ssh $host "python3 /tmp/-backup-blake2b < $path/$tarball" </dev/null)
             if [ "$blake2b" = "$remote_blake2b" ]; then
                 echo good: $tarball $blake2b
             else

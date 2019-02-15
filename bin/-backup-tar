@@ -56,7 +56,7 @@ with tarfile.open(fileobj=sys.stdout.buffer, mode='w|') as tar:
         state['blake2b'] = hashlib.blake2b()
         try:
             tar.add(path)
-        except FileNotFoundError as e:
+        except FileNotFoundError:
             print('warning: file removed after backup-add but before backup-commit', path, file=sys.stderr)
         else:
             blake2b = state['blake2b'].hexdigest()

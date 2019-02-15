@@ -15,12 +15,12 @@ if [ ! -f index ]; then
     git add index
     git commit -m 'init index'
 fi
-cat index | backup-index | LC_ALL=C sort > index.new
+cat index | -backup-index | LC_ALL=C sort > index.new
 mv -f index.new index
 git add index
-backup-diff | backup-dedupe > index.dupes
-LC_ALL=C sort -m index index.dupes | backup-keeplast > index.new
+backup-diff | -backup-dedupe > index.dupes
+LC_ALL=C sort -m index index.dupes | -backup-keeplast > index.new
 mv -f index.new index
 git add index
 rm index.*
-echo novel data to commit: $(backup-size)
+echo novel data to commit: $(-backup-size)
