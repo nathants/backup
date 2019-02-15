@@ -3,12 +3,14 @@ set -euo pipefail
 
 cd ~/.backup
 
+verify_last_n_backups=${1:-0}
+
 suffix_regex='\.tar\.lz4\.gpg$'
 tarball_regex='^(.*\.tar\.lz4\.gpg\.[0-9]+) ([a-z0-9]{128})$'
 
 fail=false
-verify_last_n_backups=${1:-0}
 backups_checked=0
+
 for git_sha in $(git log --format=%H); do
     msg=$(git log $git_sha -1 --pretty=%B)
     cmd=$(echo "$msg" | head -n1)
