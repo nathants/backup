@@ -25,7 +25,7 @@ for git_sha in $(git log --format=%H); do
         echo -e "\ngit: $git_sha"
         host=$(echo "$server" | cut -d: -f1)
         path=$(echo "$server" | cut -d: -f2- | sed -E "s:/[^\/\.]+$suffix_regex::")
-        scp $(which -backup-blake2b) $host:/tmp >/dev/null
+        scp $(which -- -backup-blake2b) $host:/tmp >/dev/null
         echo host: $host
         echo path: $path
         echo "$body" | grep -E "$tarball_regex" | while read blake2b_line; do
