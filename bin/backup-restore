@@ -1,0 +1,87 @@
+#!/usr/bin/env python3
+import contextlib
+import collections
+import os
+import sys
+import termios
+import tty
+import subprocess
+import tarfile
+import os
+import tempfile
+
+co = lambda *a: subprocess.check_output(' '.join(map(str, a)), shell=True, executable='/bin/bash').decode('utf-8').strip()
+cc = lambda *a: subprocess.check_call(' '.join(map(str, a)), shell=True, executable='/bin/bash')
+
+lines = co('backup-find', sys.argv[1]).splitlines()
+lines = [x.split('\t') for x in lines]
+tarballs = collections.defaultdict(list)
+for line in lines:
+    path, tarball, blake2b, size = line
+    tarball = tarball.split('ref::')[-1].split('::')[0]
+    tarballs[tarball].append(line)
+
+
+download_dir = tempfile.mkdtemp()
+print(download_dir)
+
+@contextlib.contextmanager
+def cd(path):
+    orig = os.path.abspath(os.getcwd())
+    os.chdir(path)
+    try:
+        yield
+    except:
+        raise
+    finally:
+        os.chdir(orig)
+
+for tarball in sorted(tarballs):
+    print('unpack tarball:', tarball)
+    with cd(download_dir):
+        cc('-backup-get --', tarball)
+        tarball = os.path.abspath(tarball)
+
+    print(tarball)
+    paths = iter(tarballs[tarball])
+    path = next(paths)
+    with tarfile.open(tarball, 'r|') as tar:
+        for member in tar.getmembers():
+            # TODO deal with ref::
+            print(path, member.name)
+            if path == member.name:
+                tar.extract(member, ".")
+
+# #!/bin/bash
+# set -eou pipefail
+
+# if echo "$@" | grep -e '-h' -e '--help' &>/dev/null; then
+#     echo usage: backup-restore "^\./dir/file\..*$"1>&2
+#     exit 1
+# fi
+
+# IFS='
+# '
+
+# tarballs=$(
+#     cd $(mktemp -d)
+#     backup-find $1 | while read line; do
+#         f() { echo $line | cut -d$'\t' -f$1; }
+#         path=$(f 1)
+#         tarball=$(f 2)
+#         blake2b=$(f 3)
+#         if echo $tarball | grep "ref::"; then
+#             # TODO how can we test this easily?
+
+#         fi
+#         echo -e "$path\t$blake2b" >> $tarball.files
+#         echo $(pwd)/$tarball
+#     done
+# )
+
+# for tarball in $tarballs; do
+#     name=$(basename $tarball)
+#     -backup-get $name | gpg -d | lz4 -d | pv -r | tar --files-from=<($tarball.files | cut -d$'\t' -f1) -v -xf -
+# done
+
+# # TODO verify blake2bs

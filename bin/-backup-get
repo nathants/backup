@@ -1,0 +1,6 @@
+#!/bin/bash
+set -euo pipefail
+src=$BACKUP_PATH/$1
+echo start backup-get: $src 1>&2
+ssh $BACKUP_HOST cat $src
+echo finished backup-get: $src 1>&2

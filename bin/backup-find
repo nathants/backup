@@ -1,0 +1,16 @@
+#!/usr/bin/env python3
+import re
+import os
+import sys
+
+if '-h' in sys.argv or '--help' in sys.argv or len(sys.argv) != 2:
+    print('usage: backup-find "^\./dir/file\..*$"', file=sys.stderr)
+    sys.exit(1)
+
+regex = re.compile(sys.argv[1]).search
+with open(os.path.expanduser('~/.backup/index')) as f:
+    lines = f.read().splitlines()
+for line in lines:
+    path = line.split('\t')[0]
+    if regex(path):
+        print(line)
