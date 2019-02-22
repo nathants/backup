@@ -12,7 +12,7 @@ def main():
     stdin = (line.strip().split('\t') for line in sys.stdin)
     index = {path: {'blake2b': blake2b, 'tar': tar, 'size': size} for path, tar, blake2b, size in stdin}
     total_size = 0
-    num_cpu = int(os.environ.get('backup_numcpu', os.cpu_count()))
+    num_cpu = int(os.environ.get('BACKUP_NUMCPU', os.cpu_count()))
     with concurrent.futures.ProcessPoolExecutor(num_cpu) as pool:
         results = pool.map(hash_file, paths(), chunksize=500)
         results = filter(None, results)
