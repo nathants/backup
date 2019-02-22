@@ -20,7 +20,7 @@ def main():
         for path, blake2b, size in results:
             if index.get(path, {}).get('blake2b') != blake2b:
                 total_size += size
-                chunk = total_size // (1024 * 1024 * int(os.environ['BACKUP_CHUNK_MEGABYTES']))
+                chunk = total_size // (1024 * 1024 * int(os.environ.get('BACKUP_CHUNK_MEGABYTES', 100)))
                 print('\t'.join([path, f'{name}.{chunk}', blake2b, str(size)]))
             else:
                 ref = index[path]
