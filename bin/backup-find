@@ -8,7 +8,7 @@ if '-h' in sys.argv or '--help' in sys.argv or len(sys.argv) != 2:
     sys.exit(1)
 
 regex = re.compile(sys.argv[1]).search
-with open(os.path.expanduser('~/.backup/index')) as f:
+with open(f'{os.environ["BACKUP_ROOT"]}/.backup/index') as f:
     lines = f.read().splitlines()
 for line in lines:
     path = line.split('\t')[0]

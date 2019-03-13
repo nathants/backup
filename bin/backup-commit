@@ -1,11 +1,11 @@
 #!/bin/bash
 set -euo pipefail
 
-cd ~/.backup
+cd $BACKUP_ROOT/.backup
 
 status() { git status -s | sed -r 's/ +/ /g'; }
 if ! ([ -z "$(status)" ] || [ 'M index' = "$(status)" ]); then
-    echo error: ~/.backup working directory not clean
+    echo error: $BACKUP_ROOT/.backup working directory not clean
     status
     exit 1
 fi

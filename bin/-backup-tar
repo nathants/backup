@@ -4,7 +4,7 @@ import tarfile
 import hashlib
 import os
 
-os.chdir(os.path.expanduser('~/'))
+os.chdir(os.environ['BACKUP_ROOT'])
 
 with open('.backup/index') as f:
     index_raw = [x.strip().split('\t') for x in f]

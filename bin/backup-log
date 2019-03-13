@@ -1,4 +1,4 @@
 #!/bin/bash
 set -euo pipefail
-cd ~/.backup
+cd $BACKUP_ROOT/.backup
 git log "$@"

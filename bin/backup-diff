@@ -1,6 +1,6 @@
 #!/bin/bash
 set -euo pipefail
-cd ~/.backup
+cd $BACKUP_ROOT/.backup
 if [ -z "${commit:-}" ]; then
     git diff -U0 --cached | grep '\+\./' | sed 's/^\+//' | sed -r 's/\tref::[^\t]+/\tref::/'
 else

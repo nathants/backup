@@ -1,6 +1,6 @@
 #!/bin/bash
 set -euo pipefail
-cd ~/.backup
+cd $BACKUP_ROOT/.backup
 git reset HEAD
 git add .
 git reset --hard >/dev/null
