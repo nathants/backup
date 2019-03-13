@@ -10,6 +10,10 @@ if ! [ -z "$(status)" ]; then
     exit 1
 fi
 
+if [ ! -f ignore ]; then
+    touch ignore
+fi
+
 if [ ! -f index ]; then
     touch index
     git add index
