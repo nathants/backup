@@ -1,0 +1,32 @@
+#!/usr/bin/env python3
+import collections
+import subprocess
+import os
+import sys
+
+if '-h' in sys.argv or '--help' in sys.argv:
+    print('usage: backup-sizes [max-depth=1]', file=sys.stderr)
+    sys.exit(1)
+
+co = lambda *a: subprocess.check_output(' '.join(map(str, a)), shell=True, executable='/bin/bash').decode('utf-8').strip()
+
+os.chdir(f'{os.environ["BACKUP_ROOT"]}/.backup')
+
+
+
+try:
+    max_depth = int(sys.argv[1])
+except IndexError:
+    max_depth = 2
+
+sizes = collections.defaultdict(int)
+
+xs = co('backup-diff').splitlines()
+xs = (x.split('\t') for x in xs)
+xs = (('/'.join(path.split('/')[1:max_depth + 1]), int(size)) for path, _tar, _checksum, size in xs)
+
+for i, (path, size) in enumerate(xs):
+    sizes[path] += size
+
+for path, size in sorted(sizes.items(), key=lambda x: x[1], reverse=True):
+    print(path, int(size / 1024. / 1024.), 'MB')
