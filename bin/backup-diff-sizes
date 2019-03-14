@@ -29,4 +29,6 @@ for i, (path, size) in enumerate(xs):
     sizes[path] += size
 
 for path, size in sorted(sizes.items(), key=lambda x: x[1], reverse=True):
-    print(path, int(size / 1024. / 1024.), 'MB')
+    mb = int(size / 1024. / 1024.)
+    if mb:
+        print(path, mb, 'MB')
