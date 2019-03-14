@@ -2,6 +2,7 @@
 set -euo pipefail
 path=$1
 dest=$BACKUP_PATH/$path
+ssh $BACKUP_HOST mkdir -p $BACKUP_PATH
 lz4 \
     | gpg -esv --no-armor --cipher-algo aes256 --digest-algo sha512 --force-mdc \
     | tee >(-backup-blake2b > $path.blake2b) \
