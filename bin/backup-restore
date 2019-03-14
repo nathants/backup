@@ -11,6 +11,7 @@ import tempfile
 
 if '-h' in sys.argv or '--help' in sys.argv or len(sys.argv) != 2:
     print('usage: backup-restore "^\./dir/file\..*$"', file=sys.stderr)
+    print('usage: BACKUP_PATH=$PATH BACKUP_ALT_INDEX=$INDEX backup-restore "^\./dir/file\..*$"', file=sys.stderr)
     print('note: to preview restore, use backup-find instead of backup-restore', file=sys.stderr)
     sys.exit(1)
 

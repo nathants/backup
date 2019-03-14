@@ -9,12 +9,17 @@ ssh $BACKUP_HOST cat $path \
     | lz4 -d \
     | pv -r \
          > $name
-hash=$(backup-log | grep $name | awk '{print $2}')
-dl_hash=$(cat $name.blake2b)
-if [ "$hash" != "$dl_hash" ]; then
-    echo blake2b verification failed 1>&2
-    echo $dl_hash should have been $hash 1>&2
-    exit 1
+if [ -z "${BACKUP_ALT_INDEX:-}" ]; then
+    hash=$(backup-log | grep $name | awk '{print $2}')
+    dl_hash=$(cat $name.blake2b)
+    if [ "$hash" != "$dl_hash" ]; then
+        echo blake2b verification failed 1>&2
+        echo $dl_hash should have been $hash 1>&2
+        exit 1
+    fi
+else
+    echo skipping checksum verification of tarball since BACKUP_ALT_INDEX is set >&2
+    echo checksum verification will still be applied to each restored file >&2
 fi
 rm $name.blake2b
 echo finished backup-get: $path 1>&2
