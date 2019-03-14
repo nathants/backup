@@ -3,12 +3,18 @@ set -euo pipefail
 path=$BACKUP_PATH/$1
 name=$(basename $path)
 echo start backup-get: $path 1>&2
-ssh $BACKUP_HOST cat $path | tee >(-backup-blake2b > /tmp/$name.blake2b) | gpg -d | lz4 -d | pv -r > $name
+ssh $BACKUP_HOST cat $path \
+    | tee >(-backup-blake2b > $name.blake2b) \
+    | gpg -d \
+    | lz4 -d \
+    | pv -r \
+         > $name
 hash=$(backup-log | grep $name | awk '{print $2}')
-dl_hash=$(cat /tmp/$name.blake2b)
+dl_hash=$(cat $name.blake2b)
 if [ "$hash" != "$dl_hash" ]; then
     echo blake2b verification failed 1>&2
     echo $dl_hash should have been $hash 1>&2
     exit 1
 fi
+rm $name.blake2b
 echo finished backup-get: $path 1>&2

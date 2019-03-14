@@ -1,7 +1,12 @@
 #!/bin/bash
 set -euo pipefail
-dest=$BACKUP_PATH/$1
-pv -r | ssh $BACKUP_HOST "cat > $dest"
+path=$1
+dest=$BACKUP_PATH/$path
+lz4 \
+    | gpg -esv --no-armor --cipher-algo aes256 --digest-algo sha512 --force-mdc \
+    | tee >(-backup-blake2b > $path.blake2b) \
+    | pv -r \
+    | ssh $BACKUP_HOST "cat > $dest"
 msg=$BACKUP_HOST:$dest
 echo backup-put: $msg >&2
 echo $msg
