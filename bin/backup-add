@@ -1,6 +1,14 @@
 #!/bin/bash
 set -euo pipefail
 
+if [ ! -d $BACKUP_ROOT/.backup ]; then
+    mkdir -p $BACKUP_ROOT/.backup
+    (
+        cd $BACKUP_ROOT/.backup
+        git init
+    )
+fi
+
 cd $BACKUP_ROOT/.backup
 
 status() { git status -s | sed -r 's/ +/ /g'; }
