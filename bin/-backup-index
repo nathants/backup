@@ -5,6 +5,14 @@ import datetime
 import os
 import sys
 import hashlib
+import functools
+import itertools
+
+chunks = itertools.count(0)
+
+@functools.lru_cache()
+def sequential_chunk_num(chunk): # otherwise there will be holes in the sequence because of best effort chunking
+    return next(chunks)
 
 def main():
     os.chdir(os.environ['BACKUP_ROOT'])
@@ -21,6 +29,8 @@ def main():
             if index.get(path, {}).get('blake2b') != blake2b:
                 total_size += size
                 chunk = total_size // (1024 * 1024 * int(os.environ.get('BACKUP_CHUNK_MEGABYTES', 100)))
+                chunk = sequential_chunk_num(chunk)
+                chunk = str(chunk).zfill(os.environ.get('BACKUP_PAD_ZEROS', 2))
                 print('\t'.join([path, f'{name}.{chunk}', blake2b, str(size)]))
             else:
                 ref = index[path]
