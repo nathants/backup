@@ -19,8 +19,7 @@ if ! [ -z "$(status)" ]; then
 fi
 
 if [ ! -f ignore ]; then
-    echo '^/\.backup/ignore' > ignore
-    echo '^/\.backup/index' >> ignore
+    echo '^\./\.backup/' > ignore
 fi
 
 if [ ! -f index ]; then
