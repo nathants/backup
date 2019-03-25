@@ -12,8 +12,6 @@ co = lambda *a: subprocess.check_output(' '.join(map(str, a)), shell=True, execu
 
 os.chdir(f'{os.environ["BACKUP_ROOT"]}/.backup')
 
-
-
 try:
     max_depth = int(sys.argv[1])
 except IndexError:
