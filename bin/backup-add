@@ -3,13 +3,25 @@ set -euo pipefail
 
 if [ ! -d $BACKUP_ROOT/.backup ]; then
     mkdir -p $BACKUP_ROOT/.backup
-    (
-        cd $BACKUP_ROOT/.backup
-        git init
-    )
+    cd $BACKUP_ROOT/.backup
+    git init
+    echo '^\./\.backup/' > ignore
+    touch index
+    git add index
+    git commit -m 'init index'
 fi
 
 cd $BACKUP_ROOT/.backup
+
+if [ 'origin gcrypt' != "$(git remote -v | cut -d: -f1 | grep origin | sort -u | tr '\t' ' ')" ]; then
+    echo fatal: cd to $(pwd) and add a gcrypt remote for origin
+    exit 1
+fi
+
+if [ "master [origin/master]" != "$(git branch -vv | grep origin/master | awk '{print $2 " " $4}')" ]; then
+    fatal cd to $(pwd) and git push -u origin master
+    exit 1
+fi
 
 status() { git status -s | sed -r 's/ +/ /g'; }
 if ! [ -z "$(status)" ]; then
@@ -18,15 +30,6 @@ if ! [ -z "$(status)" ]; then
     exit 1
 fi
 
-if [ ! -f ignore ]; then
-    echo '^\./\.backup/' > ignore
-fi
-
-if [ ! -f index ]; then
-    touch index
-    git add index
-    git commit -m 'init index'
-fi
 cat index | -backup-index | LC_ALL=C sort > index.new
 mv -f index.new index
 git add index
