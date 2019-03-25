@@ -38,3 +38,5 @@ done)
 git push
 
 backup-verify 1
+
+backup-mirror
