@@ -18,8 +18,8 @@ if [ 'origin gcrypt' != "$(git remote -v | cut -d: -f1 | grep origin | sort -u |
     exit 1
 fi
 
-if [ "master [origin/master]" != "$(git branch -vv | grep origin/master | awk '{print $2 " " $4}')" ]; then
-    fatal cd to $(pwd) and git push -u origin master
+if [ "master origin/master" != "$(git branch -vv | grep origin/master | awk '{print $2 " " $4}' | tr -d ":[]")" ]; then
+    echo fatal cd to $(pwd) and git push -u origin master
     exit 1
 fi
 
