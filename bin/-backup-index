@@ -7,8 +7,24 @@ import sys
 import hashlib
 import functools
 import itertools
+import signal
+import contextlib
 
 chunks = itertools.count(0)
+
+@contextlib.contextmanager
+def timeout(seconds=1, message='timeout'):
+    def fn(*_):
+        raise Exception('%s after %s seconds' % (message, seconds)) from None
+    signal.signal(signal.SIGALRM, fn)
+    signal.alarm(seconds)
+    try:
+        yield
+    except:
+        raise
+    finally:
+        signal.alarm(0)
+
 
 @functools.lru_cache()
 def sequential_chunk_num(chunk): # otherwise there will be holes in the sequence because of best effort chunking
@@ -56,21 +72,27 @@ def paths():
             yield file_path
 
 def hash_file(path):
-    size = 0
-    blake2b = hashlib.blake2b()
+    @timeout(seconds=int(os.environ.get('BACKUP_TIMEOUT', 15)))
+    def _hash():
+        size = 0
+        blake2b = hashlib.blake2b()
+        try:
+            with open(path, 'rb') as f:
+                while True:
+                    data = f.read(1024 ** 2)
+                    if not data:
+                        break
+                    blake2b.update(data)
+                    size += len(data)
+        except (PermissionError, OSError) as e:
+            print('skipping:', os.getcwd(), e, file=sys.stderr)
+        else:
+            blake2b = blake2b.hexdigest()
+            return path, blake2b, size
     try:
-        with open(path, 'rb') as f:
-            while True:
-                data = f.read(1024 ** 2)
-                if not data:
-                    break
-                blake2b.update(data)
-                size += len(data)
-    except (PermissionError, OSError) as e:
-        print('skipping:', os.getcwd(), e, file=sys.stderr)
-    else:
-        blake2b = blake2b.hexdigest()
-        return path, blake2b, size
+        return _hash()
+    except:
+        print(f'skip: timeout hashing path: {path}', file=sys.stderr, flush=True)
 
 if __name__ == '__main__':
     main()
