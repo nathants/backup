@@ -11,7 +11,7 @@ all_bytes=$(ssh $BACKUP_HOST "ls -l $BACKUP_PATH")
 
 for mirror_s3 in $BACKUP_MIRROR_S3; do
     echo -e "\nmirror to: $mirror_s3 $BACKUP_MIRROR_S3_ARGS"
-    already_mirrored=$(aws s3 ls $mirror_s3/ || true)
+    already_mirrored=$(aws s3 ls $mirror_s3/)
     for git_sha in $(git log --format=%H); do
         msg=$(git log $git_sha -1 --pretty=%B)
         cmd=$(echo "$msg" | head -n1)
