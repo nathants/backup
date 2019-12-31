@@ -1,6 +1,6 @@
-#!/usr/bin/env python3
+#!/usr/bin/env pypy3
+import time
 import re
-import concurrent.futures
 import datetime
 import os
 import sys
@@ -25,7 +25,6 @@ def timeout(seconds=1, message='timeout'):
     finally:
         signal.alarm(0)
 
-
 @functools.lru_cache()
 def sequential_chunk_num(chunk): # otherwise there will be holes in the sequence because of best effort chunking
     return next(chunks)
@@ -36,12 +35,14 @@ def main():
     stdin = (line.strip().split('\t') for line in sys.stdin)
     index = {path: {'blake2b': blake2b, 'tar': tar, 'size': size} for path, tar, blake2b, size in stdin}
     total_size = 0
-    num_cpu = int(os.environ.get('BACKUP_NUMCPU', os.cpu_count()))
-    with concurrent.futures.ProcessPoolExecutor(num_cpu) as pool:
-        results = pool.map(hash_file, paths(), chunksize=500)
-        results = filter(None, results)
-        results = rate(results)
-        for path, blake2b, size in results:
+    times = []
+    for path in rate(paths()):
+        start = time.time()
+        try:
+            blake2b, size = hash_file(path)
+        except TypeError:
+            pass
+        else:
             if index.get(path, {}).get('blake2b') != blake2b:
                 total_size += size
                 chunk = total_size // (1024 * 1024 * int(os.environ.get('BACKUP_CHUNK_MEGABYTES', 100)))
@@ -51,48 +52,55 @@ def main():
             else:
                 ref = index[path]
                 print('\t'.join([path, ref['tar'], ref['blake2b'], ref['size']]))
+        times.append((time.time() - start, path))
+    times = list(sorted(times, key=lambda x: x[0]))
+    print('slowest scanned files:', file=sys.stderr)
+    for seconds, path in times[-10:]:
+        print('', path, round(seconds, 3), file=sys.stderr)
 
 def rate(xs):
     count = 0
     for x in xs:
         yield x
         count += 1
-        if count % 10_000 == 0:
+        if count % 1_000 == 0:
             print(f'scanned {count} files', file=sys.stderr)
     print(f'scanned: {count} files', file=sys.stderr)
 
 def paths():
     with open('.backup/ignore') as f:
         ignores = [x.strip() for x in f.read().splitlines() if x.strip()]
+    ignores = [re.compile(i).search for i in ignores]
     for path, dirs, files in os.walk('.'):
         for file in files:
             file_path = os.path.join(path, file)
-            if any(re.search(i, file_path) for i in ignores):
+            if any(ignore(file_path) for ignore in ignores):
                 continue
             yield file_path
 
-def hash_file(path):
-    @timeout(seconds=int(os.environ.get('BACKUP_TIMEOUT', 15)))
-    def _hash():
-        size = 0
-        blake2b = hashlib.blake2b()
-        try:
-            with open(path, 'rb') as f:
-                while True:
-                    data = f.read(1024 ** 2)
-                    if not data:
-                        break
-                    blake2b.update(data)
-                    size += len(data)
-        except (PermissionError, OSError) as e:
-            print('skipping:', os.getcwd(), e, file=sys.stderr)
-        else:
-            blake2b = blake2b.hexdigest()
-            return path, blake2b, size
+@timeout(seconds=int(os.environ.get('BACKUP_TIMEOUT', 1)))
+def _hash(path):
+    size = 0
+    blake2b = hashlib.blake2b()
     try:
-        return _hash()
+        with open(path, 'rb') as f:
+            while True:
+                data = f.read(1024 * 1024)
+                if not data:
+                    break
+                blake2b.update(data)
+                size += len(data)
+    except (PermissionError, OSError) as e:
+        print('skip:', path, e, file=sys.stderr)
+    else:
+        blake2b = blake2b.hexdigest()
+        return blake2b, size
+
+def hash_file(path):
+    try:
+        return _hash(path)
     except:
-        print(f'skip: timeout hashing path: {path}', file=sys.stderr, flush=True)
+        print(f'skip: {path} timeout', file=sys.stderr)
 
 if __name__ == '__main__':
     main()
