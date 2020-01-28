@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
 import hashlib
 import sys
+if len(sys.argv) > 1:
+    f = open(sys.argv[1], 'rb')
+else:
+    f = sys.stdin.buffer
 blake2b = hashlib.blake2b()
 while True:
-    data = sys.stdin.buffer.read(1024 ** 2)
+    data = f.read(1024 ** 2)
     if not data:
         break
     blake2b.update(data)
