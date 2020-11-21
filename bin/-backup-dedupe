@@ -12,15 +12,15 @@ proc = subprocess.Popen(shell=True, executable='/bin/bash', stdout=subprocess.PI
     git log -p \
       | grep -P '^\+' \
       | grep -P '.+\t.+\t.+\t.+' \
-      | sed -r 's/^\+//' \
-      | cut -f1-3
+      | sed -r 's/^\+//'
 """)
 while True:
     line = proc.stdout.readline().decode('utf-8')
     if not line:
         break
-    path, tar, blake2b = line.strip().split('\t')
+    path, tar, blake2b, size = line.strip().split('\t')
     if blake2b in index:
+        assert size == index[blake2b]['size'], f'size mismatch for same hash: {path} {tar} {size} != {index[blake2b]}'
         index[blake2b]['ref'] = f'ref::{tar}::{path}'
 proc.wait()
 
