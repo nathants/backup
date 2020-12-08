@@ -33,7 +33,7 @@ fi
 cat index | -backup-index | LC_ALL=C sort > index.new
 mv -f index.new index
 git add index
-backup-diff | -backup-dedupe > index.dupes
+backup-additions | -backup-dedupe > index.dupes
 LC_ALL=C sort -m index index.dupes | -backup-keeplast > index.new
 mv -f index.new index
 git add index

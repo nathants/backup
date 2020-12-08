@@ -14,7 +14,7 @@ fi
 (
     IFS='
 '
-    backup-diff | -backup-partition | while read path; do
+    backup-additions | -backup-partition | while read path; do
         echo process chunk: $path >&2
         cat $path \
             | -backup-tar \

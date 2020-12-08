@@ -1,8 +1,55 @@
-#!/bin/bash
-set -euo pipefail
-cd $BACKUP_ROOT/.backup
-if [ -z "${commit:-}" ]; then
-    git diff -U0 --cached | grep '\+\./' | sed 's/^\+//' | sed -r 's/\tref::[^\t]+/\tref::/'
-else
-    git show -U0 "$commit" | grep '\+\./' | sed 's/^\+//' | sed -r 's/\tref::[^\t]+/\tref::/'
-fi
+#!/usr/bin/env python3
+from typing import List, Dict, Tuple, Callable
+import subprocess
+
+def _make_color(code, text):
+    return "\033[{}m{}\033[0m".format(code, text)
+
+red     = lambda text: _make_color(31, text)
+green   = lambda text: _make_color(32, text)
+yellow  = lambda text: _make_color(33, text)
+blue    = lambda text: _make_color(34, text)
+magenta = lambda text: _make_color(35, text)
+cyan    = lambda text: _make_color(36, text)
+white   = lambda text: _make_color(37, text)
+
+proc = subprocess.Popen(shell=True, executable='/bin/bash', stdout=subprocess.PIPE, args="""
+    cd $BACKUP_ROOT/.backup
+    git diff -U0 --cached
+""")
+
+modifications: Dict[str, Dict[str, Tuple[str, str, str]]] = {
+    '-': {},
+    '+': {},
+}
+
+assert proc.stdout
+
+while True:
+    line = proc.stdout.readline().decode('utf-8')
+    if not line:
+        break
+    kind = line[0]
+    if kind not in {'-', '+'}:
+        continue
+    try:
+        path, tar, blake2b, size = line[1:].strip().split()
+    except ValueError:
+        continue
+    else:
+        modifications[kind][path] = tar, blake2b, size
+
+assert proc.wait() == 0
+
+output = []
+for path, (tar, blake2b, size) in modifications['+'].items():
+    if path in modifications['-']:
+        output.append((yellow, 'modification', f'{path} {tar} {blake2b} {size}'))
+    else:
+        output.append((green, 'addition', f'{path} {tar} {blake2b} {size}'))
+for path, (tar, blake2b, size) in modifications['-'].items():
+    if path not in modifications['+']:
+        output.append((red, 'deletion', f'{path} {tar} {blake2b} {size}'))
+
+for color, name, line in sorted(output, key=lambda x: x[-1]):
+    print(color(name + ': ' + line))

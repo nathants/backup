@@ -19,7 +19,7 @@ except IndexError:
 
 sizes = collections.defaultdict(int)
 
-xs = co('backup-diff').splitlines()
+xs = co('backup-additions').splitlines()
 xs = (x.split('\t') for x in xs)
 xs = (('/'.join(path.split('/')[1:max_depth + 1]), int(size)) for path, _tar, _checksum, size in xs)
 

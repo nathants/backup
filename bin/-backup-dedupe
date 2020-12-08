@@ -22,7 +22,7 @@ while True:
     if blake2b in index:
         assert size == index[blake2b]['size'], f'size mismatch for same hash: {path} {tar} {size} != {index[blake2b]}'
         index[blake2b]['ref'] = f'ref::{tar}::{path}'
-proc.wait()
+assert proc.wait() == 0
 
 new_index = {}
 for path, tar, blake2b, size in index_raw:

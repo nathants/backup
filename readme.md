@@ -48,9 +48,11 @@ simple, immutable, trustless, append only backups with full history and file lev
 
 `backup-commit`
 
-`backup-diff`
+`backup-additions`
 
-`backup-diff-sizes`
+`backup-additions-sizes`
+
+`backup-diff`
 
 `backup-find`
 
