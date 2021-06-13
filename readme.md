@@ -1,67 +1,122 @@
 # immutable backups so simple that unborkable
 
-## what, why, how
+## what
 
-simple, immutable, trustless, append only backups with full history and file level deduplication.
+simple, immutable, trustless backups with full revision history, compression, and file level deduplication.
+
+## design
+
+- the index, tracked in git, contains filesystem metadata.
+
+- the index is a sorted tsv file of: `path, tarball, hash, size`
+
+- for every line of metadata in the index, there is one and only one tarball containing a file with that hash.
+
+- duplicate content, by [blake2b](https://www.blake2.net/) hash, is never stored.
+
+- the index is encrypted with [git-remote-gcrypt](https://github.com/spwhitton/git-remote-gcrypt).
+
+- the tarballs are split into chunks, compressed with [lz4](https://github.com/lz4/lz4), then encrypted with [gpg](https://gnupg.org/).
+
+- all remote storage is handled via [rclone](https://rclone.org/) on any [backend](https://rclone.org/overview/#features) it supports.
+
+- the ignore file, tracked in git, contains one regex per line of file paths to ignore.
+
+- a clean restore will clone the git repo, checkout a revision, select file paths by regex, gather needed tarball names, fetch tarballs from storage, and extract the selected files.
+
+## dependencies
+
+- awk
+- bash
+- cat
+- git
+- git-remote-gcrypt
+- gpg
+- grep
+- lz4
+- python3
+- rclone
 
 ## installation
 
-- works on linux, should work on mac with possible minor tweaks
-
-- depends on:
-  - awscli
-  - bash
-  - cut
-  - git
-  - git-remote-gcrypt
-  - gpg
-  - grep
-  - lz4
-  - pv
-  - python3
-  - scp
-  - sort
-  - ssh
-  - tar
-  - tee
-
 - put `bin/` on `$PATH`
+
+or
+
+- `sudo mv bin/* /usr/local/bin`
 
 ## setup
 
-- add some required env vars:
+- add some environment variables to your bashrc:
 
-`export BACKUP_AWS_ID=...`
-`export BACKUP_AWS_KEY=...`
-`export BACKUP_CHUNK_MEGABYTES=100`
-`export BACKUP_HOST=my.remote.ssh.server`
-`export BACKUP_MIRROR_S3="s3://bucket1/backup-$BACKUP_NAME s3://bucket2/backup-$BACKUP_NAME"`
-`export BACKUP_MIRROR_S3_ARGS="--storage-class STANDARD_IA"`
-`export BACKUP_NAME=$(hostname|cut -d- -f2)`
-`export BACKUP_PATH=/mnt/backup-$BACKUP_NAME`
-`export BACKUP_ROOT=~`
+`export BACKUP_ROOT=~` - root directory to backup
 
+`export BACKUP_RCLONE_REMOTE=$REMOTE` - a remote setup with `rclone config`
+
+`export BACKUP_DESTINATION=$BUCKET/backups/$(hostname)` - where to rclone data to
+
+`export BACKUP_CHUNK_MEGABYTES=100` - approximate size of each tarball before compression
+
+- have a gpg key and a gpg.conf that looks like the following:
+
+```
+>> cat ~/.gnupg/gpg.conf
+
+default-key YOUR@EMAIL.COM
+default-recipient YOUR@EMAIL.COM
+
+personal-cipher-preferences AES256
+personal-digest-preferences SHA512
+personal-compress-preferences Uncompressed
+default-preference-list SHA512 AES256 Uncompressed
+cert-digest-algo SHA512
+s2k-cipher-algo AES256
+s2k-digest-algo SHA512
+s2k-mode 3
+s2k-count 65011712
+disable-cipher-algo 3DES
+weak-digest SHA1
+force-mdc
+```
+
+## usage
+
+`backup-add` - scan filesystem for changes
+
+`backup-diff` - inspect uncommited backup diff
+
+`backup-ignore` - if needed, edit the ignore regexes, then goto `backup-add`
+
+`backup-commit` - commit changes to remote storage
 
 ## api
 
-`backup-add`
+`backup-add` - scan filesystem for changes
 
-`backup-commit`
+`backup-additions` - inspect uncommited diff, additions only
 
-`backup-additions`
+`backup-additions-sizes` - show large files in uncommited diff
 
-`backup-additions-sizes`
+`backup-commit` - commit changes to remote storage
 
-`backup-diff`
+`backup-diff` - inspect uncommited diff
 
-`backup-find`
+`backup-find` - find content by regex at revision
 
-`backup-log`
+`backup-ignore` - edit the ignore file in $EDITOR
 
-`backup-mirror`
+`backup-index` - view current the backup index
 
-`backup-reset`
+`backup-log` - view the git log
 
-`backup-restore`
+`backup-reset` - clear uncommited git state
 
-`backup-verify`
+`backup-restore` - restore content by regex at revision
+
+## test
+
+```
+export BACKUP_TEST_RCLONE_REMOTE=$REMOTE
+export BACKUP_TEST_DESTINATION=$BUCKET/test
+tox
+```

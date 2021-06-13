@@ -1,4 +1,4 @@
 #!/bin/bash
 set -euo pipefail
 cd $BACKUP_ROOT/.backup
-git diff -U0 --cached | grep '\+\./' | sed 's/^\+//'
+cat index

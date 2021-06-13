@@ -1,41 +1,61 @@
 #!/bin/bash
 set -euo pipefail
 
-if [ ! -d $BACKUP_ROOT/.backup ]; then
+for token in $@; do
+    if [ "$token" = "-h" ] || [ "$token" = "--help" ]; then
+        echo todo: help
+        exit 1
+    fi
+done
+
+dependencies='
+    awk
+    bash
+    cat
+    git
+    git-remote-gcrypt
+    gpg
+    grep
+    lz4
+    python3
+    rclone
+'
+
+for dep in $dependencies; do
+    if ! which $dep &>/dev/null; then
+        echo "fatal: dependency '$dep' not found on \$PATH"
+        exit 1
+    fi
+done
+
+if ! rclone config show $BACKUP_RCLONE_REMOTE &>/dev/null; then
+    echo "fatal: please setup rclone remote '$BACKUP_RCLONE_REMOTE' via: rclone config"
+    exit 1
+fi
+
+# initialize new backup
+if [ ! -d $BACKUP_ROOT/.backup/.git ]; then
     mkdir -p $BACKUP_ROOT/.backup
     cd $BACKUP_ROOT/.backup
     git init
     echo '^\./\.backup/' > ignore
     touch index
-    git add index
-    git commit -m 'init index'
+    git add index ignore
+    git commit -m 'init'
+    remote="gcrypt::rclone://$BACKUP_RCLONE_REMOTE:$BACKUP_DESTINATION/git"
+    git remote add origin $remote
+    git push -u origin master
+    echo "init backup of '$BACKUP_ROOT' and push to remote '$remote'"
 fi
 
 cd $BACKUP_ROOT/.backup
 
-if [ 'origin gcrypt' != "$(git remote -v | cut -d: -f1 | grep origin | sort -u | tr '\t' ' ')" ]; then
-    echo fatal: cd to $(pwd) and add a gcrypt remote for origin
-    exit 1
-fi
+backup-reset
 
-if [ "master origin/master" != "$(git branch -vv | grep origin/master | awk '{print $2 " " $4}' | tr -d ":[]")" ]; then
-    echo fatal cd to $(pwd) and git push -u origin master
-    exit 1
-fi
+-backup-update-index
 
-status() { git status -s | sed -r 's/ +/ /g'; }
-if ! [ -z "$(status)" ]; then
-    echo error: $BACKUP_ROOT/.backup working directory not clean
-    status
-    exit 1
-fi
-
-cat index | -backup-index | LC_ALL=C sort > index.new
-mv -f index.new index
 git add index
-backup-additions | -backup-dedupe > index.dupes
-LC_ALL=C sort -m index index.dupes | -backup-keeplast > index.new
-mv -f index.new index
-git add index
-rm index.*
-echo novel data to commit: $(-backup-size)
+
+size=$(-backup-size)
+
+echo new data size: $size

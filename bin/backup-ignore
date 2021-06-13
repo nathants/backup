@@ -1,0 +1,12 @@
+#!/bin/bash
+set -eou pipefail
+cd $BACKUP_ROOT/.backup
+
+$EDITOR ignore
+
+if [ ! -z "$(git status ignore --porcelain)" ]; then
+    git reset HEAD
+    git add ignore
+    git commit -m "ignore"
+    git push
+fi

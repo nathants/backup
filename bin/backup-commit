@@ -3,40 +3,22 @@ set -euo pipefail
 
 cd $BACKUP_ROOT/.backup
 
-status() { git status -s | sed -r 's/ +/ /g'; }
+git status --porcelain | awk '{print $2}' | while read name; do
+    if [ "$name" != index ] && ! echo "$name" | grep -P '\.tar\.lz4\.gpg\.'; then
+        echo fatal: aborting backup-commit, $BACKUP_ROOT/.backup working directory in unknown state. start over with backup-reset
+        git status --porcelain
+        exit 1
+    fi
+done
 
-if ! ([ -z "$(status)" ] || [ 'M index' = "$(status)" ]); then
-    echo error: $BACKUP_ROOT/.backup working directory not clean
-    status
-    exit 1
+if tarballs=$(ls *.tar.lz4.gpg.* 2>/dev/null); then
+    for name in $tarballs; do
+        -backup-put $name
+    done
+    git commit -m "$(for name in $tarballs; do echo $name $(cat $name.blake2b); done)"
+    rm *.tar.lz4.gpg.*
+else
+    git commit -m "index-only-update"
 fi
 
-(
-    IFS='
-'
-    backup-additions | -backup-partition | while read path; do
-        echo process chunk: $path >&2
-        cat $path \
-            | -backup-tar \
-            | -backup-put $path > put
-        rm $path
-    done
-)
-
-dest=$(dirname $(cat put | sed -r 's/\.[0-9]+$//'))
-rm put
-git add index
-git commit -m "
-backup-commit
-$dest
-$(for path in *.blake2b; do
-    echo $(echo $path | sed s/\.blake2b//) $(cat $path)
-    rm $path
-done)
-"
-
 git push
-
-backup-verify 1
-
-backup-mirror

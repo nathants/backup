@@ -1,0 +1,185 @@
+#!/usr/bin/env python3
+# type: ignore
+import io
+import tarfile
+import time
+import re
+import datetime
+import os
+import sys
+import hashlib
+import functools
+import itertools
+import signal
+import contextlib
+import subprocess
+
+check_output = lambda *a: subprocess.check_output(' '.join(map(str, a)), shell=True, executable='/bin/bash').decode('utf-8').strip()
+
+def main():
+    os.chdir(os.environ['BACKUP_ROOT'])
+
+    with open('.backup/index') as f:
+        lines = [line.strip().split('\t') for line in f]
+    index = {path: {'blake2b': blake2b, 'tar': tar, 'size': size} for path, tar, blake2b, size in lines}
+
+    commit_number = check_output('cd .backup && git log --pretty=%s | grep "\.tar\.lz4\.gpg\." | wc -l').zfill(10)
+    timestamp = datetime.datetime.utcnow().isoformat().split('.')[0] + 'Z'
+    name = f'{commit_number}.{timestamp}.tar.lz4.gpg'
+    chunk_megabytes = int(os.environ.get('BACKUP_CHUNK_MEGABYTES', '100'))
+    total_size = 0
+    times = []
+    new_index = []
+    new_data = {}
+    historical_data = load_historical()
+
+    # scan the filesystem
+    for path in rate(paths()):
+
+        # blake2b hash
+        start = time.time()
+        try:
+            data, blake2b, size = hash_file(path)
+        except TypeError:
+            pass
+        else:
+            times.append((time.time() - start, path))
+
+            # blake2b changed
+            if index.get(path, {}).get('blake2b') != blake2b:
+
+                # deduped from historical data
+                if blake2b in historical_data:
+                    tar = historical_data[blake2b]
+
+                # deduped from new data
+                elif blake2b in new_data:
+                    tar = new_data[blake2b]
+
+                # novel content write data to tarball
+                else:
+                    total_size += size
+                    chunk = str(sequential_chunk_num(total_size // (1024 * 1024 * chunk_megabytes))).zfill(5)
+                    tar = f'{name}.{chunk}'
+                    tarinfo = tarfile.TarInfo(name=blake2b)
+                    tarinfo.size = size
+                    tarball(tar).addfile(tarinfo, io.BytesIO(data))
+                    new_data[blake2b] = tar
+
+                # build new index
+                new_index.append('\t'.join([path, tar, blake2b, str(size)]))
+
+            # path unchanged
+            else:
+                existing = index[path]
+                new_index.append('\t'.join([path, existing['tar'], existing['blake2b'], existing['size']]))
+
+    # close tarballs
+    for k, v in tarballs.items():
+        v.close()
+
+    # write updated index
+    new_index.sort()
+    with open('.backup/index', 'w') as f:
+        for line in new_index:
+            f.write(line + '\n')
+
+    # print stats about slow to scan files
+    times = list(sorted(times, key=lambda x: x[0]))
+    print('slowest scanned files:', file=sys.stderr)
+    for seconds, path in times[-10:]:
+        print('', path, round(seconds, 3), file=sys.stderr)
+
+def rate(xs):
+    count = 0
+    for x in xs:
+        yield x
+        count += 1
+        if count % 1_000 == 0:
+            print(f'scanned {count} files', file=sys.stderr)
+    print(f'scanned: {count} files', file=sys.stderr)
+
+def paths():
+    count = 0
+    with open('.backup/ignore') as f:
+        ignores = [x.strip() for x in f.read().splitlines() if x.strip()]
+    ignores = [re.compile(i).search for i in ignores]
+    for path, dirs, files in os.walk('.'):
+        for file in files:
+            file_path = os.path.join(path, file)
+            if any(ignore(file_path) for ignore in ignores):
+                continue
+            yield file_path
+            count += 1
+    assert count, 'fatal: nothing found to backup under root: {BACKUP_ROOT}'.format(**os.environ)
+
+@contextlib.contextmanager
+def timeout(seconds=1, message='timeout'):
+    def fn(*_):
+        raise Exception('%s after %s seconds' % (message, seconds)) from None
+    signal.signal(signal.SIGALRM, fn)
+    signal.alarm(seconds)
+    try:
+        yield
+    except:
+        raise
+    finally:
+        signal.alarm(0)
+
+@timeout(seconds=int(os.environ.get('BACKUP_TIMEOUT', '1')))
+def _hash(path):
+    try:
+        with open(path, 'rb') as f:
+            data = f.read()
+    except (PermissionError, OSError) as e:
+        print('skip:', path, e, file=sys.stderr)
+    else:
+        size = len(data)
+        blake2b = hashlib.blake2b(data).hexdigest()
+        return data, blake2b, size
+
+def hash_file(path):
+    try:
+        return _hash(path)
+    except:
+        print(f'skip: {path} timeout', file=sys.stderr)
+
+def load_historical():
+    historical = {}
+    proc = subprocess.Popen(shell=True, executable='/bin/bash', stdout=subprocess.PIPE, args="git log -p index", cwd='.backup')
+    while True:
+        line = proc.stdout.readline().decode('utf-8')
+        if not line:
+            break
+        if not line.startswith('+'):
+            continue
+        line = line[1:]
+        try:
+            path, tar, blake2b, size = line.strip().split('\t')
+        except ValueError:
+            continue
+        else:
+            if blake2b not in historical:
+                historical[blake2b] = tar
+            else:
+                assert historical[blake2b] == tar, f'fatal: each hash should only ever be written to a tarball once: {historical[blake2b]} {tar}'
+    assert proc.wait() == 0
+    return historical
+
+chunks = itertools.count(0)
+
+@functools.lru_cache(maxsize=1_000_000_000)
+def sequential_chunk_num(chunk_size):
+    return next(chunks)
+
+tarballs = {}
+
+@functools.lru_cache(maxsize=1_000_000_000)
+def tarball(name):
+    name = f'.backup/{name}'
+    t = tarfile.open(name, 'w')
+    tarballs[name] = t
+    return t
+
+if __name__ == '__main__':
+    main()

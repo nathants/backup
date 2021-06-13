@@ -1,6 +1,14 @@
 #!/usr/bin/env python3
+# type: ignore
+import sys
 import subprocess
-stdout = subprocess.check_output('backup-additions | grep -v $"\tref::" | cut -f4', shell=True).decode('utf-8')
-size_bytes = sum(map(int, stdout.splitlines()))
+check_output = lambda *a: subprocess.check_output(' '.join(map(str, a)), shell=True, executable='/bin/bash').decode('utf-8').strip()
+size_bytes = 0
+seen = set()
+for line in check_output('backup-additions').splitlines():
+    path, tar, blake2b, size = line.split('\t')
+    if blake2b not in seen:
+        seen.add(blake2b)
+        size_bytes += int(size)
 size_mb = size_bytes / 1024. / 1024.
 print(round(size_mb, 2), 'mb')

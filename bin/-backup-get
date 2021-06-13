@@ -1,25 +1,31 @@
 #!/bin/bash
 set -euo pipefail
-path=$BACKUP_PATH/$1
-name=$(basename $path)
-echo start backup-get: $path 1>&2
-ssh $BACKUP_HOST cat $path \
-    | tee >(-backup-blake2b > $name.blake2b) \
+
+name=$1
+
+remote=$BACKUP_RCLONE_REMOTE:$BACKUP_DESTINATION/tar/$name
+
+tempfile=$(mktemp -p $BACKUP_ROOT/.backup)
+
+echo start backup-get: $remote 1>&2
+
+rclone copyto --progress --error-on-no-transfer $remote $tempfile 1>&2
+
+hash=$(backup-log | grep $name | awk '{print $2}')
+
+remote_hash=$(cat $tempfile | -backup-blake2b)
+
+if [ "$hash" != "$remote_hash" ]; then
+    echo blake2b verification failed 1>&2
+    echo $remote_hash should have been $hash 1>&2
+    exit 1
+fi
+
+cat $tempfile \
     | gpg -d \
     | lz4 -d \
-    | pv -r \
-         > $name
-if [ -z "${BACKUP_ALT_INDEX:-}" ]; then
-    hash=$(backup-log | grep $name | awk '{print $2}')
-    dl_hash=$(cat $name.blake2b)
-    if [ "$hash" != "$dl_hash" ]; then
-        echo blake2b verification failed 1>&2
-        echo $dl_hash should have been $hash 1>&2
-        exit 1
-    fi
-else
-    echo skipping checksum verification of tarball since BACKUP_ALT_INDEX is set >&2
-    echo checksum verification will still be applied to each restored file >&2
-fi
-rm $name.blake2b
-echo finished backup-get: $path 1>&2
+          > $name
+
+rm $tempfile
+
+echo finished backup-get: $remote 1>&2

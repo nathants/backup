@@ -1,13 +1,28 @@
 #!/bin/bash
 set -euo pipefail
-path=$1
-dest=$BACKUP_PATH/$path
-ssh $BACKUP_HOST mkdir -p $BACKUP_PATH
-lz4 \
-    | gpg -esv --no-armor --cipher-algo aes256 --digest-algo sha512 --force-mdc \
-    | tee >(-backup-blake2b > $path.blake2b) \
-    | pv -r \
-    | ssh $BACKUP_HOST "cat > $dest"
-msg=$BACKUP_HOST:$dest
-echo backup-put: $msg >&2
-echo $msg
+
+name=$1
+
+remote=$BACKUP_RCLONE_REMOTE:$BACKUP_DESTINATION/tar/$name
+
+tempfile=$(mktemp -p $BACKUP_ROOT/.backup)
+
+echo start backup-put: $remote 1>&2
+
+cat $name \
+    | lz4 \
+    | gpg \
+          -esv \
+          --no-armor \
+          --cipher-algo aes256 \
+          --digest-algo sha512 \
+          --force-mdc \
+              > $tempfile
+
+cat $tempfile | -backup-blake2b > $name.blake2b
+
+rclone copyto --progress --error-on-no-transfer $tempfile $remote 1>&2
+
+rm $tempfile
+
+echo finished backup-put: $remote 1>&2

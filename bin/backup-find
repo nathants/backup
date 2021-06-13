@@ -2,23 +2,30 @@
 import re
 import os
 import sys
+import subprocess
 
-if '-h' in sys.argv or '--help' in sys.argv or len(sys.argv) != 2:
-    print('usage: backup-find "^\./dir/file\..*$"', file=sys.stderr)
-    print('usage: BACKUP_ALT_INDEX=$INDEX backup-restore "^\./dir/file\..*$"', file=sys.stderr)
+check_call = lambda *a: subprocess.check_call(' '.join(map(str, a)), shell=True, executable='/bin/bash')
+check_output = lambda *a: subprocess.check_output(' '.join(map(str, a)), shell=True, executable='/bin/bash').decode('utf-8').strip()
+
+if '-h' in sys.argv or '--help' in sys.argv or len(sys.argv) not in [2, 3]:
+    print('usage: backup-find REGEX [REVISION]', file=sys.stderr)
     sys.exit(1)
 
 regex = re.compile(sys.argv[1]).search
 
-alt_backup_index = os.environ.get('BACKUP_ALT_INDEX', '').strip()
-if alt_backup_index:
-    print('using alternate backup index:', alt_backup_index, file=sys.stderr)
-    index_path = alt_backup_index
-else:
-    index_path = f'{os.environ["BACKUP_ROOT"]}/.backup/index'
-with open(index_path) as f:
-    lines = f.read().splitlines()
-for line in lines:
+revision = 'HEAD'
+if len(sys.argv) == 3:
+    revision = sys.argv[2]
+
+backup_dir = '{BACKUP_ROOT}/.backup'.format(**os.environ)
+
+if not os.path.isdir(backup_dir):
+    remote = "gcrypt::rclone://{BACKUP_RCLONE_REMOTE}:{BACKUP_DESTINATION}/git".format(**os.environ)
+    print(f'cloning remote {remote} to {backup_dir}', file=sys.stderr)
+    check_call(f'git clone {remote} {backup_dir}')
+
+os.chdir(backup_dir)
+for line in check_output(f'git show {revision}:index').splitlines():
     path = line.split('\t')[0]
     if regex(path):
         print(line)

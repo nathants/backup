@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# type: ignore
+import shutil
 import hashlib
 import contextlib
 import collections
@@ -9,31 +11,31 @@ import tarfile
 import os
 import tempfile
 
-if '-h' in sys.argv or '--help' in sys.argv or len(sys.argv) != 2:
-    print('usage: backup-restore "^\./dir/file\..*$"', file=sys.stderr)
-    print('usage: BACKUP_PATH=$PATH BACKUP_ALT_INDEX=$INDEX backup-restore "^\./dir/file\..*$"', file=sys.stderr)
-    print('note: to preview restore, use backup-find instead of backup-restore', file=sys.stderr)
+if '-h' in sys.argv or '--help' in sys.argv or len(sys.argv) not in [2, 3]:
+    print('usage: backup-restore REGEX [REVISION]', file=sys.stderr)
     sys.exit(1)
 
-co = lambda *a: subprocess.check_output(' '.join(map(str, a)), shell=True, executable='/bin/bash').decode('utf-8').strip()
-cc = lambda *a: subprocess.check_call(' '.join(map(str, a)), shell=True, executable='/bin/bash')
+check_output = lambda *a: subprocess.check_output(' '.join(map(str, a)), shell=True, executable='/bin/bash').decode('utf-8').strip()
+check_call = lambda *a: subprocess.check_call(' '.join(map(str, a)), shell=True, executable='/bin/bash')
+
+regex = sys.argv[1]
+
+revision = 'HEAD'
+if len(sys.argv) == 3:
+    revision = sys.argv[2]
 
 def tree():
     return collections.defaultdict(tree)
 
-lines = co('backup-find', sys.argv[1]).splitlines()
+lines = check_output(f'backup-find "{regex}" {revision}').splitlines()
 lines = [x.split('\t') for x in lines]
 tarballs = tree()
 for line in lines:
-    dst_path, tarball, blake2b, size = line
-    src_path = dst_path
-    if tarball.startswith('ref::'):
-        _, tarball, src_path  = tarball.split('::', 2)
-    tarballs[tarball]['dsts'][dst_path] = (src_path, blake2b) # one dst always has one src
-    tarballs[tarball]['srcs'][src_path][dst_path] = blake2b # one src may have many dst
+    path, tarball, blake2b, size = line
+    tarballs[tarball][blake2b][path] = None
 
-download_dir = tempfile.mkdtemp()
-print(download_dir)
+tempdir = tempfile.mkdtemp()
+print('tempdir:', tempdir, file=sys.stderr)
 
 @contextlib.contextmanager
 def cd(path):
@@ -47,65 +49,41 @@ def cd(path):
         os.chdir(orig)
 
 def hash_file(path):
-    blake2b = hashlib.blake2b()
     with open(path, 'rb') as f:
-        while True:
-            data = f.read(1024 ** 2)
-            if not data:
-                break
-            blake2b.update(data)
-    return blake2b.hexdigest()
+        data = f.read()
+    return hashlib.blake2b(data).hexdigest()
 
 for tarball in sorted(tarballs):
-    print('unpack tarball:', tarball)
-    with cd(download_dir):
-        cc('"-backup-get"', tarball)
+    print('unpack:', tarball, file=sys.stderr)
+    with cd(tempdir):
+        check_call('"-backup-get"', tarball)
         tarball_abspath = os.path.abspath(tarball)
-
-    srcs = tarballs[tarball]['srcs']
-    dsts = tarballs[tarball]['dsts']
 
     with tarfile.open(tarball_abspath, 'r') as tar:
         for member in tar.getmembers():
-            src_path = member.name
-            if src_path in srcs:
-                for dst_path, blake2b in srcs[src_path].items():
-                    # extract
-                    print('extract:', dst_path, end='')
-                    tar.extract(member, ".")
-                    # handle ref::
-                    if src_path != dst_path:
-                        print(f' was a reference of {src_path}')
-                        try:
-                            os.makedirs(os.path.dirname(dst_path))
-                        except FileExistsError:
-                            pass
-                        os.rename(src_path, dst_path)
-                        # cleanup empty dirs from the ref::
-                        orig = os.getcwd()
-                        with cd(os.path.dirname(src_path)):
-                            while orig != os.getcwd():
-                                name = os.path.basename(os.getcwd())
-                                os.chdir('..')
-                                print('cleanup:', os.getcwd(), name)
-                                try:
-                                    os.rmdir(name)
-                                except OSError:
-                                    break
-                    else:
-                        print()
-                    # validate checksum
-                    new_blake2b = hash_file(dst_path)
-                    if blake2b != new_blake2b:
-                        print(f'error: checksum failed for {dst_path} {new_blake2b} should have been {blake2b}')
-                        sys.exit(1)
-                    # mark dst_path as finished
-                    del dsts[dst_path]
+            blake2b = member.name
+            paths = tarballs[tarball][blake2b]
+            if paths:
 
-    if dsts:
-        print('failed to extract all files, missing:')
-        for dst_path, _ in dsts.values():
-            print('', dst_path)
-        sys.exit(1)
+                # extract
+                tar.extract(member, tempdir)
 
-    cc('rm -v', tarball_abspath)
+                # validate checksum
+                actual_blake2b = hash_file(os.path.join(tempdir, blake2b))
+                if blake2b != actual_blake2b:
+                    print(f'fatal: checksum failed for {tarball} {actual_blake2b} should have been {blake2b}', file=sys.stderr)
+                    sys.exit(1)
+
+                # copy every file that references this blake2b
+                for path in paths:
+                    try:
+                        os.makedirs(os.path.dirname(path))
+                    except FileExistsError:
+                        pass
+                    shutil.copyfile(os.path.join(tempdir, blake2b), path)
+                    print(path, blake2b)
+
+    check_call('rm', tarball_abspath)
+
+assert tempdir.startswith('/tmp/'), f'fatal: will not rmdir without prefix /tmp/, {tempdir}'
+check_call('rm -rf', tempdir)
