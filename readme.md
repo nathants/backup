@@ -57,35 +57,35 @@ or
 
 - add some environment variables to your bashrc:
 
-`export BACKUP_ROOT=~` - root directory to backup
+  `export BACKUP_ROOT=~` - root directory to backup
 
-`export BACKUP_RCLONE_REMOTE=$REMOTE` - a remote setup with `rclone config`
+  `export BACKUP_RCLONE_REMOTE=$REMOTE` - a remote setup with `rclone config`
 
-`export BACKUP_DESTINATION=$BUCKET/backups/$(hostname)` - where to rclone data to
+  `export BACKUP_DESTINATION=$BUCKET/backups/$(hostname)` - where to rclone data to
 
-`export BACKUP_CHUNK_MEGABYTES=100` - approximate size of each tarball before compression
+  `export BACKUP_CHUNK_MEGABYTES=100` - approximate size of each tarball before compression
 
 - have a gpg key and a gpg.conf that looks like the following:
 
-```
->> cat ~/.gnupg/gpg.conf
+  ```
+  >> cat ~/.gnupg/gpg.conf
 
-default-key YOUR@EMAIL.COM
-default-recipient YOUR@EMAIL.COM
+  default-key YOUR@EMAIL.COM
+  default-recipient YOUR@EMAIL.COM
 
-personal-cipher-preferences AES256
-personal-digest-preferences SHA512
-personal-compress-preferences Uncompressed
-default-preference-list SHA512 AES256 Uncompressed
-cert-digest-algo SHA512
-s2k-cipher-algo AES256
-s2k-digest-algo SHA512
-s2k-mode 3
-s2k-count 65011712
-disable-cipher-algo 3DES
-weak-digest SHA1
-force-mdc
-```
+  personal-cipher-preferences AES256
+  personal-digest-preferences SHA512
+  personal-compress-preferences Uncompressed
+  default-preference-list SHA512 AES256 Uncompressed
+  cert-digest-algo SHA512
+  s2k-cipher-algo AES256
+  s2k-digest-algo SHA512
+  s2k-mode 3
+  s2k-count 65011712
+  disable-cipher-algo 3DES
+  weak-digest SHA1
+  force-mdc
+  ```
 
 ## api
 
