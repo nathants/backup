@@ -3,7 +3,9 @@ set -euo pipefail
 
 for token in $@; do
     if [ "$token" = "-h" ] || [ "$token" = "--help" ]; then
-        echo todo: help
+        echo description: scan the filesystem for changes 1>&2
+        echo 1>&2
+        echo usage: backup-add 1>&2
         exit 1
     fi
 done

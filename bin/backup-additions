@@ -1,4 +1,14 @@
 #!/bin/bash
 set -euo pipefail
+
+for token in $@; do
+    if [ "$token" = "-h" ] || [ "$token" = "--help" ]; then
+        echo description: inspect the uncommited backup diff, additions only 1>&2
+        echo 1>&2
+        echo usage: backup-additions 1>&2
+        exit 1
+    fi
+done
+
 cd $BACKUP_ROOT/.backup
 git diff -U0 --cached | grep '\+\./' | sed 's/^\+//'

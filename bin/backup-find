@@ -8,6 +8,7 @@ check_call = lambda *a: subprocess.check_call(' '.join(map(str, a)), shell=True,
 check_output = lambda *a: subprocess.check_output(' '.join(map(str, a)), shell=True, executable='/bin/bash').decode('utf-8').strip()
 
 if '-h' in sys.argv or '--help' in sys.argv or len(sys.argv) not in [2, 3]:
+    print('description: search for files in the index by REGEX at REVISION\n', file=sys.stderr)
     print('usage: backup-find REGEX [REVISION]', file=sys.stderr)
     sys.exit(1)
 

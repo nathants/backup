@@ -2,6 +2,15 @@
 set -eou pipefail
 cd $BACKUP_ROOT/.backup
 
+for token in $@; do
+    if [ "$token" = "-h" ] || [ "$token" = "--help" ]; then
+        echo 'description: edit the ignore file in $EDITOR' 1>&2
+        echo 1>&2
+        echo usage: backup-ignore 1>&2
+        exit 1
+    fi
+done
+
 $EDITOR ignore
 
 if [ ! -z "$(git status ignore --porcelain)" ]; then

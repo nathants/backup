@@ -12,6 +12,7 @@ import os
 import tempfile
 
 if '-h' in sys.argv or '--help' in sys.argv or len(sys.argv) not in [2, 3]:
+    print('description: restore files from remote storage by regex at revision\n', file=sys.stderr)
     print('usage: backup-restore REGEX [REVISION]', file=sys.stderr)
     sys.exit(1)
 

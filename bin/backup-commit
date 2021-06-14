@@ -1,6 +1,16 @@
 #!/bin/bash
 set -euo pipefail
 
+for token in $@; do
+    if [ "$token" = "-h" ] || [ "$token" = "--help" ]; then
+        echo description: commit the backup diff to remote storage 1>&2
+        echo 1>&2
+        echo usage: backup-commit 1>&2
+        exit 1
+    fi
+done
+
+
 cd $BACKUP_ROOT/.backup
 
 git status --porcelain | awk '{print $2}' | while read name; do

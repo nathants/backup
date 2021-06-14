@@ -3,6 +3,11 @@ from typing import Dict, Tuple
 import subprocess
 import sys
 
+if '-h' in sys.argv or '--help' in sys.argv or len(sys.argv) != 1:
+    print('description: inspect the uncommited backup diff\n', file=sys.stderr)
+    print('usage: backup-diff', file=sys.stderr)
+    sys.exit(1)
+
 def _make_color(code, text):
     if sys.stdout.isatty():
         return "\033[{}m{}\033[0m".format(code, text)

@@ -4,6 +4,14 @@
 
 simple, immutable, trustless backups with full revision history, compression, and file level deduplication.
 
+## basic usage
+
+- `backup-add` - scan the filesystem for changes
+- `backup-diff` - inspect the uncommited backup diff
+- `backup-ignore` - if needed, edit the ignore regexes, then goto `backup-add`
+- `backup-commit` - commit the backup diff to remote storage
+- `backup-restore` - restore files from remote storage by regex at revision
+
 ## design
 
 - the index, tracked in git, contains filesystem metadata.
@@ -12,7 +20,7 @@ simple, immutable, trustless backups with full revision history, compression, an
 
 - for every line of metadata in the index, there is one and only one tarball containing a file with that hash.
 
-- duplicate content, by [blake2b](https://www.blake2.net/) hash, is never stored.
+- duplicate files, by [blake2b](https://www.blake2.net/) hash, are never stored.
 
 - the index is encrypted with [git-remote-gcrypt](https://github.com/spwhitton/git-remote-gcrypt).
 
@@ -79,39 +87,24 @@ weak-digest SHA1
 force-mdc
 ```
 
-## usage
-
-`backup-add` - scan filesystem for changes
-
-`backup-diff` - inspect uncommited backup diff
-
-`backup-ignore` - if needed, edit the ignore regexes, then goto `backup-add`
-
-`backup-commit` - commit changes to remote storage
-
 ## api
 
-`backup-add` - scan filesystem for changes
+modify backup state:
+- `backup-add` - scan the filesystem for changes
+- `backup-commit` - commit the backup diff to remote storage
+- `backup-ignore` - edit the ignore file in $EDITOR
+- `backup-reset` - clear uncommited backup state
 
-`backup-additions` - inspect uncommited diff, additions only
+view backup state:
+- `backup-additions-sizes` - show large files in the uncommited backup diff
+- `backup-additions` - inspect the uncommited backup diff, additions only
+- `backup-diff` - inspect the uncommited backup diff
+- `backup-find` - find files by regex at revision
+- `backup-index` - view the backup index
+- `backup-log` - view the git log
 
-`backup-additions-sizes` - show large files in uncommited diff
-
-`backup-commit` - commit changes to remote storage
-
-`backup-diff` - inspect uncommited diff
-
-`backup-find` - find content by regex at revision
-
-`backup-ignore` - edit the ignore file in $EDITOR
-
-`backup-index` - view current the backup index
-
-`backup-log` - view the git log
-
-`backup-reset` - clear uncommited git state
-
-`backup-restore` - restore content by regex at revision
+restore backup content:
+- `backup-restore` - restore files from remote storage by regex at revision
 
 ## test
 

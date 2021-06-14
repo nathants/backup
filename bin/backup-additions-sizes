@@ -6,7 +6,8 @@ import os
 import sys
 
 if '-h' in sys.argv or '--help' in sys.argv:
-    print('usage: backup-sizes [max-depth=1]', file=sys.stderr)
+    print('description: show large files in the uncommited backup diff\n', file=sys.stderr)
+    print('usage: backup-sizes [MAX-DEPTH=1]', file=sys.stderr)
     sys.exit(1)
 
 co = lambda *a: subprocess.check_output(' '.join(map(str, a)), shell=True, executable='/bin/bash').decode('utf-8').strip()
