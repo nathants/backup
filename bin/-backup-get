@@ -22,7 +22,7 @@ if [ "$hash" != "$remote_hash" ]; then
 fi
 
 cat $tempfile \
-    | gpg -d \
+    | gpg -dv \
     | lz4 -d \
           > $name
 
