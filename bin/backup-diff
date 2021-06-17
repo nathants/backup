@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 from typing import Dict, Tuple
+import os
 import subprocess
 import sys
 
@@ -9,7 +10,7 @@ if '-h' in sys.argv or '--help' in sys.argv or len(sys.argv) != 1:
     sys.exit(1)
 
 def _make_color(code, text):
-    if sys.stdout.isatty():
+    if sys.stdout.isatty() or os.environ.get('COLORS'):
         return "\033[{}m{}\033[0m".format(code, text)
     else:
         return text
