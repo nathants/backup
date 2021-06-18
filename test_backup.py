@@ -36,13 +36,6 @@ def find(regex, revision='HEAD'):
 def restore(regex, revision='HEAD'):
     return [(path, blake2b[:8]) for x in sh.run(f"backup-restore '{regex}' {revision}").splitlines() for path, blake2b in [x.split()]]
 
-# sh.run('aws s3 rm s3://nathants-test/ --recursive')
-os.environ['PATH'] = '/usr/bin:' + os.environ['PATH']
-os.environ['BACKUP_TEST_RCLONE_REMOTE'] = 'local'
-os.environ['BACKUP_TEST_DESTINATION'] = '/tmp'
-
-import pytest
-@pytest.mark.only
 def test1():
 
     with sh.tempdir():
