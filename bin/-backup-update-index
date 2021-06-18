@@ -40,8 +40,10 @@ def main():
         start = time.time()
         try:
             data, blake2b, size = hash_file(path)
-        except TypeError:
-            pass
+        except Failed:
+            print('failed:', path, file=sys.stderr)
+        except Timeout:
+            print('timeout:', path, file=sys.stderr)
         else:
             times.append((time.time() - start, path))
 
@@ -116,7 +118,7 @@ def paths():
 @contextlib.contextmanager
 def timeout(seconds=1, message='timeout'):
     def fn(*_):
-        raise Exception('%s after %s seconds' % (message, seconds)) from None
+        raise Timeout
     signal.signal(signal.SIGALRM, fn)
     signal.alarm(seconds)
     try:
@@ -126,23 +128,23 @@ def timeout(seconds=1, message='timeout'):
     finally:
         signal.alarm(0)
 
+class Failed(Exception):
+    pass
+
+class Timeout(Exception):
+    pass
+
 @timeout(seconds=int(os.environ.get('BACKUP_TIMEOUT', '15')))
-def _hash(path):
+def hash_file(path):
     try:
         with open(path, 'rb') as f:
             data = f.read()
-    except (PermissionError, OSError) as e:
-        print('skip:', path, e, file=sys.stderr)
+    except (PermissionError, OSError):
+        raise Failed
     else:
         size = len(data)
         blake2b = hashlib.blake2b(data).hexdigest()
         return data, blake2b, size
-
-def hash_file(path):
-    try:
-        return _hash(path)
-    except:
-        print(f'skip: {path} timeout', file=sys.stderr)
 
 def load_historical():
     historical = {}
