@@ -126,7 +126,7 @@ def timeout(seconds=1, message='timeout'):
     finally:
         signal.alarm(0)
 
-@timeout(seconds=int(os.environ.get('BACKUP_TIMEOUT', '1')))
+@timeout(seconds=int(os.environ.get('BACKUP_TIMEOUT', '15')))
 def _hash(path):
     try:
         with open(path, 'rb') as f:
