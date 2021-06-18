@@ -60,7 +60,7 @@ def test1():
         ]
         sh.run('backup-commit')
         assert log() == [
-            '0000000000.DATE.tar.lz4.gpg.00000 HASH',
+            '0000000000.DATE.tar.lz4.gpg.00000 HASH 1510',
             'init',
         ]
         assert index() == [
@@ -78,7 +78,7 @@ def test1():
         sh.run('backup-commit')
         assert log() == [
             'index-only-update',
-            '0000000000.DATE.tar.lz4.gpg.00000 HASH',
+            '0000000000.DATE.tar.lz4.gpg.00000 HASH 1510',
             'init',
         ]
         assert index() == [
@@ -96,9 +96,9 @@ def test1():
         ]
         sh.run('backup-commit')
         assert log() == [
-            '0000000001.DATE.tar.lz4.gpg.00000 HASH',
+            '0000000001.DATE.tar.lz4.gpg.00000 HASH 1513',
             'index-only-update',
-            '0000000000.DATE.tar.lz4.gpg.00000 HASH',
+            '0000000000.DATE.tar.lz4.gpg.00000 HASH 1510',
             'init',
         ]
         assert index() == [

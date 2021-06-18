@@ -21,6 +21,8 @@ cat $name \
 
 cat $tempfile | -backup-blake2b > $name.blake2b
 
+ls -l $tempfile | awk '{print $5}' > $name.size
+
 rclone copyto --progress --error-on-no-transfer $tempfile $remote 1>&2
 
 rm $tempfile
