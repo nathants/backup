@@ -10,7 +10,6 @@ for token in $@; do
     fi
 done
 
-
 cd $BACKUP_ROOT/.backup
 
 git status --porcelain | awk '{print $2}' | while read name; do

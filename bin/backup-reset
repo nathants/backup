@@ -11,6 +11,6 @@ for token in $@; do
 done
 
 cd $BACKUP_ROOT/.backup
-git reset HEAD
+git reset HEAD &>/dev/null
 git add .
 git reset --hard >/dev/null
