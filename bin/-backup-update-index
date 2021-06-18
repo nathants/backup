@@ -90,7 +90,7 @@ def main():
     times = list(sorted(times, key=lambda x: x[0]))
     print('slowest scanned files:', file=sys.stderr)
     for seconds, path in times[-10:]:
-        print('', path, round(seconds, 3), file=sys.stderr)
+        print('', path, round(seconds, 3), 'seconds', file=sys.stderr)
 
 def rate(xs):
     count = 0
