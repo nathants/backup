@@ -151,18 +151,14 @@ def load_historical():
         line = proc.stdout.readline().decode('utf-8')
         if not line:
             break
-        if not line.startswith('+'):
+        if not line.startswith('+./'):
             continue
         line = line[1:]
-        try:
-            path, tar, blake2b, size = line.strip().split('\t')
-        except ValueError:
-            continue
+        path, tar, blake2b, size = line.strip().split('\t')
+        if blake2b not in historical:
+            historical[blake2b] = tar
         else:
-            if blake2b not in historical:
-                historical[blake2b] = tar
-            else:
-                assert historical[blake2b] == tar, f'fatal: each hash should only ever be written to a tarball once: {historical[blake2b]} {tar}'
+            assert historical[blake2b] == tar, f'fatal: each hash should only ever be written to a tarball once: {historical[blake2b]} {tar}'
     assert proc.wait() == 0
     return historical
 
