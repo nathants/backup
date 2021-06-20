@@ -56,35 +56,53 @@ def hash_file(path):
 
 for tarball in sorted(tarballs):
     print('unpack:', tarball, file=sys.stderr)
-    with cd(tempdir):
-        check_call('"-backup-get"', tarball)
-        tarball_abspath = os.path.abspath(tarball)
 
-    with tarfile.open(tarball_abspath, 'r') as tar:
-        for member in tar.getmembers():
-            blake2b = member.name
-            paths = tarballs[tarball][blake2b]
-            if paths:
+    # restore symlinks from index
+    if tarball == 'symlink':
+        for target, sources in tarballs[tarball].items():
+            for source in sources:
+                try:
+                    os.remove(source)
+                except FileNotFoundError:
+                    pass
+                try:
+                    os.makedirs(os.path.dirname(source))
+                except FileExistsError:
+                    pass
+                os.symlink(os.path.relpath(target, os.path.dirname(source)), source)
+                print(target, source)
 
-                # extract
-                tar.extract(member, tempdir)
+    # restore files from tarball
+    else:
+        with cd(tempdir):
+            check_call('"-backup-get"', tarball)
+            tarball_abspath = os.path.abspath(tarball)
 
-                # validate checksum
-                actual_blake2b = hash_file(os.path.join(tempdir, blake2b))
-                if blake2b != actual_blake2b:
-                    print(f'fatal: checksum failed for {tarball} {actual_blake2b} should have been {blake2b}', file=sys.stderr)
-                    sys.exit(1)
+        with tarfile.open(tarball_abspath, 'r') as tar:
+            for member in tar.getmembers():
+                blake2b = member.name
+                paths = tarballs[tarball][blake2b]
+                if paths:
 
-                # copy every file that references this blake2b
-                for path in paths:
-                    try:
-                        os.makedirs(os.path.dirname(path))
-                    except FileExistsError:
-                        pass
-                    shutil.copyfile(os.path.join(tempdir, blake2b), path)
-                    print(path, blake2b)
+                    # extract
+                    tar.extract(member, tempdir)
 
-    check_call('rm', tarball_abspath)
+                    # validate checksum
+                    actual_blake2b = hash_file(os.path.join(tempdir, blake2b))
+                    if blake2b != actual_blake2b:
+                        print(f'fatal: checksum failed for {tarball} {actual_blake2b} should have been {blake2b}', file=sys.stderr)
+                        sys.exit(1)
+
+                    # copy every file that references this blake2b
+                    for path in paths:
+                        try:
+                            os.makedirs(os.path.dirname(path))
+                        except FileExistsError:
+                            pass
+                        shutil.copyfile(os.path.join(tempdir, blake2b), path)
+                        print(path, blake2b)
+
+        check_call('rm', tarball_abspath)
 
 assert tempdir.startswith('/tmp/'), f'fatal: will not rmdir without prefix /tmp/, {tempdir}'
 check_call('rm -rf', tempdir)

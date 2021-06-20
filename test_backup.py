@@ -36,10 +36,8 @@ def find(regex, revision='HEAD'):
 def restore(regex, revision='HEAD'):
     return [(path, blake2b[:8]) for x in sh.run(f"backup-restore '{regex}' {revision}").splitlines() for path, blake2b in [x.split()]]
 
-def test1():
-
+def test_basic():
     with sh.tempdir():
-
         uid = str(uuid.uuid4())
         os.environ['BACKUP_RCLONE_REMOTE'] = os.environ['BACKUP_TEST_RCLONE_REMOTE']
         os.environ['BACKUP_DESTINATION'] = os.environ['BACKUP_TEST_DESTINATION'] + '/' + uid
@@ -49,7 +47,7 @@ def test1():
         for k, v in os.environ.items():
             if k.startswith('BACKUP_'):
                 print(k, '=>', v)
-
+        ##
         sh.run('echo foo > bar.txt')
         sh.run('backup-add')
         assert diff() == [
@@ -66,7 +64,7 @@ def test1():
         assert index() == [
             ('./bar.txt', '0000000000.DATE.tar.lz4.gpg.00000', 'd202d795', '4'),
         ]
-
+        ##
         sh.run('echo foo > bar2.txt')
         sh.run('backup-add')
         assert diff() == [
@@ -85,7 +83,7 @@ def test1():
             ('./bar.txt',  '0000000000.DATE.tar.lz4.gpg.00000', 'd202d795', '4'),
             ('./bar2.txt', '0000000000.DATE.tar.lz4.gpg.00000', 'd202d795', '4'),
         ]
-
+        ##
         sh.run('echo asdf > asdf.txt')
         sh.run('backup-add')
         assert diff() == [
@@ -106,7 +104,7 @@ def test1():
             ('./bar.txt',  '0000000000.DATE.tar.lz4.gpg.00000', 'd202d795', '4'),
             ('./bar2.txt', '0000000000.DATE.tar.lz4.gpg.00000', 'd202d795', '4'),
         ]
-
+        ##
         with sh.tempdir():
             os.environ['BACKUP_ROOT'] = os.getcwd()
             _ = find('.') # clone the repo with the first call to find()
@@ -133,7 +131,7 @@ def test1():
                 [],
                 [],
             ]
-
+        ##
         with sh.tempdir():
             os.environ['BACKUP_ROOT'] = os.getcwd()
             _ = find('.')
@@ -162,3 +160,88 @@ def test1():
                 [],
                 [],
             ]
+            assert sh.run('cat bar.txt') == 'foo'
+            assert sh.run('cat bar2.txt') == 'foo'
+            assert sh.run('cat asdf.txt') == 'asdf'
+
+def test_symlink():
+    with sh.tempdir():
+        uid = str(uuid.uuid4())
+        os.environ['BACKUP_RCLONE_REMOTE'] = os.environ['BACKUP_TEST_RCLONE_REMOTE']
+        os.environ['BACKUP_DESTINATION'] = os.environ['BACKUP_TEST_DESTINATION'] + '/' + uid
+        os.environ['BACKUP_STORAGE_CLASS'] = 'STANDARD_IA'
+        os.environ['BACKUP_CHUNK_MEGABYTES'] = '100'
+        os.environ['BACKUP_ROOT'] = os.getcwd()
+        for k, v in os.environ.items():
+            if k.startswith('BACKUP_'):
+                print(k, '=>', v)
+        ##
+        sh.run('echo foo > bar.txt')
+        sh.run('ln -s bar.txt link.txt')
+        sh.run('backup-add')
+        assert diff() == [
+            ('addition:', './bar.txt', '0000000000.DATE.tar.lz4.gpg.00000', 'd202d795', '4'),
+            ('addition:', './link.txt', 'symlink', './bar.txt', '0'),
+        ]
+        assert additions() == [
+            ('./bar.txt', '0000000000.DATE.tar.lz4.gpg.00000', 'd202d795', '4'),
+            ('./link.txt', 'symlink', './bar.txt', '0'),
+        ]
+        sh.run('backup-commit')
+        assert log() == [
+            '0000000000.DATE.tar.lz4.gpg.00000 HASH 1510',
+            'init',
+        ]
+        assert index() == [
+            ('./bar.txt', '0000000000.DATE.tar.lz4.gpg.00000', 'd202d795', '4'),
+            ('./link.txt', 'symlink', './bar.txt', '0'),
+        ]
+        ##
+        sh.run('mkdir dir')
+        sh.run('cd dir && ln -s ../bar.txt link.txt')
+        sh.run('backup-add')
+        assert diff() == [
+            ('addition:', './dir/link.txt', 'symlink', './bar.txt', '0'),
+        ]
+        assert additions() == [
+            ('./dir/link.txt', 'symlink', './bar.txt', '0'),
+        ]
+        sh.run('backup-commit')
+        assert log() == [
+            'index-only-update',
+            '0000000000.DATE.tar.lz4.gpg.00000 HASH 1510',
+            'init',
+        ]
+        assert index() == [
+            ('./bar.txt', '0000000000.DATE.tar.lz4.gpg.00000', 'd202d795', '4'),
+            ('./dir/link.txt', 'symlink', './bar.txt', '0'),
+            ('./link.txt', 'symlink', './bar.txt', '0'),
+        ]
+        ##
+        with sh.tempdir():
+            os.environ['BACKUP_ROOT'] = os.getcwd()
+            _ = find('.') # clone the repo with the first call to find()
+            assert [find('.', commit) for commit in commits()] == [
+                [
+                    ('./bar.txt', '0000000000.DATE.tar.lz4.gpg.00000', 'd202d795', '4'),
+                    ('./dir/link.txt', 'symlink', './bar.txt', '0'),
+                    ('./link.txt', 'symlink', './bar.txt', '0'),
+                ],
+                [
+                    ('./bar.txt', '0000000000.DATE.tar.lz4.gpg.00000', 'd202d795', '4'),
+                    ('./link.txt', 'symlink', './bar.txt', '0'),
+                ],
+                [],
+            ]
+        ##
+        with sh.tempdir():
+            os.environ['BACKUP_ROOT'] = os.getcwd()
+            restore('.')
+            assert sh.run('find -printf "%y %p %l\n" | grep -v "\./\.backup" | grep -P "^(l|f)"').splitlines() == [
+                'l ./link.txt bar.txt',
+                'l ./dir/link.txt ../bar.txt',
+                'f ./bar.txt',
+            ]
+            assert sh.run('cat link.txt') == 'foo'
+            assert sh.run('cat dir/link.txt') == 'foo'
+            assert sh.run('cat bar.txt') == 'foo'

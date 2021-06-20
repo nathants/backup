@@ -36,19 +36,45 @@ def main():
     # scan the filesystem
     for path in rate(paths()):
 
-        # blake2b hash
-        start = time.time()
-        try:
-            data, blake2b, size = hash_file(path)
-        except Failed:
-            print('failed:', path, file=sys.stderr)
-        except Timeout:
-            print('timeout:', path, file=sys.stderr)
+        symlink = os.path.islink(path)
+
+        if symlink:
+
+            # the link target, relative to $BACKUP_ROOT, is stored instead of the blake2b hash. when the link changes, the index gets updated.
+            blake2b = './' + os.path.relpath(os.path.realpath(path))
+
+            # only symlinks within $BACKUP_ROOT are supported
+            if '..' in blake2b.split('/'):
+                print('skip:', path, '=>', blake2b, file=sys.stderr)
+                continue
+
         else:
+            start = time.time()
+            try:
+                data, blake2b, size = hash_file(path)
+            except Failed:
+                print('failed:', path, file=sys.stderr)
+                continue
+            except Timeout:
+                print('timeout:', path, file=sys.stderr)
+                continue
             times.append((time.time() - start, path))
 
-            # blake2b changed
-            if index.get(path, {}).get('blake2b') != blake2b:
+        # blake2b unchanged
+        if index.get(path, {}).get('blake2b') == blake2b:
+            existing = index[path]
+            new_index.append('\t'.join([path, existing['tar'], existing['blake2b'], existing['size']]))
+
+        # blake2b changed
+        else:
+
+            if symlink:
+
+                # symlinks are only commited to the index, not to tarballs
+                tar = 'symlink'
+                size = 0
+
+            else:
 
                 # deduped from historical data
                 if blake2b in historical_data:
@@ -68,13 +94,8 @@ def main():
                     tarball(tar).addfile(tarinfo, io.BytesIO(data))
                     new_data[blake2b] = tar
 
-                # build new index
-                new_index.append('\t'.join([path, tar, blake2b, str(size)]))
-
-            # path unchanged
-            else:
-                existing = index[path]
-                new_index.append('\t'.join([path, existing['tar'], existing['blake2b'], existing['size']]))
+            # build new index
+            new_index.append('\t'.join([path, tar, blake2b, str(size)]))
 
     # close tarballs
     for k, v in tarballs.items():
