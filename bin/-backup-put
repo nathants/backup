@@ -12,7 +12,9 @@ echo start backup-put: $remote 1>&2
 cat $name \
     | lz4 \
     | gpg \
-          -esv \
+          -v \
+          --encrypt \
+          --sign \
           --no-armor \
           --cipher-algo aes256 \
           --digest-algo sha512 \
