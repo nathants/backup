@@ -1,6 +1,16 @@
 #!/bin/bash
 set -euo pipefail
 
+if [ "${BACKUP_SUDO:-no}" = "yes" ]; then
+    SUDO="sudo --preserve-env --"
+else
+    if [ "$BACKUP_ROOT" = "/" ]; then
+        echo 'fatal: BACKUP_ROOT = "/" but BACKUP_SUDO != "yes"'
+        exit 1
+    fi
+    SUDO=
+fi
+
 for token in $@; do
     if [ "$token" = "-h" ] || [ "$token" = "--help" ]; then
         echo description: scan the filesystem for changes 1>&2
@@ -37,10 +47,21 @@ fi
 
 # initialize new backup
 if [ ! -d $BACKUP_ROOT/.backup/.git ]; then
-    mkdir -p $BACKUP_ROOT/.backup
+    $SUDO mkdir -p $BACKUP_ROOT/.backup
+    if [ -n "$SUDO" ]; then
+        user=$(whoami)
+        $SUDO chown -R $user:$user $BACKUP_ROOT/.backup
+    fi
     cd $BACKUP_ROOT/.backup
     git init
     echo '^\./\.backup/' >> ignore
+    if [ "$BACKUP_ROOT" = "/" ]; then
+        echo '^\./dev/' >> ignore
+        echo '^\./proc/' >> ignore
+        echo '^\./run/' >> ignore
+        echo '^\./sys/' >> ignore
+        echo '^\./tmp/' >> ignore
+    fi
     touch index
     git add index ignore
     git commit -m 'init'
@@ -54,7 +75,7 @@ cd $BACKUP_ROOT/.backup
 
 backup-reset
 
--backup-update-index
+$SUDO -backup-update-index
 
 git add index
 

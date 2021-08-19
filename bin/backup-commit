@@ -1,6 +1,12 @@
 #!/bin/bash
 set -euo pipefail
 
+if [ "${BACKUP_SUDO:-no}" = "yes" ]; then
+    SUDO="sudo --preserve-env --"
+else
+    SUDO=
+fi
+
 for token in $@; do
     if [ "$token" = "-h" ] || [ "$token" = "--help" ]; then
         echo description: commit the backup diff to remote storage 1>&2
