@@ -26,12 +26,19 @@ git status --porcelain | awk '{print $2}' | while read name; do
     fi
 done
 
-if tarballs=$(ls *.tar.lz4.gpg.* 2>/dev/null); then
-    for name in $tarballs; do
+if tarballs=$(ls *.tar.lz4.gpg.* 2>/dev/null | grep -v -e '\.blake2b' -e '\.size$'); then
+    IFS=' '
+    echo $tarballs | while read name; do
         -backup-put $name
     done
-    git commit -m "$(for name in $tarballs; do echo $name $(cat $name.blake2b) $(cat $name.size); done)"
-    rm *.tar.lz4.gpg.*
+    echo $tarballs | while read name; do
+        echo $name $(cat $name.blake2b) $(cat $name.size)
+    done > message.txt
+    git commit -F message.txt
+    $SUDO rm message.txt
+    ls *.tar.lz4.gpg.* | while read name; do
+        $SUDO rm $name
+    done
 else
     git commit -m "index-only-update"
 fi
