@@ -12,5 +12,5 @@ done
 
 cd $BACKUP_ROOT/.backup
 git reset HEAD &>/dev/null
-git add .
-git reset --hard >/dev/null
+(git status --short | grep ?? | awk '{print $2}' | xargs rm || true) &>/dev/null
+git reset --hard &>/dev/null
