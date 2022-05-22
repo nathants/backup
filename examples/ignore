@@ -1,0 +1,14 @@
+/.*\.o$
+/.*\.so$
+/.ccls-cache/
+/\.backups/
+/\.cache/
+/\.cargo/
+/\.ssh-agent-thing.*$
+^\./\.local/share/
+^\./\.local/state/gotop/
+^\./\.nv/
+^\./\.nvm/
+^\./\.slime/
+^\./\.zoom/
+^\./repos-old/

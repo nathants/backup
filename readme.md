@@ -6,17 +6,18 @@ simple, immutable, trustless backups with full revision history, compression, an
 
 ## basic usage
 
-- `backup-add` - scan the filesystem for changes
-- `backup-diff` - inspect the uncommited backup diff
-- `backup-ignore` - if needed, edit the ignore regexes, then goto `backup-add`
-- `backup-commit` - commit the backup diff to remote storage
-- `backup-restore` - restore files from remote storage by regex at revision
+- `backup-add` - scan the filesystem for changes.
+- `backup-diff` - inspect the uncommitted backup diff.
+- `backup-ignore` - if needed, edit the ignore regexes, then goto `backup-add`.
+- `backup-commit` - commit the backup diff to remote storage.
+- `backup-find` - search for files in the index by regex at revision.
+- `backup-restore` - restore files from remote storage by regex at revision.
 
 ## design
 
 - the index, tracked in git, contains filesystem metadata.
 
-- the index is a sorted tsv file of: `path, tarball, hash, size`
+- the [index](./examples/index) is a sorted tsv file of: `path, tarball, hash, size`
 
 - for every line of metadata in the index, there is one and only one tarball containing a file with that hash.
 
@@ -28,7 +29,7 @@ simple, immutable, trustless backups with full revision history, compression, an
 
 - all remote storage is handled via [rclone](https://rclone.org/) on any [backend](https://rclone.org/overview/#features) it supports.
 
-- the ignore file, tracked in git, contains one regex per line of file paths to ignore.
+- the [ignore](./examples/ignore) file, tracked in git, contains one regex per line of file paths to ignore.
 
 - a clean restore will clone the git repo, checkout a revision, select file paths by regex, gather needed tarball names, fetch tarballs from storage, and extract the selected files.
 
