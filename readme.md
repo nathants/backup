@@ -1,19 +1,14 @@
-# immutable backups so simple that unborkable
+# backup
+
+## why
+
+backups should be simple and easy.
+
+## how
+
+easily create immutable, trustless backups with revision history, compression, and file deduplication.
 
 ## what
-
-simple, immutable, trustless backups with full revision history, compression, and file level deduplication.
-
-## basic usage
-
-- `backup-add` - scan the filesystem for changes.
-- `backup-diff` - inspect the uncommitted backup diff.
-- `backup-ignore` - if needed, edit the ignore regexes, then goto `backup-add`.
-- `backup-commit` - commit the backup diff to remote storage.
-- `backup-find` - search for files in the index by regex at revision.
-- `backup-restore` - restore files from remote storage by regex at revision.
-
-## design
 
 - the index, tracked in git, contains filesystem metadata.
 
@@ -32,6 +27,15 @@ simple, immutable, trustless backups with full revision history, compression, an
 - the [ignore](./examples/ignore) file, tracked in git, contains one regex per line of file paths to ignore.
 
 - a clean restore will clone the git repo, checkout a revision, select file paths by regex, gather needed tarball names, fetch tarballs from storage, and extract the selected files.
+
+## usage
+
+- `backup-add` - scan the filesystem for changes.
+- `backup-diff` - inspect the uncommitted backup diff.
+- `backup-ignore` - if needed, edit the ignore regexes, then goto `backup-add`.
+- `backup-commit` - commit the backup diff to remote storage.
+- `backup-find` - search for files in the index by regex at revision.
+- `backup-restore` - restore files from remote storage by regex at revision.
 
 ## dependencies
 
