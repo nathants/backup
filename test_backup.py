@@ -41,7 +41,6 @@ def test_basic():
         uid = str(uuid.uuid4())
         os.environ['BACKUP_RCLONE_REMOTE'] = os.environ['BACKUP_TEST_RCLONE_REMOTE']
         os.environ['BACKUP_DESTINATION'] = os.environ['BACKUP_TEST_DESTINATION'] + '/' + uid
-        os.environ['BACKUP_STORAGE_CLASS'] = 'STANDARD_IA'
         os.environ['BACKUP_CHUNK_MEGABYTES'] = '100'
         os.environ['BACKUP_ROOT'] = os.getcwd()
         for k, v in os.environ.items():
@@ -169,7 +168,6 @@ def test_symlink():
         uid = str(uuid.uuid4())
         os.environ['BACKUP_RCLONE_REMOTE'] = os.environ['BACKUP_TEST_RCLONE_REMOTE']
         os.environ['BACKUP_DESTINATION'] = os.environ['BACKUP_TEST_DESTINATION'] + '/' + uid
-        os.environ['BACKUP_STORAGE_CLASS'] = 'STANDARD_IA'
         os.environ['BACKUP_CHUNK_MEGABYTES'] = '100'
         os.environ['BACKUP_ROOT'] = os.getcwd()
         for k, v in os.environ.items():
