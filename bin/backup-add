@@ -53,7 +53,7 @@ if [ ! -d $BACKUP_ROOT/.backup/.git ]; then
         $SUDO chown -R $user:$user $BACKUP_ROOT/.backup
     fi
     cd $BACKUP_ROOT/.backup
-    git init
+    git init --object-format sha256
     echo '^\./\.backup/' >> ignore
     if [ "$BACKUP_ROOT" = "/" ]; then
         echo '^\./dev/' >> ignore
