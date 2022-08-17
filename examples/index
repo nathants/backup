@@ -1,4 +1,4 @@
-./.aws/config	0000000036.2022-01-24T09:16:40Z.tar.lz4.gpg.00000	42b4f0ca812a5df58dc21531f4cc4fa229ddd6becf79845723b980874a4d11b547d1c85de9d0086cf0cdf99399515e246ccde8316bdd256d6d68ad0a5a8fb608	144
-./.babel.json	0000000010.2021-07-18T01:00:08Z.tar.lz4.gpg.00000	73408ca5923ce964bebe69f6b67d7dd8e1c493fb16f31598c373f2200bd81e1494ee1e5851ce98a4a49fc050fa83f8ceb83a4e30633255765d293ab937414931	190208
-./.bash_aliases	symlink	./repos/dotfiles/links/HOME:.bash_aliases	0
-./.bash_env	symlink	./repos/dotfiles/links/HOME:.bash_env	0
+./.aws/config	0000000036.2022-01-24T09:16:40Z.tar.lz4.gpg.00000	42b4f0ca812a5df58dc21531f4cc4fa229ddd6becf79845723b980874a4d11b547d1c85de9d0086cf0cdf99399515e246ccde8316bdd256d6d68ad0a5a8fb608	144	644
+./.babel.json	0000000010.2021-07-18T01:00:08Z.tar.lz4.gpg.00000	73408ca5923ce964bebe69f6b67d7dd8e1c493fb16f31598c373f2200bd81e1494ee1e5851ce98a4a49fc050fa83f8ceb83a4e30633255765d293ab937414931	190208	644
+./.bash_aliases	symlink	./repos/dotfiles/links/HOME:.bash_aliases	0	644
+./.bash_env	symlink	./repos/dotfiles/links/HOME:.bash_env	0	644
