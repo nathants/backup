@@ -23,7 +23,7 @@ sizes = collections.defaultdict(int)
 
 xs = co('backup-additions').splitlines()
 xs = (x.split('\t') for x in xs)
-xs = (('/'.join(path.split('/')[1:max_depth + 1]), int(size)) for path, _tar, _checksum, size in xs)
+xs = (('/'.join(path.split('/')[1:max_depth + 1]), int(size)) for path, _tar, _checksum, size, _mode in xs)
 
 for i, (path, size) in enumerate(xs):
     sizes[path] += size

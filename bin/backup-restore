@@ -32,8 +32,8 @@ lines = check_output(f'backup-find "{regex}" {revision}').splitlines()
 lines = [x.split('\t') for x in lines]
 tarballs = tree()
 for line in lines:
-    path, tarball, blake2b, size = line
-    tarballs[tarball][blake2b][path] = None
+    path, tarball, blake2b, size, mode = line
+    tarballs[tarball][blake2b][path] = mode
 
 tempdir = tempfile.mkdtemp()
 print('tempdir:', tempdir, file=sys.stderr)
@@ -53,6 +53,9 @@ def hash_file(path):
     with open(path, 'rb') as f:
         data = f.read()
     return hashlib.blake2b(data).hexdigest()
+
+def string_to_mode(mode):
+    return int('0o100' + mode, 8)
 
 for tarball in sorted(tarballs):
     print('unpack:', tarball, file=sys.stderr)
@@ -94,12 +97,13 @@ for tarball in sorted(tarballs):
                         sys.exit(1)
 
                     # copy every file that references this blake2b
-                    for path in paths:
+                    for path, mode in paths.items():
                         try:
                             os.makedirs(os.path.dirname(path))
                         except FileExistsError:
                             pass
                         shutil.copyfile(os.path.join(tempdir, blake2b), path)
+                        os.chmod(path, string_to_mode(mode))
                         print(path, blake2b)
 
         check_call('rm', tarball_abspath)

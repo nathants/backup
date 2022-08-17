@@ -53,7 +53,8 @@ if [ ! -d $BACKUP_ROOT/.backup/.git ]; then
         $SUDO chown -R $user:$user $BACKUP_ROOT/.backup
     fi
     cd $BACKUP_ROOT/.backup
-    git init --object-format sha256
+    git init
+    git branch -m main
     echo '^\./\.backup/' >> ignore
     if [ "$BACKUP_ROOT" = "/" ]; then
         echo '^\./dev/' >> ignore
@@ -67,7 +68,7 @@ if [ ! -d $BACKUP_ROOT/.backup/.git ]; then
     git commit -m 'init'
     remote="gcrypt::rclone://$BACKUP_RCLONE_REMOTE:$BACKUP_DESTINATION/git"
     git remote add origin $remote
-    git push -u origin master
+    git push -u origin main
     echo "init backup of '$BACKUP_ROOT' and push to remote '$remote'"
 fi
 

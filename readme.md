@@ -12,7 +12,7 @@ easily create immutable, trustless backups with revision history, compression, a
 
 - the index, tracked in git, contains filesystem metadata.
 
-- the [index](./examples/index) is a sorted tsv file of: `path, tarball, hash, size`
+- the [index](./examples/index) is a sorted tsv file of: `path, tarball, hash, size, mode`
 
 - for every line of metadata in the index, there is one and only one tarball containing a file with that hash.
 

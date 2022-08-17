@@ -44,23 +44,23 @@ while True:
     if kind not in {'-', '+'}:
         continue
     try:
-        path, tar, blake2b, size = line[1:].strip().split()
+        path, tar, blake2b, size, mode = line[1:].strip().split('\t')
     except ValueError:
         continue
     else:
-        modifications[kind][path] = tar, blake2b, size
+        modifications[kind][path] = tar, blake2b, size, mode
 
 assert proc.wait() == 0
 
 output = []
-for path, (tar, blake2b, size) in modifications['+'].items():
+for path, (tar, blake2b, size, mode) in modifications['+'].items():
     if path in modifications['-']:
-        output.append((yellow, 'modification', f'{path} {tar} {blake2b} {size}'))
+        output.append((yellow, 'modification', f'{path} {tar} {blake2b} {size} {mode}'))
     else:
-        output.append((green, 'addition', f'{path} {tar} {blake2b} {size}'))
-for path, (tar, blake2b, size) in modifications['-'].items():
+        output.append((green, 'addition', f'{path} {tar} {blake2b} {size} {mode}'))
+for path, (tar, blake2b, size, mode) in modifications['-'].items():
     if path not in modifications['+']:
-        output.append((red, 'deletion', f'{path} {tar} {blake2b} {size}'))
+        output.append((red, 'deletion', f'{path} {tar} {blake2b} {size} {mode}'))
 
 for color, name, line in sorted(output, key=lambda x: x[-1]):
     print(color(name + ': ' + line))

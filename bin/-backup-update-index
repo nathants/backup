@@ -21,7 +21,7 @@ def main():
 
     with open('.backup/index') as f:
         lines = [line.strip().split('\t') for line in f]
-    index = {path: {'blake2b': blake2b, 'tar': tar, 'size': size} for path, tar, blake2b, size in lines}
+    index = {path: {'blake2b': blake2b, 'tar': tar, 'size': size, 'mode': mode} for path, tar, blake2b, size, mode in lines}
 
     commit_number = check_output('cd .backup && git log --pretty=%s | grep "\.tar\.lz4\.gpg\." | wc -l').zfill(10)
     timestamp = datetime.datetime.utcnow().isoformat().split('.')[0] + 'Z'
@@ -48,10 +48,13 @@ def main():
                 print('skip:', path, '=>', blake2b, file=sys.stderr)
                 continue
 
+            size = 0
+            mode = mode_to_string(os.stat(path).st_mode)
+
         else:
             start = time.time()
             try:
-                data, blake2b, size = hash_file(path)
+                data, blake2b, size, mode = hash_file(path)
             except Failed:
                 print('failed:', path, file=sys.stderr)
                 continue
@@ -63,7 +66,7 @@ def main():
         # blake2b unchanged
         if index.get(path, {}).get('blake2b') == blake2b:
             existing = index[path]
-            new_index.append('\t'.join([path, existing['tar'], existing['blake2b'], existing['size']]))
+            new_index.append('\t'.join([path, existing['tar'], existing['blake2b'], existing['size'], existing['mode']]))
 
         # blake2b changed
         else:
@@ -72,7 +75,6 @@ def main():
 
                 # symlinks are only commited to the index, not to tarballs
                 tar = 'symlink'
-                size = 0
 
             else:
 
@@ -95,7 +97,7 @@ def main():
                     new_data[blake2b] = tar
 
             # build new index
-            new_index.append('\t'.join([path, tar, blake2b, str(size)]))
+            new_index.append('\t'.join([path, tar, blake2b, str(size), mode]))
 
     # close tarballs
     for k, v in tarballs.items():
@@ -155,17 +157,21 @@ class Failed(Exception):
 class Timeout(Exception):
     pass
 
+def mode_to_string(mode):
+    return str(oct(mode))[-3:]
+
 @timeout(seconds=int(os.environ.get('BACKUP_TIMEOUT', '15')))
 def hash_file(path):
     try:
         with open(path, 'rb') as f:
             data = f.read()
+        mode = os.stat(path).st_mode
     except (PermissionError, OSError):
         raise Failed
     else:
         size = len(data)
         blake2b = hashlib.blake2b(data).hexdigest()
-        return data, blake2b, size
+        return data, blake2b, size, mode_to_string(mode)
 
 def load_historical():
     historical = {}
@@ -177,7 +183,7 @@ def load_historical():
         if not line.startswith('+./'):
             continue
         line = line[1:]
-        path, tar, blake2b, size = line.strip().split('\t')
+        path, tar, blake2b, size, mode = line.strip().split('\t')
         if blake2b not in historical:
             historical[blake2b] = tar
         else:
