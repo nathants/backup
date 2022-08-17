@@ -54,7 +54,6 @@ if [ ! -d $BACKUP_ROOT/.backup/.git ]; then
     fi
     cd $BACKUP_ROOT/.backup
     git init
-    git branch -m main
     echo '^\./\.backup/' >> ignore
     if [ "$BACKUP_ROOT" = "/" ]; then
         echo '^\./dev/' >> ignore
@@ -68,7 +67,7 @@ if [ ! -d $BACKUP_ROOT/.backup/.git ]; then
     git commit -m 'init'
     remote="gcrypt::rclone://$BACKUP_RCLONE_REMOTE:$BACKUP_DESTINATION/git"
     git remote add origin $remote
-    git push -u origin main
+    git push -u origin master
     echo "init backup of '$BACKUP_ROOT' and push to remote '$remote'"
 fi
 
