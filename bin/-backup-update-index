@@ -40,6 +40,14 @@ def main():
 
         if symlink:
 
+            try:
+                os.stat(path)
+            except FileNotFoundError:
+
+                # only non broken links are supported
+                print('skip:', path, '=>', os.readlink(path), file=sys.stderr)
+                continue
+
             # the link target, relative to $BACKUP_ROOT, is stored instead of the blake2b hash. when the link changes, the index gets updated.
             blake2b = './' + os.path.relpath(os.path.realpath(path))
 
@@ -49,7 +57,7 @@ def main():
                 continue
 
             size = 0
-            mode = mode_to_string(os.stat(path).st_mode)
+            mode = '-'
 
         else:
             start = time.time()

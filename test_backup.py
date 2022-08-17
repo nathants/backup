@@ -181,11 +181,11 @@ def test_symlink():
         sh.run('backup-add')
         assert diff() == [
             ('addition:', './bar.txt', '0000000000.DATE.tar.lz4.gpg.00000', 'd202d795', '4', '644'),
-            ('addition:', './link.txt', 'symlink', './bar.txt', '0', '644'),
+            ('addition:', './link.txt', 'symlink', './bar.txt', '0', '-'),
         ]
         assert additions() == [
             ('./bar.txt', '0000000000.DATE.tar.lz4.gpg.00000', 'd202d795', '4', '644'),
-            ('./link.txt', 'symlink', './bar.txt', '0', '644'),
+            ('./link.txt', 'symlink', './bar.txt', '0', '-'),
         ]
         sh.run('backup-commit')
         assert log() == [
@@ -194,17 +194,17 @@ def test_symlink():
         ]
         assert index() == [
             ('./bar.txt', '0000000000.DATE.tar.lz4.gpg.00000', 'd202d795', '4', '644'),
-            ('./link.txt', 'symlink', './bar.txt', '0', '644'),
+            ('./link.txt', 'symlink', './bar.txt', '0', '-'),
         ]
         ##
         sh.run('mkdir dir')
         sh.run('cd dir && ln -s ../bar.txt link.txt')
         sh.run('backup-add')
         assert diff() == [
-            ('addition:', './dir/link.txt', 'symlink', './bar.txt', '0', '644'),
+            ('addition:', './dir/link.txt', 'symlink', './bar.txt', '0', '-'),
         ]
         assert additions() == [
-            ('./dir/link.txt', 'symlink', './bar.txt', '0', '644'),
+            ('./dir/link.txt', 'symlink', './bar.txt', '0', '-'),
         ]
         sh.run('backup-commit')
         assert log() == [
@@ -214,8 +214,8 @@ def test_symlink():
         ]
         assert index() == [
             ('./bar.txt', '0000000000.DATE.tar.lz4.gpg.00000', 'd202d795', '4', '644'),
-            ('./dir/link.txt', 'symlink', './bar.txt', '0', '644'),
-            ('./link.txt', 'symlink', './bar.txt', '0', '644'),
+            ('./dir/link.txt', 'symlink', './bar.txt', '0', '-'),
+            ('./link.txt', 'symlink', './bar.txt', '0', '-'),
         ]
         ##
         with sh.tempdir():
@@ -224,12 +224,12 @@ def test_symlink():
             assert [find('.', commit) for commit in commits()] == [
                 [
                     ('./bar.txt', '0000000000.DATE.tar.lz4.gpg.00000', 'd202d795', '4', '644'),
-                    ('./dir/link.txt', 'symlink', './bar.txt', '0', '644'),
-                    ('./link.txt', 'symlink', './bar.txt', '0', '644'),
+                    ('./dir/link.txt', 'symlink', './bar.txt', '0', '-'),
+                    ('./link.txt', 'symlink', './bar.txt', '0', '-'),
                 ],
                 [
                     ('./bar.txt', '0000000000.DATE.tar.lz4.gpg.00000', 'd202d795', '4', '644'),
-                    ('./link.txt', 'symlink', './bar.txt', '0', '644'),
+                    ('./link.txt', 'symlink', './bar.txt', '0', '-'),
                 ],
                 [],
             ]
@@ -279,10 +279,10 @@ def test_executable():
         sh.run('cd dir && ln -s ../bar.txt link.txt')
         sh.run('backup-add')
         assert diff() == [
-            ('addition:', './dir/link.txt', 'symlink', './bar.txt', '0', '755'),
+            ('addition:', './dir/link.txt', 'symlink', './bar.txt', '0', '-'),
         ]
         assert additions() == [
-            ('./dir/link.txt', 'symlink', './bar.txt', '0', '755'),
+            ('./dir/link.txt', 'symlink', './bar.txt', '0', '-'),
         ]
         sh.run('backup-commit')
         assert log() == [
@@ -292,7 +292,7 @@ def test_executable():
         ]
         assert index() == [
             ('./bar.txt', '0000000000.DATE.tar.lz4.gpg.00000', 'd202d795', '4', '755'),
-            ('./dir/link.txt', 'symlink', './bar.txt', '0', '755'),
+            ('./dir/link.txt', 'symlink', './bar.txt', '0', '-'),
         ]
         ##
         with sh.tempdir():
@@ -301,7 +301,7 @@ def test_executable():
             assert [find('.', commit) for commit in commits()] == [
                 [
                     ('./bar.txt', '0000000000.DATE.tar.lz4.gpg.00000', 'd202d795', '4', '755'),
-                    ('./dir/link.txt', 'symlink', './bar.txt', '0', '755'),
+                    ('./dir/link.txt', 'symlink', './bar.txt', '0', '-'),
                 ],
                 [
                     ('./bar.txt', '0000000000.DATE.tar.lz4.gpg.00000', 'd202d795', '4', '755'),
