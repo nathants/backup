@@ -1,0 +1,28 @@
+#!/bin/bash
+set -euo pipefail
+
+for token in $@; do
+    if [ "$token" = "-h" ] || [ "$token" = "--help" ]; then
+        echo description: verify that objects with name and size from log exist in remote 1>&2
+        echo 1>&2
+        echo usage: backup-verify 1>&2
+        exit 1
+    fi
+done
+
+prefix=$BACKUP_RCLONE_REMOTE:$BACKUP_DESTINATION/tar/
+remote=$(rclone ls $prefix)
+
+fail=n
+
+cd $BACKUP_ROOT/.backup
+git log "$@" | grep '\.lz4\.gpg' | while read -r name hash size; do
+    if ! echo "$remote" | grep "$size $name" &>/dev/null; then
+        echo error: remote missing object from log $prefix$name $size
+        fail=y
+    fi
+done
+
+if [ fail = y ]; then
+    exit 1
+fi

@@ -46,3 +46,5 @@ fi
 git push
 
 git prune
+
+backup-verify
