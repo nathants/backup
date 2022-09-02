@@ -237,7 +237,7 @@ def test_symlink():
         with sh.tempdir():
             os.environ['BACKUP_ROOT'] = os.getcwd()
             restore('.')
-            assert sh.run('find -printf "%y %p %l\n" | grep -v "\./\.backup" | grep -P "^(l|f)"').splitlines() == [
+            assert sh.run('find -printf "%y %p %l\n" | grep -v "\./\.backup" | grep -E "^(l|f)"').splitlines() == [
                 'l ./link.txt bar.txt',
                 'l ./dir/link.txt ../bar.txt',
                 'f ./bar.txt',

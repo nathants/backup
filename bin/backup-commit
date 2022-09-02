@@ -19,7 +19,7 @@ done
 cd $BACKUP_ROOT/.backup
 
 git status --porcelain | awk '{print $2}' | while read name; do
-    if [ "$name" != index ] && ! echo "$name" | grep -P '\.tar\.lz4\.gpg\.'; then
+    if [ "$name" != index ] && ! echo "$name" | grep -E '\.tar\.lz4\.gpg\.'; then
         echo fatal: aborting backup-commit, $BACKUP_ROOT/.backup working directory in unknown state. start over with backup-reset
         git status --porcelain
         exit 1
