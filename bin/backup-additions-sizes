@@ -17,7 +17,7 @@ os.chdir(f'{os.environ["BACKUP_ROOT"]}/.backup')
 try:
     max_depth = int(sys.argv[1])
 except IndexError:
-    max_depth = 2
+    max_depth = 10
 
 sizes = collections.defaultdict(int)
 
