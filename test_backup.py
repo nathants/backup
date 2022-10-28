@@ -319,3 +319,56 @@ def test_executable():
             assert sh.run('cat dir/link.txt') == 'foo'
             assert sh.run('cat bar.txt') == 'foo'
             assert os.stat('bar.txt').st_mode == int('0o100755', 8)
+
+def test_symlink_directory():
+    with sh.tempdir():
+        uid = str(uuid.uuid4())
+        os.environ['BACKUP_RCLONE_REMOTE'] = os.environ['BACKUP_TEST_RCLONE_REMOTE']
+        os.environ['BACKUP_DESTINATION'] = os.environ['BACKUP_TEST_DESTINATION'] + '/' + uid
+        os.environ['BACKUP_CHUNK_MEGABYTES'] = '100'
+        os.environ['BACKUP_ROOT'] = os.getcwd()
+        for k, v in os.environ.items():
+            if k.startswith('BACKUP_'):
+                print(k, '=>', v)
+        ##
+        sh.run('mkdir dir1')
+        sh.run('echo foo > dir1/bar.txt')
+        sh.run('ln -ns dir1 link1')
+        sh.run('backup-add')
+        assert diff() == [
+            ('addition:', './dir1/bar.txt', '0000000000.DATE.tar.lz4.gpg.00000', 'd202d795', '4', '644'),
+            ('addition:', './link1', 'symlink', './dir1', '0', '-'),
+        ]
+        assert additions() == [
+            ('./dir1/bar.txt', '0000000000.DATE.tar.lz4.gpg.00000', 'd202d795', '4', '644'),
+            ('./link1', 'symlink', './dir1', '0', '-'),
+        ]
+        sh.run('backup-commit')
+        assert log() == [
+            '0000000000.DATE.tar.lz4.gpg.00000 HASH 1510',
+            'init',
+        ]
+        assert index() == [
+            ('./dir1/bar.txt', '0000000000.DATE.tar.lz4.gpg.00000', 'd202d795', '4', '644'),
+            ('./link1', 'symlink', './dir1', '0', '-'),
+        ]
+        ##
+        with sh.tempdir():
+            os.environ['BACKUP_ROOT'] = os.getcwd()
+            _ = find('.') # clone the repo with the first call to find()
+            assert [find('.', commit) for commit in commits() if find('.', commit)] == [
+                [
+                    ('./dir1/bar.txt', '0000000000.DATE.tar.lz4.gpg.00000', 'd202d795', '4', '644'),
+                    ('./link1', 'symlink', './dir1', '0', '-'),
+                ],
+            ]
+        ##
+        with sh.tempdir():
+            os.environ['BACKUP_ROOT'] = os.getcwd()
+            restore('.')
+            assert sh.run('find -printf "%y %p %l\n" | grep -v "\./\.backup" | grep -E "^(l|f)"').splitlines() == [
+                'l ./link1 dir1',
+                'f ./dir1/bar.txt',
+            ]
+            assert sh.run('cat link1/bar.txt') == 'foo'
+            assert sh.run('cat dir1/bar.txt') == 'foo'

@@ -138,8 +138,14 @@ def paths():
         ignores = [x.strip() for x in f.read().splitlines() if x.strip()]
     ignores = [re.compile(i).search for i in ignores]
     for path, dirs, files in os.walk('.'):
-        for file in files:
-            file_path = os.path.join(path, file)
+        def file_paths():
+            for d in dirs:
+                d = os.path.join(path, d)
+                if os.path.islink(d):
+                    yield d
+            for f in files:
+                yield os.path.join(path, f)
+        for file_path in file_paths():
             if any(ignore(file_path) for ignore in ignores):
                 continue
             yield file_path

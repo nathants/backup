@@ -54,6 +54,13 @@ if [ ! -d $BACKUP_ROOT/.backup/.git ]; then
     fi
     cd $BACKUP_ROOT/.backup
     git init
+
+    # turn off signing of git commits so that global git signing
+    # config doesnt interfere with gpg defaults
+    git config user.signingkey ''
+    git config gpg.format openpgp
+    git config commit.gpgsign false
+
     echo '^\./\.backup/' >> ignore
     if [ "$BACKUP_ROOT" = "/" ]; then
         echo '^\./dev/' >> ignore
