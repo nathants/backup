@@ -107,6 +107,5 @@ for tarball in sorted(tarballs):
                         print(path, blake2b)
 
         check_call('rm', tarball_abspath)
-
-assert tempdir.startswith('/tmp/'), f'fatal: will not rmdir without prefix /tmp/, {tempdir}'
-check_call('rm -rf', tempdir)
+        assert tempdir.startswith('/tmp/'), f'fatal: will not rmdir without prefix /tmp/, {tempdir}'
+        check_call('rm -rf', tempdir)
