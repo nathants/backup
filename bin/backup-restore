@@ -77,6 +77,8 @@ for tarball in sorted(tarballs):
 
     # restore files from tarball
     else:
+        if not os.path.exists(tempdir):
+            os.mkdir(tempdir)
         with cd(tempdir):
             check_call('"-backup-get"', tarball)
             tarball_abspath = os.path.abspath(tarball)
