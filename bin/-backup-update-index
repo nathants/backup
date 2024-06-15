@@ -23,7 +23,7 @@ def main():
         lines = [line.strip().split('\t') for line in f]
     index = {path: {'blake2b': blake2b, 'tar': tar, 'size': size, 'mode': mode} for path, tar, blake2b, size, mode in lines}
 
-    commit_number = check_output('cd .backup && git log --pretty=%s | grep "\.tar\.lz4\.gpg\." | wc -l').zfill(10)
+    commit_number = check_output(r'cd .backup && git log --pretty=%s | grep "\.tar\.lz4\.gpg\." | wc -l').zfill(10)
     timestamp = datetime.datetime.now(datetime.UTC).isoformat().split('.')[0] + 'Z'
     name = f'{commit_number}.{timestamp}.tar.lz4.gpg'
     chunk_megabytes = int(os.environ.get('BACKUP_CHUNK_MEGABYTES', '100'))

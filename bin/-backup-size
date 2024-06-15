@@ -4,7 +4,7 @@ import subprocess
 check_output = lambda *a: subprocess.check_output(' '.join(map(str, a)), shell=True, executable='/bin/bash').decode('utf-8').strip()
 size_bytes = 0
 seen = set()
-commit_number = check_output('cd $BACKUP_ROOT/.backup && git log --pretty=%s | grep "\.tar\.lz4\.gpg\." | wc -l').zfill(10)
+commit_number = check_output(r'cd $BACKUP_ROOT/.backup && git log --pretty=%s | grep "\.tar\.lz4\.gpg\." | wc -l').zfill(10)
 for line in check_output('backup-additions').splitlines():
     path, tar, blake2b, size, mode = line.split('\t')
     if not tar.startswith(f'{commit_number}.'):
