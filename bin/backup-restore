@@ -90,7 +90,7 @@ for tarball in sorted(tarballs):
                 if paths:
 
                     # extract
-                    tar.extract(member, tempdir)
+                    tar.extract(member, tempdir, filter=tarfile.fully_trusted_filter)
 
                     # validate checksum
                     actual_blake2b = hash_file(os.path.join(tempdir, blake2b))

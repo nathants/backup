@@ -3,13 +3,9 @@ set -euo pipefail
 
 name=$1
 
-remote=$BACKUP_RCLONE_REMOTE:$BACKUP_DESTINATION/tar/$name
-
 tempfile=$(mktemp -p $BACKUP_ROOT/.backup)
 
 trap "rm $tempfile" EXIT
-
-echo start backup-put: $remote 1>&2
 
 if [ -f $name.size ]; then
     echo skipping already uploaded: $name
@@ -18,17 +14,26 @@ fi
 
 cat $name \
     | lz4 \
-    | gpg \
-          -v \
-          --encrypt \
-          --sign \
-          --no-armor \
-          --cipher-algo aes256 \
-          --digest-algo sha512 \
-          --force-mdc \
-              > $tempfile
+    | git-remote-aws --encrypt > $tempfile
 
-rclone copyto --progress --error-on-no-transfer $tempfile $remote 1>&2
+if [ -n "${BACKUP_FS:-}" ]; then
+    fs=$BACKUP_FS/$name
+    mkdir -p $(dirname $fs)
+    echo start backup-put fs: $fs 1>&2
+    cp -v $tempfile $fs
+fi
+
+if [ -n "${BACKUP_R2:-}" ]; then
+    r2=$BACKUP_R2/$name
+    echo start backup-put r2: $r2 1>&2
+    r2 cp $tempfile $r2
+fi
+
+if [ -n "${BACKUP_S3:-}" ]; then
+    remote=$BACKUP_S3/$name
+    echo start backup-put: $remote 1>&2
+    libaws s3-put $remote < $tempfile
+fi
 
 cat $tempfile | -backup-blake2b > $name.blake2b
 

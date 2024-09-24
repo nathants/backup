@@ -19,14 +19,14 @@ done
 cd $BACKUP_ROOT/.backup
 
 git status --porcelain | awk '{print $2}' | while read name; do
-    if [ "$name" != index ] && ! echo "$name" | grep -E '\.tar\.lz4\.gpg\.'; then
+    if [ "$name" != index ] && ! echo "$name" | grep -E '\.tar\.lz4\.enc\.'; then
         echo fatal: aborting backup-commit, $BACKUP_ROOT/.backup working directory in unknown state. start over with backup-reset
         git status --porcelain
         exit 1
     fi
 done
 
-if tarballs=$(ls *.tar.lz4.gpg.* 2>/dev/null | grep -v -e '\.blake2b' -e '\.size$'); then
+if tarballs=$(ls *.tar.lz4.enc.* 2>/dev/null | grep -v -e '\.blake2b' -e '\.size$'); then
     IFS=' '
     echo $tarballs | while read name; do
         -backup-put $name
@@ -36,7 +36,7 @@ if tarballs=$(ls *.tar.lz4.gpg.* 2>/dev/null | grep -v -e '\.blake2b' -e '\.size
     done > message.txt
     git commit -F message.txt
     $SUDO rm message.txt
-    ls *.tar.lz4.gpg.* | while read name; do
+    ls *.tar.lz4.enc.* | while read name; do
         $SUDO rm $name
     done
 else

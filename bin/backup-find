@@ -21,7 +21,7 @@ if len(sys.argv) == 3:
 backup_dir = '{BACKUP_ROOT}/.backup'.format(**os.environ)
 
 if not os.path.isdir(backup_dir):
-    remote = "gcrypt::rclone://{BACKUP_RCLONE_REMOTE}:{BACKUP_DESTINATION}/git".format(**os.environ)
+    remote = os.environ['BACKUP_GIT']
     print(f'cloning remote {remote} to {backup_dir}', file=sys.stderr)
     check_call(f'git clone {remote} {backup_dir}')
 

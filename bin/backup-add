@@ -22,15 +22,16 @@ done
 
 dependencies='
     awk
+    aws
     bash
     cat
     git
-    git-remote-gcrypt
+    git-remote-aws
     gpg
     grep
+    libaws
     lz4
     python3
-    rclone
 '
 
 for dep in $dependencies; do
@@ -39,11 +40,6 @@ for dep in $dependencies; do
         exit 1
     fi
 done
-
-if ! rclone config show $BACKUP_RCLONE_REMOTE &>/dev/null; then
-    echo "fatal: please setup rclone remote '$BACKUP_RCLONE_REMOTE' via: rclone config"
-    exit 1
-fi
 
 # initialize new backup
 if [ ! -d $BACKUP_ROOT/.backup/.git ]; then
@@ -69,11 +65,19 @@ if [ ! -d $BACKUP_ROOT/.backup/.git ]; then
         echo '^\./sys/' >> ignore
         echo '^\./tmp/' >> ignore
     fi
+
+    if [ ! -f ~/.git-remote-aws/secretkey ] || [ ! -f ~/.git-remote-aws/publickey ]; then
+        echo fatal: keys missing, run this: git-remote-aws --keygen ~/.git-remote-aws/publickey ~/.git-remote-aws/secretkey
+        exit 1
+    fi
+
     touch index
-    git add index ignore
+    cat ~/.git-remote-aws/publickey > .publickeys
+    git add index ignore .publickeys
     git commit -m 'init'
-    remote="gcrypt::rclone://$BACKUP_RCLONE_REMOTE:$BACKUP_DESTINATION/git"
+    remote="$BACKUP_GIT"
     git remote add origin $remote
+    export ensure=y # git-remote-aws create dynamodb table if needed
     git push -u origin master
     echo "init backup of '$BACKUP_ROOT' and push to remote '$remote'"
 fi

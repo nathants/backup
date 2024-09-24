@@ -10,13 +10,13 @@ for token in $@; do
     fi
 done
 
-prefix=$BACKUP_RCLONE_REMOTE:$BACKUP_DESTINATION/tar/
-remote=$(rclone ls $prefix)
+prefix=$BACKUP_S3/
+remote=$(libaws s3-ls $prefix | awk '{print $4}')
 
 fail=n
 
 cd $BACKUP_ROOT/.backup
-git log "$@" | grep '\.lz4\.gpg' | while read -r name hash size; do
+git log "$@" | grep '\.lz4\.enc' | while read -r name hash size; do
     if ! echo "$remote" | grep "$size $name" &>/dev/null; then
         echo error: remote missing object from log $prefix$name $size
         fail=y

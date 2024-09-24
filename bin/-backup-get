@@ -3,13 +3,21 @@ set -euo pipefail
 
 name=$1
 
-remote=$BACKUP_RCLONE_REMOTE:$BACKUP_DESTINATION/tar/$name
-
 tempfile=$(mktemp -p $BACKUP_ROOT/.backup)
 
-echo start backup-get: $remote 1>&2
-
-rclone copyto --progress --error-on-no-transfer $remote $tempfile 1>&2
+if [ -n "${BACKUP_FS:-}" ]; then
+    fs=$BACKUP_FS/$name
+    echo start backup-get fs: $fs 1>&2
+    cp -v $remote $tempfile
+elif [ -n "${BACKUP_R2:-}" ]; then
+    r2=$BACKUP_S3/$name
+    echo start backup-get r2: $r2 1>&2
+    r2 cp $remote $tempfile
+elif [ -n "${BACKUP_S3:-}" ]; then
+    remote=$BACKUP_S3/$name
+    echo start backup-get s3: $remote 1>&2
+    libaws s3-get $remote > $tempfile
+fi
 
 hash=$(backup-log | grep $name | awk '{print $2}')
 
@@ -22,7 +30,7 @@ if [ "$hash" != "$remote_hash" ]; then
 fi
 
 cat $tempfile \
-    | gpg -dv \
+    | git-remote-aws --decrypt \
     | lz4 -d \
           > $name
 

@@ -18,11 +18,11 @@ easily create immutable, trustless backups with revision history, compression, a
 
 - duplicate files, by [blake2b](https://www.blake2.net/) hash, are never stored.
 
-- the index is encrypted with [git-remote-gcrypt](https://github.com/spwhitton/git-remote-gcrypt).
+- the index is encrypted with [git-remote-aws](https://github.com/nathants/git-remote-aws).
 
-- the tarballs are split into chunks, compressed with [lz4](https://github.com/lz4/lz4), then encrypted with [gpg](https://gnupg.org/).
+- the tarballs are split into chunks, compressed with [lz4](https://github.com/lz4/lz4), then encrypted with [git-remote-aws](https://github.com/nathants/git-remote-aws).
 
-- all remote storage is handled via [rclone](https://rclone.org/) on any [backend](https://rclone.org/overview/#features) it supports.
+- remote storage on [s3](https://aws.amazon.com/s3/) is handled via [libaws](https://github.com/nathants/libaws).
 
 - the [ignore](./examples/ignore) file, tracked in git, contains one regex per line of file paths to ignore.
 
@@ -43,12 +43,11 @@ easily create immutable, trustless backups with revision history, compression, a
 - bash
 - cat
 - git
-- git-remote-gcrypt
-- gpg
+- git-remote-aws
 - grep
 - lz4
 - python3
-- rclone
+- libaws
 
 ## installation
 
@@ -64,33 +63,11 @@ or
 
   `export BACKUP_ROOT=~` - root directory to backup
 
-  `export BACKUP_RCLONE_REMOTE=$REMOTE` - a remote setup with `rclone config`
+  `export BACKUP_S3=s3://${bucket-name}/${backup-name}` - s3 storage for the tarballs
 
-  `export BACKUP_DESTINATION=$BUCKET/backups/$(hostname)` - where to rclone data to
+  `export BACKUP_GIT=aws://${bucket-name}+git-remote-aws/${backup-name}` - git storage for the index
 
   `export BACKUP_CHUNK_MEGABYTES=100` - approximate size of each tarball before compression
-
-- have a gpg key and a gpg.conf that looks like the following:
-
-  ```
-  >> cat ~/.gnupg/gpg.conf
-
-  default-key YOUR@EMAIL.COM
-  default-recipient YOUR@EMAIL.COM
-
-  personal-cipher-preferences AES256
-  personal-digest-preferences SHA512
-  personal-compress-preferences Uncompressed
-  default-preference-list SHA512 AES256 Uncompressed
-  cert-digest-algo SHA512
-  s2k-cipher-algo AES256
-  s2k-digest-algo SHA512
-  s2k-mode 3
-  s2k-count 65011712
-  disable-cipher-algo 3DES
-  weak-digest SHA1
-  force-mdc
-  ```
 
 ## api
 
@@ -114,7 +91,20 @@ restore backup content:
 ## test
 
 ```
-export BACKUP_TEST_RCLONE_REMOTE=$REMOTE
-export BACKUP_TEST_DESTINATION=$BUCKET/test
+export BACKUP_TEST_S3=s3://${bucket-name}/${backup-name}
+export BACKUP_TEST_GIT=aws://${bucket-name}+git-remote-aws/${backup-name}
 tox
 ```
+
+## mirrors
+
+to mirror tarballs to [r2](https://www.cloudflare.com/developer-platform/r2/) and/or local filesystem, define these optional env vars:
+- `export BACKUP_FS=/mnt/${backup-name}`
+- `export BACKUP_R2=s3://${bucket-name}/${backup-name}`
+
+on backup, define up to all three.
+
+on restore, define one, or they will be tried in this order:
+- `fs`
+- `r2`
+- `s3`
