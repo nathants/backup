@@ -108,3 +108,8 @@ on restore, define one, or they will be tried in this order:
 - `fs`
 - `r2`
 - `s3`
+
+to use r2, you must define these env vars:
+- `R2_ACCESS_KEY_ID`
+- `R2_ACCESS_KEY_SECRET`
+- `R2_ACCOUNT_ID`
