@@ -48,9 +48,14 @@ def test_basic():
         uid = str(uuid.uuid4())
         os.environ['BACKUP_GIT'] = os.environ['BACKUP_TEST_GIT']
         os.environ['BACKUP_S3'] = os.environ['BACKUP_TEST_S3']
+        os.environ['BACKUP_FS'] = os.environ['BACKUP_TEST_FS']
+        os.environ['BACKUP_R2'] = os.environ['BACKUP_TEST_R2']
         os.environ['BACKUP_CHUNK_MEGABYTES'] = '100'
         os.environ['BACKUP_ROOT'] = os.getcwd()
-        sh.run('libaws s3-rm', os.environ['BACKUP_S3'].split('s3://')[-1].split('/')[0] + '/', '-r')
+        sh.run('libaws s3-rm', os.environ['BACKUP_S3'], '-r')
+        sh.run('r2 rm', os.environ['BACKUP_R2'], '--recursive')
+        assert set(os.environ['BACKUP_FS'].strip()) != {"/"}
+        sh.run('rm -rfv', os.environ['BACKUP_FS'])
         sh.run('libaws dynamodb-item-rm-all', os.environ['BACKUP_GIT'].split('+')[-1].split('/')[0], 'id')
         for k, v in os.environ.items():
             if k.startswith('BACKUP_'):
@@ -172,9 +177,14 @@ def test_symlink():
         uid = str(uuid.uuid4())
         os.environ['BACKUP_GIT'] = os.environ['BACKUP_TEST_GIT']
         os.environ['BACKUP_S3'] = os.environ['BACKUP_TEST_S3']
+        os.environ['BACKUP_FS'] = os.environ['BACKUP_TEST_FS']
+        os.environ['BACKUP_R2'] = os.environ['BACKUP_TEST_R2']
         os.environ['BACKUP_CHUNK_MEGABYTES'] = '100'
         os.environ['BACKUP_ROOT'] = os.getcwd()
-        sh.run('libaws s3-rm', os.environ['BACKUP_S3'].split('s3://')[-1].split('/')[0] + '/', '-r')
+        sh.run('libaws s3-rm', os.environ['BACKUP_S3'], '-r')
+        sh.run('r2 rm', os.environ['BACKUP_R2'], '--recursive')
+        assert set(os.environ['BACKUP_FS'].strip()) != {"/"}
+        sh.run('rm -rfv', os.environ['BACKUP_FS'])
         sh.run('libaws dynamodb-item-rm-all', os.environ['BACKUP_GIT'].split('+')[-1].split('/')[0], 'id')
         for k, v in os.environ.items():
             if k.startswith('BACKUP_'):
@@ -255,9 +265,14 @@ def test_executable():
         uid = str(uuid.uuid4())
         os.environ['BACKUP_GIT'] = os.environ['BACKUP_TEST_GIT']
         os.environ['BACKUP_S3'] = os.environ['BACKUP_TEST_S3']
+        os.environ['BACKUP_FS'] = os.environ['BACKUP_TEST_FS']
+        os.environ['BACKUP_R2'] = os.environ['BACKUP_TEST_R2']
         os.environ['BACKUP_CHUNK_MEGABYTES'] = '100'
         os.environ['BACKUP_ROOT'] = os.getcwd()
-        sh.run('libaws s3-rm', os.environ['BACKUP_S3'].split('s3://')[-1].split('/')[0] + '/', '-r')
+        sh.run('libaws s3-rm', os.environ['BACKUP_S3'], '-r')
+        sh.run('r2 rm', os.environ['BACKUP_R2'], '--recursive')
+        assert set(os.environ['BACKUP_FS'].strip()) != {"/"}
+        sh.run('rm -rfv', os.environ['BACKUP_FS'])
         sh.run('libaws dynamodb-item-rm-all', os.environ['BACKUP_GIT'].split('+')[-1].split('/')[0], 'id')
         for k, v in os.environ.items():
             if k.startswith('BACKUP_'):
@@ -331,9 +346,14 @@ def test_symlink_directory():
         uid = str(uuid.uuid4())
         os.environ['BACKUP_GIT'] = os.environ['BACKUP_TEST_GIT']
         os.environ['BACKUP_S3'] = os.environ['BACKUP_TEST_S3']
+        os.environ['BACKUP_FS'] = os.environ['BACKUP_TEST_FS']
+        os.environ['BACKUP_R2'] = os.environ['BACKUP_TEST_R2']
         os.environ['BACKUP_CHUNK_MEGABYTES'] = '100'
         os.environ['BACKUP_ROOT'] = os.getcwd()
-        sh.run('libaws s3-rm', os.environ['BACKUP_S3'].split('s3://')[-1].split('/')[0] + '/', '-r')
+        sh.run('libaws s3-rm', os.environ['BACKUP_S3'], '-r')
+        sh.run('r2 rm', os.environ['BACKUP_R2'], '--recursive')
+        assert set(os.environ['BACKUP_FS'].strip()) != {"/"}
+        sh.run('rm -rfv', os.environ['BACKUP_FS'])
         sh.run('libaws dynamodb-item-rm-all', os.environ['BACKUP_GIT'].split('+')[-1].split('/')[0], 'id')
         for k, v in os.environ.items():
             if k.startswith('BACKUP_'):
