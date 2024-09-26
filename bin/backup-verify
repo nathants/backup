@@ -12,7 +12,7 @@ done
 
 if [ -n "${BACKUP_S3:-}" ]; then
     prefix=$BACKUP_S3/
-    remote=$(libaws s3-ls $prefix | awk '{print $3, $4}')
+    remote=$(aws s3 ls $prefix | awk '{print $3, $4}')
     fail=n
     cd $BACKUP_ROOT/.backup
     git log "$@" | grep '\.lz4\.enc' | while read -r name hash size; do

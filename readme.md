@@ -20,9 +20,9 @@ easily create immutable, trustless backups with revision history, compression, a
 
 - the index is encrypted with [git-remote-aws](https://github.com/nathants/git-remote-aws).
 
-- the tarballs are split into chunks, compressed with [lz4](https://github.com/lz4/lz4), then encrypted with [git-remote-aws](https://github.com/nathants/git-remote-aws).
+- chunked tarballs are compressed with [lz4](https://github.com/lz4/lz4) then encrypted with [git-remote-aws](https://github.com/nathants/git-remote-aws).
 
-- remote storage on [s3](https://aws.amazon.com/s3/) is handled via [libaws](https://github.com/nathants/libaws).
+- tarballs are stored on [s3](https://aws.amazon.com/s3/) and optionally [mirrored](#mirrors) to other remotes.
 
 - the [ignore](./examples/ignore) file, tracked in git, contains one regex per line of file paths to ignore.
 
@@ -40,6 +40,7 @@ easily create immutable, trustless backups with revision history, compression, a
 ## dependencies
 
 - awk
+- aws
 - bash
 - cat
 - git
@@ -47,7 +48,6 @@ easily create immutable, trustless backups with revision history, compression, a
 - grep
 - lz4
 - python3
-- libaws
 
 ## installation
 
@@ -89,6 +89,8 @@ restore backup content:
 - `backup-restore` - restore files from remote storage by regex at revision
 
 ## test
+
+tests require [libaws](https://github.com/nathants/libaws)
 
 ```
 export BACKUP_TEST_S3=s3://${bucket-name}/${backup-name}

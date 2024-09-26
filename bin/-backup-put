@@ -30,13 +30,13 @@ if [ -n "${BACKUP_R2:-}" ]; then
 fi
 
 if [ -n "${BACKUP_S3:-}" ]; then
-    remote=$BACKUP_S3/$name
-    echo start backup-put: $remote 1>&2
-    libaws s3-put $remote < $tempfile
+    s3=$BACKUP_S3/$name
+    echo start backup-put: $s3 1>&2
+    aws s3 cp $tempfile $s3
 fi
 
 cat $tempfile | -backup-blake2b > $name.blake2b
 
 ls -l $tempfile | awk '{print $5}' > $name.size
 
-echo finished backup-put: $remote 1>&2
+echo finished backup-put 1>&2

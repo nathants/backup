@@ -16,7 +16,7 @@ elif [ -n "${BACKUP_R2:-}" ]; then
 elif [ -n "${BACKUP_S3:-}" ]; then
     s3=$BACKUP_S3/$name
     echo start backup-get s3: $s3 1>&2
-    libaws s3-get $s3 > $tempfile
+    aws s3 cp $s3 $tempfile
 fi
 
 hash=$(backup-log | grep $name | awk '{print $2}')

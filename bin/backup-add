@@ -27,9 +27,7 @@ dependencies='
     cat
     git
     git-remote-aws
-    gpg
     grep
-    libaws
     lz4
     python3
 '
