@@ -36,19 +36,23 @@ modifications: Dict[str, Dict[str, Tuple[str, str, str]]] = {
 
 assert proc.stdout
 
+i = 0
 while True:
     line = proc.stdout.readline().decode('utf-8')
     if not line:
         break
     kind = line[0]
     if kind not in {'-', '+'}:
+        i += 1
         continue
     try:
         path, tar, blake2b, size, mode = line[1:].strip().split('\t')
     except ValueError:
-        continue
+        print('failed to parse line', i, line, file=sys.stderr)
+        raise
     else:
         modifications[kind][path] = tar, blake2b, size, mode
+    i += 1
 
 assert proc.wait() == 0
 

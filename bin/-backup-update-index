@@ -65,10 +65,10 @@ def main():
                 data, blake2b, size, mode = hash_file(path)
             except Failed:
                 print('failed:', path, file=sys.stderr)
-                continue
+                raise
             except Timeout:
                 print('timeout:', path, file=sys.stderr)
-                continue
+                raise
             times.append((time.time() - start, path))
 
         # blake2b unchanged
@@ -174,7 +174,7 @@ class Timeout(Exception):
 def mode_to_string(mode):
     return str(oct(mode))[-3:]
 
-@timeout(seconds=int(os.environ.get('BACKUP_TIMEOUT', '15')))
+@timeout(seconds=int(os.environ.get('BACKUP_TIMEOUT', '120')))
 def hash_file(path):
     try:
         with open(path, 'rb') as f:
