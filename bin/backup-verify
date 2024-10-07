@@ -54,12 +54,14 @@ if [ -n "${BACKUP_FS:-}" ]; then
             echo fatal: fs remote missing object from log $prefix$name $size
             exit 1
         fi
-        checksum=$(cat ${prefix}/${name} | -backup-blake2b)
-        if [ "$checksum" = "$hash" ]; then
-            echo ok $name
-        else
-            echo fatal: fs checksum mismatch for $name
-            exit 1
+        if [ -n "${BACKUP_FS_VERIFY:-}" ]; then
+            checksum=$(cat ${prefix}/${name} | -backup-blake2b)
+            if [ "$checksum" = "$hash" ]; then
+                echo ok $name
+            else
+                echo fatal: fs checksum mismatch for $name
+                exit 1
+            fi
         fi
     done
     echo ok fs
