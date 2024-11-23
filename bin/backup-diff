@@ -41,6 +41,10 @@ while True:
     line = proc.stdout.readline().decode('utf-8')
     if not line:
         break
+    if line.startswith('--- '):
+        continue
+    if line.startswith('+++ '):
+        continue
     kind = line[0]
     if kind not in {'-', '+'}:
         i += 1
