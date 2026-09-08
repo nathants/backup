@@ -43,7 +43,7 @@ Two logical stores exist:
 1. **Metadata Git repository** at `$BACKUP_ROOT/.backup`:
    - one branch and fast-forward-only history;
    - Git SHA-256 object format from initialization;
-   - encrypted remote hosting through `git-remote-aws` in production, while filesystem bare remotes may be used in tests;
+   - encrypted remote hosting through `git-remote-aws` in production, while filesystem bare remotes may be used in tests and explicitly repinned temporary disaster-rescue reads;
    - plaintext, sorted, human-readable metadata in the local checkout;
    - Git history is the audit log; commit messages are diagnostic, never a database.
 
@@ -522,6 +522,8 @@ backup repair metadata --root /data --destination local --revision COMMIT
 
 Recovery and metadata repair require an eligible recipient secret key.
 
+After losing the primary Git service, follow [Restore from recovered metadata](docs/recovery-restore.md) before trying to restore files. `recover` publishes a validated bare repository with `refs/backup/recovered-tip`, not a managed checkout. The tested manual procedure checks the exact external anchor, promotes a branch/HEAD without replacing existing history, makes a fresh checkout, preserves trusted mirror pins while explicitly repinning the local metadata source, and restores using only that recovered metadata and a surviving mirror. Do not run `init`, reuse damaged staging, or treat rescue setup as permission to resume production writes. The original source tree and primary may remain unavailable throughout; production takeover still requires retiring the old writer, restoring the mandatory primary authority, and freshly rebuilding the ledger through verification.
+
 Errors are concise stderr messages with nonzero status, not Go panics or stack traces; help exits successfully. Escape control characters in every untrusted path/key/error before terminal output, use structured encodings for machine/audit logs, and never log authorization headers, credentials, recipient secrets, or raw key material.
 
 ## Testing requirements
@@ -698,7 +700,7 @@ These are deployment acceptance gates, not implementation prerequisites or new f
 2. Complete the revision on at least two individual mirrors when two are configured.
 3. Verify each configured mirror using its backend-appropriate trustworthy checksum path.
 4. Perform full local decrypt/decompress/plaintext verification.
-5. Recover metadata solely from one object mirror with the primary Git remote unavailable, both at the latest tip and at an explicitly selected externally recorded earlier tip.
+5. Recover metadata solely from one object mirror with the primary Git remote unavailable, both at the latest tip and at an explicitly selected externally recorded earlier tip. Follow the recovery-to-restore runbook to restore actual content using the recovered metadata and surviving mirror while the original primary and checkout remain unavailable.
 6. Restore selected and broad snapshots into a clean temporary root and compare expected content, modes, mtimes, and symlinks.
 7. Confirm the permanent offline recovery key decrypts both pack and metadata-bundle fixtures.
 8. Accept the exact production `backup-server` deployment as described above.

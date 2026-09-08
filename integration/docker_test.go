@@ -445,6 +445,47 @@ func TestDockerRealClientTwoMirrorBackupSyncRestoreAndRecover(t *testing.T) {
 	if output := backupFailure("verify", "--minimum-mirrors", "1"); !strings.Contains(output, "fetch") {
 		t.Fatalf("primary-remote outage was not observed by ordinary verification:\n%s", output)
 	}
+	// The runbook must work with neither the old checkout/source nor another
+	// mirror available. Keep their preserved bytes out of the rescue paths.
+	if err := os.Rename(source, source+".unavailable"); err != nil {
+		t.Fatal(err)
+	}
+	secondMirror.stop()
+	rescueConfig := filepath.Join(workspace, "rescue-trusted-config")
+	writeFile(t, rescueConfig, []byte(configText), 0o600)
+	anchoredData := filepath.Join(workspace, "anchored-data.git")
+	output := runEnv(t, "", clientEnvironment, binary, "recover", "--root", source, "--config", rescueConfig,
+		"--mirror", "a", "--tip", firstCommit, "--destination", anchoredData)
+	if outputField(t, output, "recovered-tip") != firstCommit {
+		t.Fatalf("anchored data recovery selected wrong tip: %s", output)
+	}
+	for _, item := range []struct{ repository, tip string }{{recovered, secondCommit}, {anchoredData, firstCommit}} {
+		root := filepath.Join(workspace, "rescue-"+item.tip)
+		environment := append(append([]string(nil), clientEnvironment...),
+			"BACKUP_BIN="+binary, "RECOVERED="+item.repository, "TIP="+item.tip,
+			"BRANCH=main", "RESCUE_ROOT="+root, "TRUSTED_CONFIG="+rescueConfig)
+		output := runRecoveryRestoreRunbook(t, environment)
+		if outputField(t, output, "snapshot-commit") != item.tip {
+			t.Fatalf("runbook restored wrong tip: %s", output)
+		}
+		target := filepath.Join(root, "restored")
+		assertFile(t, filepath.Join(target, "dir", "alpha file"), []byte("alpha contents\n"), 0o640, mtime.UnixNano())
+		assertFile(t, filepath.Join(target, "duplicate-one"), []byte("same bytes"), 0o600, -1)
+		assertFile(t, filepath.Join(target, "duplicate-two"), []byte("same bytes"), 0o600, -1)
+		if link, err := os.Readlink(filepath.Join(target, "alpha-link")); err != nil || link != "dir/alpha file" {
+			t.Fatalf("runbook symlink=%q, %v", link, err)
+		}
+		if item.tip == secondCommit {
+			assertFile(t, filepath.Join(target, "second revision"), []byte("new revision\n"), 0o644, -1)
+		} else if _, err := os.Lstat(filepath.Join(target, "second revision")); !os.IsNotExist(err) {
+			t.Fatalf("historical rescue included later content: %v", err)
+		}
+	}
+	for _, unavailable := range []string{source, remote} {
+		if _, err := os.Lstat(unavailable); !os.IsNotExist(err) {
+			t.Fatalf("original path became available during rescue: %s: %v", unavailable, err)
+		}
+	}
 }
 
 func TestDockerWholeRootClientContainerAgainstSeparateServer(t *testing.T) {
