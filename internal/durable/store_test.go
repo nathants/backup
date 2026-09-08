@@ -19,6 +19,7 @@ func TestStoreRoundTripAndStrictSchema(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = store.Close() })
 	if err := store.Write("transaction.json", fixture{Version: 1, Name: "x"}); err != nil {
 		t.Fatal(err)
 	}
@@ -42,6 +43,7 @@ func TestStoreRejectsUnsafeNamesAndTypes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = store.Close() })
 	for _, name := range []string{"", "../escape", "a/b", ".", "-x"} {
 		if err := store.Write(name, fixture{}); err == nil {
 			t.Fatalf("unsafe name %q accepted", name)
@@ -62,6 +64,7 @@ func TestStoreResetRemovesOnlyPrivateState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = store.Close() })
 	if err := store.Write("x.json", fixture{}); err != nil {
 		t.Fatal(err)
 	}
