@@ -2,322 +2,759 @@ package s3server
 
 import (
 	"bytes"
+	"context"
+	"crypto/md5"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/aws/signer/v4"
+	"golang.org/x/crypto/blake2b"
+	"golang.org/x/sys/unix"
 )
 
-func TestSigV4PutGet(t *testing.T) {
-	server := &s3ServerHarness{}
-	server.start(t)
-	defer server.close()
+const (
+	testBucket   = "backup-test"
+	testRegion   = "us-east-1"
+	writerKey    = "writer-access"
+	writerSecret = "writer-secret"
+	readerKey    = "reader-access"
+	readerSecret = "reader-secret"
+)
 
-	payload := []byte("hello")
-	put := server.newRequest(t, http.MethodPut, "/bucket/key", payload, payloadHash(payload))
-	resp := server.do(t, put)
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("expected 200, got %d", resp.StatusCode)
-	}
+type harness struct {
+	t      *testing.T
+	root   string
+	server *Server
+	http   *httptest.Server
+	client *http.Client
+	now    time.Time
+}
 
-	get := server.newRequest(t, http.MethodGet, "/bucket/key", nil, emptySHA256)
-	resp = server.do(t, get)
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("expected 200, got %d", resp.StatusCode)
-	}
-	data, err := io.ReadAll(resp.Body)
+func newHarness(t *testing.T) *harness {
+	t.Helper()
+	return newHarnessAtRoot(t, t.TempDir())
+}
+
+func newHarnessAtRoot(t *testing.T, root string) *harness {
+	t.Helper()
+	now := time.Date(2026, 8, 2, 3, 0, 0, 0, time.UTC)
+	server, err := Open(Config{
+		Root: root, Bucket: testBucket, Region: testRegion, Now: func() time.Time { return now },
+		MaximumObjectSize: 4 << 20,
+		Credentials: map[string]Credential{
+			writerKey: {SecretKey: writerSecret, Role: RoleWriter},
+			readerKey: {SecretKey: readerSecret, Role: RoleReader},
+		},
+	})
 	if err != nil {
-		t.Fatalf("read: %v", err)
+		t.Fatalf("open server: %v", err)
 	}
-	if string(data) != "hello" {
-		t.Fatalf("unexpected body: %s", string(data))
-	}
-}
-
-func TestRejectUnsignedPayload(t *testing.T) {
-	server := &s3ServerHarness{}
-	server.start(t)
-	defer server.close()
-
-	payload := []byte("hello")
-	req := server.newRequest(t, http.MethodPut, "/bucket/key", payload, "UNSIGNED-PAYLOAD")
-	resp := server.do(t, req)
-	if resp.StatusCode == http.StatusOK {
-		t.Fatalf("expected failure for unsigned payload")
-	}
-}
-
-func TestStreamingPayload(t *testing.T) {
-	server := &s3ServerHarness{}
-	server.start(t)
-	defer server.close()
-
-	payload := []byte("streaming payload")
-	request := server.newChunkedRequest(t, "PUT", "/bucket/stream", payload, "", "")
-	resp := server.do(t, request)
-	if resp.StatusCode != http.StatusOK {
-		body, err := io.ReadAll(resp.Body)
-		if err != nil {
-			t.Fatalf("read: %v", err)
+	httpServer := httptest.NewServer(server)
+	h := &harness{t: t, root: root, server: server, http: httpServer, client: httpServer.Client(), now: now}
+	t.Cleanup(func() {
+		h.http.Close()
+		if err := server.Close(); err != nil {
+			t.Errorf("close server: %v", err)
 		}
-		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, string(body))
+	})
+	return h
+}
+
+func objectKey(data []byte, objectID byte) string {
+	hash := blake2b.Sum512(data)
+	return "objects/" + hex.EncodeToString(hash[:]) + "/" + strings.Repeat(hex.EncodeToString([]byte{objectID}), 16)
+}
+
+func (h *harness) request(method, key string, body []byte, reader bool) *http.Request {
+	h.t.Helper()
+	request, err := http.NewRequest(method, h.http.URL+"/"+testBucket+"/"+key, bytes.NewReader(body))
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	if method == http.MethodGet || method == http.MethodHead {
+		request.Body = nil
+		request.ContentLength = 0
+	}
+	access, secret := writerKey, writerSecret
+	if reader {
+		access, secret = readerKey, readerSecret
+	}
+	h.sign(request, access, secret, body)
+	return request
+}
+
+func (h *harness) sign(request *http.Request, access, secret string, body []byte) {
+	h.t.Helper()
+	payload := sha256.Sum256(body)
+	request.Header.Set("x-amz-content-sha256", hex.EncodeToString(payload[:]))
+	signer := v4.NewSigner()
+	if err := signer.SignHTTP(context.Background(), aws.Credentials{AccessKeyID: access, SecretAccessKey: secret}, request, hex.EncodeToString(payload[:]), "s3", testRegion, h.now); err != nil {
+		h.t.Fatalf("sign request: %v", err)
 	}
 }
 
-func TestStreamingPayloadTrailer(t *testing.T) {
-	server := &s3ServerHarness{}
-	server.start(t)
-	defer server.close()
+func addPutHeaders(request *http.Request, body []byte) {
+	md5Digest := md5.Sum(body)
+	shaDigest := sha256.Sum256(body)
+	request.Header.Set("If-None-Match", "*")
+	request.Header.Set("Content-MD5", base64.StdEncoding.EncodeToString(md5Digest[:]))
+	request.Header.Set("x-amz-checksum-sha256", base64.StdEncoding.EncodeToString(shaDigest[:]))
+	request.Header.Set("x-amz-sdk-checksum-algorithm", "SHA256")
+}
 
-	payload := []byte("trailer payload")
-	checksum := sha256.Sum256(payload)
-	trailerValue := base64.StdEncoding.EncodeToString(checksum[:])
-	request := server.newChunkedRequest(t, "PUT", "/bucket/trailer", payload, "x-amz-checksum-sha256", trailerValue)
-	resp := server.do(t, request)
-	if resp.StatusCode != http.StatusOK {
-		body, err := io.ReadAll(resp.Body)
-		if err != nil {
-			t.Fatalf("read: %v", err)
+func (h *harness) putRequest(key string, body []byte) *http.Request {
+	h.t.Helper()
+	request, err := http.NewRequest(http.MethodPut, h.http.URL+"/"+testBucket+"/"+key, bytes.NewReader(body))
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	addPutHeaders(request, body)
+	h.sign(request, writerKey, writerSecret, body)
+	return request
+}
+
+func (h *harness) do(request *http.Request) *http.Response {
+	h.t.Helper()
+	response, err := h.client.Do(request)
+	if err != nil {
+		h.t.Fatalf("request: %v", err)
+	}
+	return response
+}
+
+func closeBody(t *testing.T, response *http.Response) []byte {
+	t.Helper()
+	data, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := response.Body.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return data
+}
+
+func TestDefaultObjectLimitMatchesClientPartLimit(t *testing.T) {
+	server, err := Open(Config{Root: t.TempDir(), Bucket: testBucket, Region: testRegion, Credentials: map[string]Credential{writerKey: {SecretKey: writerSecret, Role: RoleWriter}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.Close()
+	if server.config.MaximumObjectSize != 1<<30 {
+		t.Fatalf("default maximum object size=%d, want 1 GiB", server.config.MaximumObjectSize)
+	}
+}
+
+func TestOfficialAWSSignatureV4KnownAnswerVectors(t *testing.T) {
+	// AWS's independently published S3 SigV4 examples:
+	// https://docs.aws.amazon.com/AmazonS3/latest/developerguide/sig-v4-header-based-auth.html
+	const (
+		accessKey    = "AKIAIOSFODNN7EXAMPLE"
+		secretKey    = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+		getSignature = "f0e8bdb87c964420e857bd35b5d6ed310bd44f0170aba48dd91039c6036bdb41"
+	)
+	getCanonical := "GET\n/test.txt\n\nhost:examplebucket.s3.amazonaws.com\nrange:bytes=0-9\nx-amz-content-sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\nx-amz-date:20130524T000000Z\n\nhost;range;x-amz-content-sha256;x-amz-date\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+	getStringToSign := "AWS4-HMAC-SHA256\n20130524T000000Z\n20130524/us-east-1/s3/aws4_request\n7344ae5b7ee6c3e7e6b0fe0640412a37625d1fbfff95c48bbb2dc43964946972"
+	request, err := http.NewRequest(http.MethodGet, "https://examplebucket.s3.amazonaws.com/test.txt", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Range", "bytes=0-9")
+	request.Header.Set("x-amz-content-sha256", emptySHA256)
+	request.Header.Set("x-amz-date", "20130524T000000Z")
+	request.Header.Set("Authorization", "AWS4-HMAC-SHA256 Credential="+accessKey+"/20130524/us-east-1/s3/aws4_request,SignedHeaders=host;range;x-amz-content-sha256;x-amz-date,Signature="+getSignature)
+	authorization, err := parseAuthorization(request.Header.Get("Authorization"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonical, err := canonicalRequest(request, authorization.SignedNames)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if canonical != getCanonical {
+		t.Fatalf("canonical request:\n%s\nwant:\n%s", canonical, getCanonical)
+	}
+	canonicalDigest := sha256.Sum256([]byte(canonical))
+	if got := hex.EncodeToString(canonicalDigest[:]); got != "7344ae5b7ee6c3e7e6b0fe0640412a37625d1fbfff95c48bbb2dc43964946972" {
+		t.Fatalf("canonical digest=%s", got)
+	}
+	if got := hmacHex(signingKey(secretKey, "20130524", "us-east-1", "s3"), getStringToSign); got != getSignature {
+		t.Fatalf("GET vector signature=%s", got)
+	}
+	if err := verifySignature(request, authorization, secretKey); err != nil {
+		t.Fatalf("official GET signature rejected: %v", err)
+	}
+
+	putCanonical := "PUT\n/test%24file.text\n\ndate:Fri, 24 May 2013 00:00:00 GMT\nhost:examplebucket.s3.amazonaws.com\nx-amz-content-sha256:44ce7dd67c959e0d3524ffac1771dfbba87d2b6b4b4e99e42034a8b803f8b072\nx-amz-date:20130524T000000Z\nx-amz-storage-class:REDUCED_REDUNDANCY\n\ndate;host;x-amz-content-sha256;x-amz-date;x-amz-storage-class\n44ce7dd67c959e0d3524ffac1771dfbba87d2b6b4b4e99e42034a8b803f8b072"
+	putDigest := sha256.Sum256([]byte(putCanonical))
+	if got := hex.EncodeToString(putDigest[:]); got != "9e0e90d9c76de8fa5b200d8c849cd5b8dc7a3be3951ddb7f6a76b4158342019d" {
+		t.Fatalf("PUT canonical digest=%s", got)
+	}
+	putStringToSign := "AWS4-HMAC-SHA256\n20130524T000000Z\n20130524/us-east-1/s3/aws4_request\n9e0e90d9c76de8fa5b200d8c849cd5b8dc7a3be3951ddb7f6a76b4158342019d"
+	if got := hmacHex(signingKey(secretKey, "20130524", "us-east-1", "s3"), putStringToSign); got != "98ad721746da40c64f1a55b78f14c238d841ea1380cd77a1b5971af0ece108bd" {
+		t.Fatalf("PUT vector signature=%s", got)
+	}
+}
+
+func TestEverySecurityRelevantHeaderMustBeSigned(t *testing.T) {
+	request, err := http.NewRequest(http.MethodPut, "https://example.invalid/object", strings.NewReader("x"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Content-MD5", "digest")
+	request.Header.Set("If-None-Match", "*")
+	request.Header.Set("If-Match", "etag")
+	request.Header.Set("If-Modified-Since", "date")
+	request.Header.Set("If-Unmodified-Since", "date")
+	request.Header.Set("If-Range", "etag")
+	request.Header.Set("Range", "bytes=0-1")
+	request.Header.Set("Date", "date")
+	for _, name := range []string{
+		"x-amz-content-sha256", "x-amz-date", "x-amz-security-token",
+		"x-amz-checksum-sha256", "x-amz-checksum-mode", "x-amz-sdk-checksum-algorithm", "x-amz-user-agent",
+	} {
+		request.Header.Set(name, "value")
+	}
+	required := []string{
+		"host", "content-length", "content-md5", "if-none-match", "if-match",
+		"if-modified-since", "if-unmodified-since", "if-range", "range", "date",
+		"x-amz-content-sha256", "x-amz-date", "x-amz-security-token",
+		"x-amz-checksum-sha256", "x-amz-checksum-mode", "x-amz-sdk-checksum-algorithm", "x-amz-user-agent",
+	}
+	for _, omitted := range required {
+		t.Run(omitted, func(t *testing.T) {
+			lookup := make(map[string]struct{}, len(required)-1)
+			for _, name := range required {
+				if name != omitted {
+					lookup[name] = struct{}{}
+				}
+			}
+			err := requireSecurityHeadersSigned(request, parsedAuthorization{SignedLookup: lookup})
+			if err == nil || !strings.Contains(err.Error(), omitted) {
+				t.Fatalf("unsigned %s was accepted: %v", omitted, err)
+			}
+		})
+	}
+	lookup := make(map[string]struct{}, len(required))
+	for _, name := range required {
+		lookup[name] = struct{}{}
+	}
+	request.Header.Set("User-Agent", "not security-relevant")
+	if err := requireSecurityHeadersSigned(request, parsedAuthorization{SignedLookup: lookup}); err != nil {
+		t.Fatalf("complete signed-header set rejected: %v", err)
+	}
+}
+
+func TestRequestDateRejectsFarFutureWithoutDurationOverflow(t *testing.T) {
+	request, err := http.NewRequest(http.MethodGet, "https://example.invalid/object", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("x-amz-date", "99991231T235959Z")
+	authorization := parsedAuthorization{Scope: credentialScope{Date: "99991231"}}
+	now := time.Date(2026, 8, 2, 3, 0, 0, 0, time.UTC)
+	if err := validateRequestDate(request, authorization, now, 15*time.Minute); err == nil {
+		t.Fatal("far-future request date was accepted after time.Duration overflow")
+	}
+}
+
+func TestListingIsSortedBoundedAndCancelable(t *testing.T) {
+	h := newHarness(t)
+	objectsDirectory := filepath.Join(h.root, "objects")
+	for index := 0; index < 1500; index++ {
+		hash := fmt.Sprintf("%0128x", index+1)
+		objectID := fmt.Sprintf("%032x", 1500-index)
+		directory := filepath.Join(objectsDirectory, hash)
+		if err := os.MkdirAll(directory, 0o700); err != nil {
+			t.Fatal(err)
 		}
-		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, string(body))
-	}
-}
-
-func TestQueryCanonicalization(t *testing.T) {
-	server := &s3ServerHarness{}
-	server.start(t)
-	defer server.close()
-
-	payload := []byte("query payload")
-	req := server.newRequest(t, http.MethodPut, "/bucket/query?space=a+b&slash=a%2Fb&plain=z", payload, payloadHash(payload))
-	resp := server.do(t, req)
-	if resp.StatusCode != http.StatusOK {
-		body, err := io.ReadAll(resp.Body)
-		if err != nil {
-			t.Fatalf("read: %v", err)
+		if err := os.WriteFile(filepath.Join(directory, objectID), []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
 		}
-		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, string(body))
+	}
+	h.server.rebuildListingIndices()
+	inspections := h.server.listing["objects"].inspections
+	selected, err := h.server.walkObjects(context.Background(), "objects/", "", 17)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(selected) != 17 {
+		t.Fatalf("selected %d objects", len(selected))
+	}
+	for index := 1; index < len(selected); index++ {
+		if selected[index-1].Key >= selected[index].Key {
+			t.Fatalf("listing is not sorted at %q and %q", selected[index-1].Key, selected[index].Key)
+		}
+	}
+	all, err := h.server.walkObjects(context.Background(), "objects/", selected[len(selected)-1].Key, 17)
+	if err != nil || len(all) != 17 || all[0].Key <= selected[len(selected)-1].Key {
+		t.Fatalf("continuation page=%v err=%v", all, err)
+	}
+	if after := h.server.listing["objects"].inspections; after != inspections {
+		t.Fatalf("paginated listing rescanned the filesystem: inspections %d -> %d", inspections, after)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := h.server.walkObjects(ctx, "objects/", "", 17); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled listing error=%v", err)
 	}
 }
 
-func TestRejectInvalidRequests(t *testing.T) {
-	server := &s3ServerHarness{}
-	server.start(t)
-	defer server.close()
+func TestListingIgnoresUnrelatedBackendSubtrees(t *testing.T) {
+	h := newHarness(t)
+	tip := strings.Repeat("a", 64)
+	hash := strings.Repeat("b", 128)
+	objectID := strings.Repeat("c", 32)
+	key := "metadata/manifests/" + tip + "/" + hash + "/" + objectID
+	path := filepath.Join(append([]string{h.root}, strings.Split(key, "/")...)...)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("manifest"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	unrelated := filepath.Join(h.root, "objects", "unexpected")
+	if err := os.MkdirAll(filepath.Dir(unrelated), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := unix.Mkfifo(unrelated, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h.server.rebuildListingIndices()
+	selected, err := h.server.walkObjects(context.Background(), "metadata/manifests/", "", 10)
+	if err != nil || len(selected) != 1 || selected[0].Key != key {
+		t.Fatalf("prefix-scoped listing=%#v err=%v", selected, err)
+	}
+}
 
-	type testCase struct {
-		name       string
-		makeReq    func(t *testing.T) *http.Request
-		wantStatus int
+func TestCreateGetHeadListAndImmutability(t *testing.T) {
+	h := newHarness(t)
+	payload := []byte("durable object")
+	key := objectKey(payload, 1)
+
+	response := h.do(h.putRequest(key, payload))
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("PUT status %d: %s", response.StatusCode, closeBody(t, response))
+	}
+	closeBody(t, response)
+
+	response = h.do(h.putRequest(key, payload))
+	if response.StatusCode != http.StatusPreconditionFailed {
+		t.Fatalf("overwrite status %d: %s", response.StatusCode, closeBody(t, response))
+	}
+	closeBody(t, response)
+
+	get := h.request(http.MethodGet, key, nil, true)
+	response = h.do(get)
+	if response.StatusCode != http.StatusOK || string(closeBody(t, response)) != string(payload) {
+		t.Fatalf("GET failed: status=%d", response.StatusCode)
 	}
 
-	tests := []testCase{
-		{
-			name: "missing x-amz-content-sha256",
-			makeReq: func(t *testing.T) *http.Request {
-				payload := []byte("hello")
-				req := server.newRequest(t, http.MethodPut, "/bucket/key", payload, payloadHash(payload))
-				req.Header.Del("x-amz-content-sha256")
-				return req
-			},
-			wantStatus: http.StatusBadRequest,
-		},
-		{
-			name: "missing authorization",
-			makeReq: func(t *testing.T) *http.Request {
-				payload := []byte("hello")
-				req := server.newRequest(t, http.MethodPut, "/bucket/key", payload, payloadHash(payload))
-				req.Header.Del("Authorization")
-				return req
-			},
-			wantStatus: http.StatusForbidden,
-		},
-		{
-			name: "signature mismatch",
-			makeReq: func(t *testing.T) *http.Request {
-				payload := []byte("hello")
-				req := server.newRequest(t, http.MethodPut, "/bucket/key", payload, payloadHash(payload))
-				req.Header.Set("x-amz-date", "20250101T000001Z")
-				return req
-			},
-			wantStatus: http.StatusForbidden,
-		},
-		{
-			name: "invalid key contains ..",
-			makeReq: func(t *testing.T) *http.Request {
-				payload := []byte("hello")
-				return server.newRequest(t, http.MethodPut, "/bucket/../key", payload, payloadHash(payload))
-			},
-			wantStatus: http.StatusBadRequest,
-		},
-		{
-			name: "get requires empty payload hash",
-			makeReq: func(t *testing.T) *http.Request {
-				return server.newRequest(t, http.MethodGet, "/bucket/key", nil, "deadbeef")
-			},
-			wantStatus: http.StatusForbidden,
-		},
-		{
-			name: "delete is not allowed",
-			makeReq: func(t *testing.T) *http.Request {
-				return server.newRequest(t, http.MethodDelete, "/bucket/key", nil, emptySHA256)
-			},
-			wantStatus: http.StatusForbidden,
-		},
-		{
-			name: "method not allowed",
-			makeReq: func(t *testing.T) *http.Request {
-				return server.newRequest(t, http.MethodPost, "/bucket/key", nil, emptySHA256)
-			},
-			wantStatus: http.StatusMethodNotAllowed,
-		},
+	head := h.request(http.MethodHead, key, nil, true)
+	head.Header.Set("x-amz-checksum-mode", "ENABLED")
+	h.sign(head, readerKey, readerSecret, nil)
+	response = h.do(head)
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("HEAD status %d", response.StatusCode)
+	}
+	if body := closeBody(t, response); len(body) != 0 {
+		t.Fatalf("HEAD returned a body: %q", body)
+	}
+	shaDigest := sha256.Sum256(payload)
+	if response.Header.Get("x-amz-checksum-sha256") != base64.StdEncoding.EncodeToString(shaDigest[:]) || response.Header.Get("x-amz-checksum-type") != "FULL_OBJECT" {
+		t.Fatalf("HEAD returned wrong checksums: %v", response.Header)
 	}
 
+	list, err := http.NewRequest(http.MethodGet, h.http.URL+"/"+testBucket+"?list-type=2&prefix=objects%2F&max-keys=10", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.sign(list, readerKey, readerSecret, nil)
+	response = h.do(list)
+	listBody := closeBody(t, response)
+	if response.StatusCode != http.StatusOK || !bytes.Contains(listBody, []byte(key)) {
+		t.Fatalf("LIST status=%d body=%s", response.StatusCode, listBody)
+	}
+}
+
+func TestRolesMethodsAndRequiredSignedHeaders(t *testing.T) {
+	h := newHarness(t)
+	payload := []byte("permissions")
+	key := objectKey(payload, 2)
+
+	tests := []struct {
+		name    string
+		request func() *http.Request
+		want    int
+	}{
+		{"reader cannot put", func() *http.Request {
+			r := h.putRequest(key, payload)
+			h.sign(r, readerKey, readerSecret, payload)
+			return r
+		}, http.StatusForbidden},
+		{"writer cannot get", func() *http.Request { return h.request(http.MethodGet, key, nil, false) }, http.StatusForbidden},
+		{"delete forbidden", func() *http.Request { return h.request(http.MethodDelete, key, nil, true) }, http.StatusForbidden},
+		{"post unsupported", func() *http.Request { return h.request(http.MethodPost, key, nil, true) }, http.StatusMethodNotAllowed},
+		{"unsigned conditional", func() *http.Request {
+			r, _ := http.NewRequest(http.MethodPut, h.http.URL+"/"+testBucket+"/"+key, bytes.NewReader(payload))
+			shaDigest := sha256.Sum256(payload)
+			r.Header.Set("x-amz-content-sha256", hex.EncodeToString(shaDigest[:]))
+			h.sign(r, writerKey, writerSecret, payload)
+			addPutHeaders(r, payload)
+			return r
+		}, http.StatusForbidden},
+		{"missing conditional", func() *http.Request {
+			r := h.putRequest(key, payload)
+			r.Header.Del("If-None-Match")
+			h.sign(r, writerKey, writerSecret, payload)
+			return r
+		}, http.StatusPreconditionFailed},
+		{"missing md5", func() *http.Request {
+			r := h.putRequest(key, payload)
+			r.Header.Del("Content-MD5")
+			h.sign(r, writerKey, writerSecret, payload)
+			return r
+		}, http.StatusBadRequest},
+		{"unsigned checksum mode", func() *http.Request {
+			r := h.request(http.MethodHead, key, nil, true)
+			r.Header.Set("x-amz-checksum-mode", "ENABLED")
+			return r
+		}, http.StatusForbidden},
+		{"streaming payload", func() *http.Request {
+			r := h.putRequest(key, payload)
+			r.Header.Set("x-amz-content-sha256", "STREAMING-AWS4-HMAC-SHA256-PAYLOAD")
+			return r
+		}, http.StatusForbidden},
+		{"unsigned payload", func() *http.Request {
+			r := h.putRequest(key, payload)
+			r.Header.Set("x-amz-content-sha256", "UNSIGNED-PAYLOAD")
+			return r
+		}, http.StatusForbidden},
+		{"unknown aws header", func() *http.Request {
+			r := h.putRequest(key, payload)
+			r.Header.Set("x-amz-copy-source", "/backup-test/source")
+			h.sign(r, writerKey, writerSecret, payload)
+			return r
+		}, http.StatusBadRequest},
+	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			req := test.makeReq(t)
-			resp := server.do(t, req)
-			if resp.StatusCode != test.wantStatus {
-				body, err := io.ReadAll(resp.Body)
-				if err != nil {
-					t.Fatalf("read: %v", err)
-				}
-				t.Fatalf("unexpected status: got=%d want=%d body=%s", resp.StatusCode, test.wantStatus, string(body))
+			response := h.do(test.request())
+			body := closeBody(t, response)
+			if response.StatusCode != test.want {
+				t.Fatalf("status=%d want=%d body=%s", response.StatusCode, test.want, body)
 			}
 		})
 	}
 }
 
-type s3ServerHarness struct {
-	server    *httptest.Server
-	client    *http.Client
-	accessKey string
-	secretKey string
-}
+func TestNonPutRequestsRequireAnEmptyFixedPayload(t *testing.T) {
+	h := newHarness(t)
+	payload := []byte("unexpected body")
+	key := objectKey(payload, 9)
 
-func (h *s3ServerHarness) start(t *testing.T) {
-	h.accessKey = "test"
-	h.secretKey = "secret"
-	h.server = httptest.NewTLSServer(&Server{Dir: t.TempDir(), AccessKey: h.accessKey, SecretKey: h.secretKey, Region: "us-east-1"})
-	baseClient := h.server.Client()
-	transport := baseClient.Transport.(*http.Transport).Clone()
-	transport.ForceAttemptHTTP2 = false
-	h.client = &http.Client{Transport: transport}
-}
-
-func (h *s3ServerHarness) close() {
-	h.server.Close()
-}
-
-func (h *s3ServerHarness) do(t *testing.T, req *http.Request) *http.Response {
-	resp, err := h.client.Do(req)
+	withBody, err := http.NewRequest(http.MethodGet, h.http.URL+"/"+testBucket+"/"+key, bytes.NewReader(payload))
 	if err != nil {
-		t.Fatalf("request: %v", err)
+		t.Fatal(err)
 	}
-	return resp
+	h.sign(withBody, readerKey, readerSecret, payload)
+	response := h.do(withBody)
+	body := closeBody(t, response)
+	if response.StatusCode != http.StatusBadRequest {
+		t.Fatalf("GET body status=%d body=%s", response.StatusCode, body)
+	}
+
+	wrongDigest := h.request(http.MethodGet, key, nil, true)
+	h.sign(wrongDigest, readerKey, readerSecret, payload)
+	response = h.do(wrongDigest)
+	body = closeBody(t, response)
+	if response.StatusCode != http.StatusBadRequest {
+		t.Fatalf("GET nonempty payload digest status=%d body=%s", response.StatusCode, body)
+	}
 }
 
-func (h *s3ServerHarness) newRequest(t *testing.T, method string, path string, payload []byte, payloadHash string) *http.Request {
-	url := h.server.URL + path
-	var body io.ReadSeeker
-	if payload != nil {
-		body = bytes.NewReader(payload)
-	} else {
-		body = bytes.NewReader(nil)
+type failFirstBodyWrite struct {
+	header   http.Header
+	statuses []int
+	body     bytes.Buffer
+	failed   bool
+}
+
+func (writer *failFirstBodyWrite) Header() http.Header {
+	if writer.header == nil {
+		writer.header = make(http.Header)
 	}
-	req, err := http.NewRequest(method, url, body)
+	return writer.header
+}
+
+func (writer *failFirstBodyWrite) WriteHeader(status int) {
+	writer.statuses = append(writer.statuses, status)
+}
+
+func (writer *failFirstBodyWrite) Write(data []byte) (int, error) {
+	if !writer.failed && len(writer.statuses) != 0 && writer.statuses[len(writer.statuses)-1] == http.StatusOK {
+		writer.failed = true
+		count := 3
+		if len(data) < count {
+			count = len(data)
+		}
+		_, _ = writer.body.Write(data[:count])
+		return count, errors.New("injected response write failure")
+	}
+	return writer.body.Write(data)
+}
+
+func TestCommittedGETWriteFailureDoesNotAppendXMLError(t *testing.T) {
+	h := newHarness(t)
+	payload := []byte("verified object body")
+	key := objectKey(payload, 11)
+	response := h.do(h.putRequest(key, payload))
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("PUT status=%d body=%s", response.StatusCode, closeBody(t, response))
+	}
+	closeBody(t, response)
+
+	writer := &failFirstBodyWrite{}
+	request := h.request(http.MethodGet, key, nil, true)
+	request.URL.Scheme, request.URL.Host = "", ""
+	h.server.ServeHTTP(writer, request)
+	if len(writer.statuses) != 1 || writer.statuses[0] != http.StatusOK {
+		t.Fatalf("GET wrote response statuses %v body=%s", writer.statuses, writer.body.String())
+	}
+	if got := writer.body.String(); got != string(payload[:3]) || strings.Contains(got, "<Error>") {
+		t.Fatalf("GET appended an error response after body failure: %q", got)
+	}
+}
+
+func TestRandomFailureReturnsInternalErrorInsteadOfPanicking(t *testing.T) {
+	h := newHarness(t)
+	prior := randomSource
+	randomSource = errorReader{}
+	t.Cleanup(func() { randomSource = prior })
+
+	request := h.request(http.MethodGet, objectKey([]byte("missing"), 10), nil, true)
+	recorder := httptest.NewRecorder()
+	h.server.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+type errorReader struct{}
+
+func (errorReader) Read([]byte) (int, error) { return 0, errors.New("injected random failure") }
+
+func TestWrongAndTruncatedBodiesNeverPublish(t *testing.T) {
+	h := newHarness(t)
+	payload := []byte("complete")
+	key := objectKey(payload, 3)
+
+	wrong := h.putRequest(key, payload)
+	wrong.Body = io.NopCloser(strings.NewReader("corrupt!"))
+	response := h.do(wrong)
+	if response.StatusCode != http.StatusBadRequest {
+		t.Fatalf("wrong body status=%d body=%s", response.StatusCode, closeBody(t, response))
+	}
+	closeBody(t, response)
+
+	truncated := h.putRequest(key, payload)
+	truncated.Body = io.NopCloser(bytes.NewReader(payload[:3]))
+	recorder := httptest.NewRecorder()
+	h.server.ServeHTTP(recorder, truncated)
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("truncated body status=%d body=%s", recorder.Code, recorder.Body.Bytes())
+	}
+
+	response = h.do(h.putRequest(key, payload))
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("valid retry status=%d body=%s", response.StatusCode, closeBody(t, response))
+	}
+	closeBody(t, response)
+}
+
+func TestConcurrentCreateHasExactlyOneWinner(t *testing.T) {
+	h := newHarness(t)
+	payload := []byte("one winner")
+	key := objectKey(payload, 4)
+	const requestCount = 24
+	requests := make([]*http.Request, requestCount)
+	for index := range requests {
+		requests[index] = h.putRequest(key, payload)
+	}
+	type outcome struct {
+		status int
+		err    error
+	}
+	outcomes := make(chan outcome, requestCount)
+	for _, request := range requests {
+		go func(request *http.Request) {
+			response, err := h.client.Do(request)
+			if err != nil {
+				outcomes <- outcome{err: err}
+				return
+			}
+			_, readErr := io.Copy(io.Discard, response.Body)
+			closeErr := response.Body.Close()
+			outcomes <- outcome{status: response.StatusCode, err: errors.Join(readErr, closeErr)}
+		}(request)
+	}
+	successes, conflicts := 0, 0
+	for range requestCount {
+		outcome := <-outcomes
+		if outcome.err != nil {
+			t.Fatalf("concurrent request: %v", outcome.err)
+		}
+		switch outcome.status {
+		case http.StatusOK:
+			successes++
+		case http.StatusPreconditionFailed:
+			conflicts++
+		default:
+			t.Fatalf("unexpected concurrent status %d", outcome.status)
+		}
+	}
+	if successes != 1 || conflicts != requestCount-1 {
+		t.Fatalf("successes=%d conflicts=%d", successes, conflicts)
+	}
+}
+
+func TestChecksumHeadDetectsBackendCorruptionWithoutBody(t *testing.T) {
+	h := newHarness(t)
+	payload := []byte("healthy")
+	key := objectKey(payload, 5)
+	response := h.do(h.putRequest(key, payload))
+	closeBody(t, response)
+	if response.StatusCode != http.StatusOK {
+		t.Fatal("put failed")
+	}
+	path := filepath.Join(append([]string{h.root}, strings.Split(key, "/")...)...)
+	if err := os.WriteFile(path, []byte("corrupt"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	head := h.request(http.MethodHead, key, nil, true)
+	head.Header.Set("x-amz-checksum-mode", "ENABLED")
+	h.sign(head, readerKey, readerSecret, nil)
+	response = h.do(head)
+	body := closeBody(t, response)
+	if response.StatusCode != http.StatusInternalServerError || len(body) != 0 || response.ContentLength == int64(len(payload)) {
+		t.Fatalf("corrupt HEAD status=%d content-length=%d body=%q", response.StatusCode, response.ContentLength, body)
+	}
+}
+
+func TestBackendSymlinkCannotEscape(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(root, "objects")); err != nil {
+		t.Fatal(err)
+	}
+	h := newHarnessAtRoot(t, root)
+	payload := []byte("escape attempt")
+	key := objectKey(payload, 6)
+	response := h.do(h.putRequest(key, payload))
+	closeBody(t, response)
+	if response.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("status=%d", response.StatusCode)
+	}
+	entries, err := os.ReadDir(outside)
 	if err != nil {
-		t.Fatalf("request: %v", err)
+		t.Fatal(err)
 	}
-	req.Header.Set("x-amz-date", "20250101T000000Z")
-	req.Header.Set("x-amz-content-sha256", payloadHash)
-	signedHeaders := []string{"host", "x-amz-content-sha256", "x-amz-date"}
-	signRequest(t, req, payloadHash, h.accessKey, h.secretKey, "us-east-1", signedHeaders)
-	return req
+	if len(entries) != 0 {
+		t.Fatalf("server escaped data root: %v", entries)
+	}
 }
 
-func (h *s3ServerHarness) newChunkedRequest(t *testing.T, method string, path string, payload []byte, trailerName string, trailerValue string) *http.Request {
-	url := h.server.URL + path
-	req, err := http.NewRequest(method, url, nil)
-	if err != nil {
-		t.Fatalf("request: %v", err)
+func TestDataRootSymlinkIsRejected(t *testing.T) {
+	parent := t.TempDir()
+	target := filepath.Join(parent, "target")
+	if err := os.Mkdir(target, 0o755); err != nil {
+		t.Fatal(err)
 	}
-	amzDate := "20250101T000000Z"
-	scope := credentialScope{AccessKey: h.accessKey, Date: amzDate[:8], Region: "us-east-1", Service: "s3"}
-	signedHeaders := []string{"host", "x-amz-content-sha256", "x-amz-date"}
-	payloadMode := streamingPayload
-	if trailerName != "" {
-		payloadMode = streamingPayloadTrailer
-		req.Header.Set("x-amz-trailer", trailerName)
-		signedHeaders = append(signedHeaders, "x-amz-trailer")
+	link := filepath.Join(parent, "root")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
 	}
-	req.Header.Set("x-amz-date", amzDate)
-	req.Header.Set("x-amz-content-sha256", payloadMode)
-	req.Header.Set("Content-Encoding", "aws-chunked")
-	req.Header.Set("x-amz-decoded-content-length", fmt.Sprintf("%d", len(payload)))
-
-	canonical, err := canonicalRequest(req, signedHeaders, payloadMode)
-	if err != nil {
-		t.Fatalf("canonical: %v", err)
+	server, err := Open(Config{Root: link, Bucket: testBucket, Region: testRegion, Credentials: map[string]Credential{writerKey: {SecretKey: writerSecret, Role: RoleWriter}}})
+	if server != nil {
+		server.Close()
 	}
-	signature := h.signCanonical(t, canonical, scope, amzDate)
-	signer := chunkSigner{SeedSignature: signature, SigningKey: signingKey(h.secretKey, scope.Date, scope.Region, scope.Service), Scope: scope.String(), AmzDate: amzDate}
-	body := buildChunkedBody(signer, payload, trailerName, trailerValue)
-	req.Body = io.NopCloser(bytes.NewReader(body))
-	req.ContentLength = int64(len(body))
-	req.GetBody = func() (io.ReadCloser, error) {
-		return io.NopCloser(bytes.NewReader(body)), nil
+	if err == nil {
+		t.Fatal("data-root symlink was accepted")
 	}
-	req.Header.Set("Content-Length", fmt.Sprintf("%d", len(body)))
-	auth := buildAuthorization(scope, signature, signedHeaders)
-	req.Header.Set("Authorization", auth)
-	return req
+	entries, readErr := os.ReadDir(target)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("server wrote through data-root symlink: %v", entries)
+	}
+	info, statErr := os.Stat(target)
+	if statErr != nil {
+		t.Fatal(statErr)
+	}
+	if info.Mode().Perm() != 0o755 {
+		t.Fatalf("data-root symlink target mode changed to %04o", info.Mode().Perm())
+	}
 }
 
-func (h *s3ServerHarness) signCanonical(t *testing.T, canonical string, scope credentialScope, amzDate string) string {
-	stringToSign := strings.Join([]string{aws4Algorithm, amzDate, scope.String(), fmt.Sprintf("%x", sha256.Sum256([]byte(canonical)))}, "\n")
-	return hmacHex(signingKey(h.secretKey, scope.Date, scope.Region, scope.Service), stringToSign)
-}
-
-func signRequest(t *testing.T, req *http.Request, payloadHash string, accessKey string, secretKey string, region string, signedHeaders []string) {
-	credential := credentialScope{AccessKey: accessKey, Date: "20250101", Region: region, Service: "s3"}
-	canonical, err := canonicalRequest(req, signedHeaders, payloadHash)
-	if err != nil {
-		t.Fatalf("canonical: %v", err)
+func TestRootLockAndStaleUploadCleanup(t *testing.T) {
+	root := t.TempDir()
+	internal := filepath.Join(root, internalDirectory, temporaryDirectory)
+	if err := os.MkdirAll(internal, 0o700); err != nil {
+		t.Fatal(err)
 	}
-	stringToSign := strings.Join([]string{aws4Algorithm, req.Header.Get("x-amz-date"), credential.String(), fmt.Sprintf("%x", sha256.Sum256([]byte(canonical)))}, "\n")
-	signature := hmacHex(signingKey(secretKey, credential.Date, credential.Region, credential.Service), stringToSign)
-	req.Header.Set("Authorization", buildAuthorization(credential, signature, signedHeaders))
-}
-
-func buildAuthorization(scope credentialScope, signature string, signedHeaders []string) string {
-	return fmt.Sprintf("%s Credential=%s/%s, SignedHeaders=%s, Signature=%s", aws4Algorithm, scope.AccessKey, scope.String(), strings.Join(signedHeaders, ";"), signature)
-}
-
-func buildChunkedBody(signer chunkSigner, payload []byte, trailerName string, trailerValue string) []byte {
-	chunkSig := chunkSignatureFor(signer, signer.SeedSignature, payload)
-	var buffer bytes.Buffer
-	buffer.WriteString(fmt.Sprintf("%x;chunk-signature=%s\r\n", len(payload), chunkSig))
-	buffer.Write(payload)
-	buffer.WriteString("\r\n")
-	finalSig := chunkSignatureFor(signer, chunkSig, nil)
-	if trailerName == "" {
-		buffer.WriteString(fmt.Sprintf("0;chunk-signature=%s\r\n\r\n", finalSig))
-		return buffer.Bytes()
+	if err := os.WriteFile(filepath.Join(internal, "stale"), []byte("partial"), 0o600); err != nil {
+		t.Fatal(err)
 	}
-	buffer.WriteString(fmt.Sprintf("0;chunk-signature=%s\r\n", finalSig))
-	payloadString := fmt.Sprintf("%s:%s\n", strings.ToLower(trailerName), trailerValue)
-	trailerSig := trailerSignatureFor(signer, finalSig, payloadString)
-	buffer.WriteString(fmt.Sprintf("%s:%s\r\n", trailerName, trailerValue))
-	buffer.WriteString(fmt.Sprintf("x-amz-trailer-signature:%s\r\n\r\n", trailerSig))
-	return buffer.Bytes()
+	h := newHarnessAtRoot(t, root)
+	if _, err := os.Stat(filepath.Join(internal, "stale")); !os.IsNotExist(err) {
+		t.Fatalf("stale upload was not removed: %v", err)
+	}
+	_, err := Open(Config{Root: root, Bucket: testBucket, Region: testRegion, Credentials: map[string]Credential{writerKey: {SecretKey: writerSecret, Role: RoleWriter}}})
+	if err == nil || !strings.Contains(err.Error(), "already locked") {
+		t.Fatalf("second server lock unexpectedly succeeded: %v", err)
+	}
+	_ = h
 }
 
-func payloadHash(payload []byte) string {
-	hash := sha256.Sum256(payload)
-	return fmt.Sprintf("%x", hash)
+func TestRootLockRejectsUnexpectedType(t *testing.T) {
+	root := t.TempDir()
+	internal := filepath.Join(root, internalDirectory)
+	if err := os.Mkdir(internal, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := unix.Mkfifo(filepath.Join(internal, lockFilename), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	server, err := Open(Config{Root: root, Bucket: testBucket, Region: testRegion, Credentials: map[string]Credential{writerKey: {SecretKey: writerSecret, Role: RoleWriter}}})
+	if server != nil {
+		_ = server.Close()
+	}
+	if err == nil || !strings.Contains(err.Error(), "regular") {
+		t.Fatalf("FIFO server lock was accepted: %v", err)
+	}
+}
+
+func TestUnexpectedStaleUploadTypeFailsClosed(t *testing.T) {
+	root := t.TempDir()
+	temp := filepath.Join(root, internalDirectory, temporaryDirectory)
+	if err := os.MkdirAll(filepath.Join(temp, "unexpected"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Open(Config{Root: root, Bucket: testBucket, Region: testRegion, Credentials: map[string]Credential{writerKey: {SecretKey: writerSecret, Role: RoleWriter}}})
+	if err == nil || !strings.Contains(err.Error(), "non-regular") {
+		t.Fatalf("unexpected stale type was accepted: %v", err)
+	}
 }

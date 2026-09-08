@@ -1,117 +1,121 @@
-# Backup
+# backup
 
-## Why
+`backup` creates append-only, recipient-encrypted filesystem backups with Git-versioned metadata and independently recoverable S3-compatible object mirrors.
 
-Backups should be simple and easy.
+The authoritative format, threat model, and invariants are documented in [`NINA.md`](NINA.md).
 
-## How
+## Build
 
-Easily create immutable, trustless backups with revision history, compression, and file deduplication.
-
-## What
-
-- The index, tracked in git, contains filesystem metadata.
-
-- The [index](./examples/index) is a sorted TSV file of: `path, tarball, hash, size, mode`
-
-- For every line of metadata in the index, there is one and only one tarball containing a file with that hash.
-
-- Duplicate files, by [BLAKE2b](https://www.blake2.net/) hash, are never stored.
-
-- The index is encrypted with [git-remote-aws](https://github.com/nathants/git-remote-aws).
-
-- Chunked tarballs are compressed with [lz4](https://github.com/lz4/lz4) then encrypted with [git-remote-aws](https://github.com/nathants/git-remote-aws).
-
-- Tarballs are stored on [S3](https://aws.amazon.com/s3/) and optionally [mirrored](#mirrors) to other remotes.
-
-- The [ignore](./examples/ignore) file, tracked in git, contains one regex per line of file paths to ignore.
-
-- A clean restore will clone the git repo, checkout a revision, select file paths by regex, gather needed tarball names, fetch tarballs from storage, and extract the selected files.
-
-## Usage
-
-- `backup-add` - Scan the filesystem for changes.
-- `backup-diff` - Inspect the uncommitted backup diff.
-- `backup-ignore` - If needed, edit the ignore regexes, then goto `backup-add`.
-- `backup-commit` - Commit the backup diff to remote storage.
-- `backup-find` - Search for files in the index by regex at revision.
-- `backup-restore` - Restore files from remote storage by regex at revision.
-
-## Dependencies
-
-- awk
-- aws
-- bash
-- cat
-- git
-- git-remote-aws
-- grep
-- lz4
-- python3
-
-## Installation
-
-- Put `bin/` on `$PATH`
-
-or
-
-- `sudo mv bin/* /usr/local/bin`
-
-## Setup
-
-- Add some environment variables to your bashrc:
-
-  `export BACKUP_ROOT=~` - Root directory to backup
-
-  `export BACKUP_S3=s3://${bucket-name}/${backup-name}` - S3 storage for the tarballs
-
-  `export BACKUP_GIT=aws://${bucket-name}+git-remote-aws/${backup-name}` - Git storage for the index
-
-  `export BACKUP_CHUNK_MEGABYTES=100` - Approximate size of each tarball before compression
-
-## API
-
-Modify backup state:
-- `backup-add` - Scan the filesystem for changes
-- `backup-commit` - Commit the backup diff to remote storage
-- `backup-ignore` - Edit the ignore file in $EDITOR
-- `backup-reset` - Clear uncommited backup state
-
-View backup state:
-- `backup-additions-sizes` - Show large files in the uncommited backup diff
-- `backup-additions` - Inspect the uncommited backup diff, additions only
-- `backup-diff` - Inspect the uncommited backup diff
-- `backup-find` - Find files by regex at revision
-- `backup-index` - View the backup index
-- `backup-log` - View the git log
-
-Restore backup content:
-- `backup-restore` - Restore files from remote storage by regex at revision
-
-## Test
-
-Tests require [libaws](https://github.com/nathants/libaws)
-
-```
-export BACKUP_TEST_S3=s3://${bucket-name}/${backup-name}
-export BACKUP_TEST_GIT=aws://${bucket-name}+git-remote-aws/${backup-name}
-tox
+```sh
+go build ./cmd/backup
 ```
 
-## Mirrors
+Linux, Git with SHA-256 support, and libsodium are required. Production metadata hosting uses `git-remote-aws`.
 
-To mirror tarballs to [R2](https://www.cloudflare.com/developer-platform/r2/) and/or local filesystem, define these optional env vars:
-- `export BACKUP_FS=/mnt/${backup-name}`
-- `export BACKUP_R2=s3://${bucket-name}/${backup-name}`
+## Trusted local configuration
 
-On backup, define up to all three.
+By default the client reads `$BACKUP_ROOT/.backup-config` (`BACKUP_ROOT` defaults to `/`). The file must be regular, bounded, and not group/other writable. It is raw tab/LF text:
 
-On restore, define one, or they will be tried in this order:
-- `fs`
-- `r2`
-- `s3`
+```text
+git-remote	aws://metadata-bucket+dynamodb-table/repository
+branch	main
+mirror	local	backup-server	s3://backup-bucket/repository	https://backup.example:8443	us-east-1	writer-profile	reader-profile	/etc/backup/ca.pem
+```
 
-To use R2, you must define these env vars:
-- `R2_ACCESS_KEY_ID`
-- `R2_ACCESS_KEY_SECRET`
-- `R2_ACCOUNT_ID`
+Each mirror row is:
+
+```text
+mirror  name  kind  s3_url  endpoint  region  writer_profile  reader_profile  ca_file
+```
+
+Use `-` for a provider-default endpoint, absent role profile, or system trust roots. Mirror identity is pinned both here and in canonical `mirrors.tsv`; disagreement fails before network access.
+
+## Initialize
+
+Generate and independently store a permanent recovery keypair with `git-remote-aws --keygen`, then initialize with its public key:
+
+```sh
+backup init --root /data --recovery-public-key "$GIT_REMOTE_AWS_PUBLICKEY"
+```
+
+`init` publishes one SHA-256 Git genesis commit and completes a full encrypted metadata bundle on at least one mirror before success.
+
+## Backup
+
+```sh
+backup add --root /data
+backup diff --root /data
+backup commit --root /data
+```
+
+`add` always reads every included regular file and stages the exact reviewed path set plus provisional metadata; repeated `add` replaces that plan. `commit` never discovers post-add paths. It captures each planned path's current bytes and metadata, warns about changes/removals since `add`, privately spools at most one complete file, and records a pack only after one individual mirror has all of its parts. A trusted alternate plaintext-spool parent can be selected with `--spool-directory`; `--space-reserve-bytes` sets retained free-space headroom. `commit` is resumable at completed-pack boundaries and reports the exact Git SHA-256 commit and complete/lagging mirrors.
+
+## Restore and verify
+
+```sh
+export BACKUP_SECRET_KEY=...
+backup verify --root /data --minimum-mirrors 1
+backup restore --root /data --target /safe/restore '^\./home/' HEAD
+```
+
+Restore verifies all selected ciphertext, encryption authentication, archive structure, and plaintext hashes before publishing any selected path. Existing leaves require `--overwrite`. Historical repair relocation is explicit with `--catalog-revision`.
+
+## Recovery, sync, and repair
+
+```sh
+backup recover --root /data --mirror local --list
+backup recover --root /data --mirror local --tip COMMIT --destination /safe/recovered.git
+backup sync --root /data --source local --destination aws
+backup repair data --root /data --source aws PACK_HASH PART_NUMBER
+backup repair metadata --root /data --destination local --revision COMMIT
+```
+
+Recovery uses only one object mirror plus the recipient secret key; the primary Git remote need not be available. Data repair publishes healthy ciphertext under a fresh immutable key and commits only the `object_id` relocation. Metadata repair rebuilds and validates the exact Git edge, then publishes a fresh encrypted representation without changing Git history; it also requires the recipient secret key for end-to-end validation.
+
+## Production server
+
+The server requires supplied TLS material and separate writer/reader credentials:
+
+```sh
+export BACKUP_SERVER_WRITER_ACCESS_KEY=...
+export BACKUP_SERVER_WRITER_SECRET_KEY=...
+export BACKUP_SERVER_READER_ACCESS_KEY=...
+export BACKUP_SERVER_READER_SECRET_KEY=...
+backup server \
+  --listen :8443 \
+  --data-root /var/lib/backup \
+  --bucket backup \
+  --prefix repository \
+  --region us-east-1 \
+  --tls-cert /etc/backup/tls.crt \
+  --tls-key /etc/backup/tls.key
+```
+
+The server supports only signed fixed-payload create-only PUT, reader GET/HEAD, and bounded ListObjectsV2. It has no delete, overwrite, multipart, copy, presigned, unsigned-payload, or streaming-payload API.
+
+## Check
+
+```sh
+make check
+make fuzz                 # ten seconds per parser/path/tar target
+make fuzz FUZZ_TIME=1m    # longer pre-release campaign
+make docker-test          # real non-root server containers and real client
+```
+
+Docker integration tests require Docker and run the real server image as non-root while the test client runs outside the container. Fuzz seed corpora also run during ordinary `go test`; `make fuzz` performs mutation campaigns against the actual canonical parsers, path/key grammars, local configuration parser, tar reader, and SigV4 request-target/query parsing.
+
+Credential-gated cloud contracts use dedicated ordinary writer and reader credentials and retain immutable probes:
+
+```sh
+# Set BACKUP_AWS_CONTRACT_{BUCKET,REGION,WRITER_ACCESS_KEY,
+# WRITER_SECRET_KEY,READER_ACCESS_KEY,READER_SECRET_KEY}; PREFIX is optional.
+make aws-contract
+
+# Set the analogous BACKUP_R2_CONTRACT_* variables plus ENDPOINT, ACCOUNT_ID,
+# and LOCK_AUDIT_TOKEN (a separate Workers R2 Storage Read bearer token) only
+# after an indefinite Cloudflare bucket-lock rule protects the entire test
+# prefix. JURISDICTION is optional: default, eu, or fedramp.
+make r2-contract
+```
+
+The contracts deliberately attempt unconditional/copy/multipart overwrites, ordinary and version-specific delete and batch-delete, role escalation, wrong checksums, disallowed AWS encryption modes, and bucket-policy/public-access/encryption/lifecycle/immutability/versioning control-plane changes. The R2 contract reads the native Bucket Lock API, requires an enabled indefinite rule covering the exact test namespace, and proves both ordinary S3 credential values cannot reach that API. Use dedicated buckets or prefixes; successful probes are intentionally never deleted.

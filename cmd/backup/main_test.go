@@ -2,250 +2,164 @@ package main
 
 import (
 	"bytes"
-	"encoding/hex"
+	"context"
+	"errors"
 	"io"
-	"net/http/httptest"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
-	"backup/internal/s3server"
-	"github.com/nathants/go-libsodium"
+	backupapp "backup/internal/backup"
+	"backup/internal/format"
 )
 
-func TestCLIHelpAndUnknownCommand(t *testing.T) {
-	backupBin := buildBackupBinary(t)
-
-	type testCase struct {
-		name       string
-		args       []string
-		wantCode   int
-		wantStdout string
-		wantStderr string
+func TestHelpSucceeds(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	if err := run(context.Background(), []string{"--help"}, &stdout, &stderr); err != nil {
+		t.Fatal(err)
 	}
-
-	tests := []testCase{
-		{
-			name:       "no args prints usage",
-			args:       []string{},
-			wantCode:   1,
-			wantStdout: "Usage:",
-		},
-		{
-			name:       "help prints usage",
-			args:       []string{"--help"},
-			wantCode:   1,
-			wantStdout: "Usage:",
-		},
-		{
-			name:       "unknown command prints usage and error",
-			args:       []string{"nope"},
-			wantCode:   1,
-			wantStdout: "Usage:",
-			wantStderr: "unknown command:",
-		},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			result := runCLI(t, backupBin, test.args, nil)
-			if result.ExitCode != test.wantCode {
-				t.Fatalf("unexpected exit code: got=%d want=%d\nstdout=%s\nstderr=%s", result.ExitCode, test.wantCode, result.Stdout, result.Stderr)
-			}
-			if test.wantStdout != "" && !strings.Contains(result.Stdout, test.wantStdout) {
-				t.Fatalf("unexpected stdout:\nwant contains=%q\nstdout=%s", test.wantStdout, result.Stdout)
-			}
-			if test.wantStderr != "" && !strings.Contains(result.Stderr, test.wantStderr) {
-				t.Fatalf("unexpected stderr:\nwant contains=%q\nstderr=%s", test.wantStderr, result.Stderr)
-			}
-		})
+	if !strings.Contains(stdout.String(), "usage: backup COMMAND") || stderr.Len() != 0 {
+		t.Fatalf("stdout=%q stderr=%q", stdout.String(), stderr.String())
 	}
 }
 
-func TestUsageListsCommands(t *testing.T) {
-	output := captureStdout(t, func() {
-		usage()
+func TestSubcommandHelpSucceeds(t *testing.T) {
+	for _, command := range []string{"init", "add", "diff", "commit", "reset", "find", "restore", "verify", "sync", "repair", "recover", "server"} {
+		var stdout, stderr bytes.Buffer
+		if err := run(context.Background(), []string{command, "--help"}, &stdout, &stderr); err != nil {
+			t.Fatalf("%s --help: %v", command, err)
+		}
+		if !strings.Contains(stdout.String(), "usage: backup COMMAND") || stderr.Len() != 0 {
+			t.Fatalf("%s stdout=%q stderr=%q", command, stdout.String(), stderr.String())
+		}
+	}
+}
+
+func TestInitPublicKeyFileIsBoundedBeforeParsing(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "publickeys")
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Truncate(format.MaximumPublicKeysBytes + 1); err != nil {
+		file.Close()
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	err = runInit(context.Background(), []string{"--recovery-public-key", strings.Repeat("a", 64), "--public-keys", path}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("oversized public-key list was accepted")
+	}
+}
+
+func TestTLSPrivateKeyMustBeRegularNoFollowAndPrivate(t *testing.T) {
+	directory := t.TempDir()
+	key := filepath.Join(directory, "server.key")
+	if err := os.WriteFile(key, []byte("not a real key"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readTLSFile(key, true); err == nil || !strings.Contains(err.Error(), "0600") {
+		t.Fatalf("world-readable key accepted: %v", err)
+	}
+	if err := os.Chmod(key, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	data, err := readTLSFile(key, true)
+	if err != nil || string(data) != "not a real key" {
+		t.Fatalf("private key read failed: data=%q err=%v", data, err)
+	}
+	link := filepath.Join(directory, "link.key")
+	if err := os.Symlink(key, link); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readTLSFile(link, true); err == nil {
+		t.Fatal("symlinked private key was accepted")
+	}
+}
+
+func TestUnknownCommandAndMissingArgumentsAreErrors(t *testing.T) {
+	for _, test := range []struct {
+		arguments []string
+		contains  string
+	}{
+		{[]string{"unknown"}, "unknown command"},
+		{[]string{"init"}, "requires --recovery-public-key"},
+		{[]string{"init", "--recovery-public-key", "ABC"}, "lowercase hexadecimal"},
+		{[]string{"add", "extra"}, "accepts no positional"},
+		{[]string{"diff", "extra"}, "accepts no positional"},
+		{[]string{"commit", "extra"}, "accepts no positional"},
+		{[]string{"reset", "extra"}, "accepts no positional"},
+		{[]string{"find"}, "requires REGEX"},
+		{[]string{"find", "a", "b", "c"}, "requires REGEX"},
+		{[]string{"restore"}, "requires REGEX"},
+		{[]string{"verify", "a", "b"}, "accepts optional"},
+		{[]string{"sync", "extra"}, "accepts no positional"},
+		{[]string{"repair"}, "requires data or metadata"},
+		{[]string{"repair", "unknown"}, "unknown repair subcommand"},
+		{[]string{"repair", "data", "--source", "a", strings.Repeat("0", 128), "01"}, "canonical unsigned decimal"},
+		{[]string{"repair", "metadata"}, "requires --destination"},
+		{[]string{"recover", "extra"}, "accepts no positional"},
+		{[]string{"server"}, "server requires"},
+	} {
+		var stdout, stderr bytes.Buffer
+		err := run(context.Background(), test.arguments, &stdout, &stderr)
+		if err == nil || !strings.Contains(err.Error(), test.contains) {
+			t.Fatalf("arguments %v: err=%v, want containing %q", test.arguments, err, test.contains)
+		}
+	}
+}
+
+func TestRecoverResultEscapesDestination(t *testing.T) {
+	var output bytes.Buffer
+	printRecoverResult(&output, backupapp.RecoverResult{
+		RecoveredTip: strings.Repeat("b", 64),
+		Destination:  "/restore\ninjected\tpath",
 	})
-	if !strings.Contains(output, "Usage:") {
-		t.Fatalf("expected Usage header, got:\n%s", output)
+	if strings.Contains(output.String(), "/restore\ninjected\tpath") || !strings.Contains(output.String(), "destination\t/restore\\x0ainjected\\x09path\n") {
+		t.Fatalf("recover output contains unescaped destination: %q", output.String())
 	}
-	// Spot-check some expected commands are present.
-	for _, name := range []string{"init", "add", "commit", "restore", "server"} {
-		if !strings.Contains(output, "backup "+name) {
-			t.Fatalf("expected usage output to mention %q, got:\n%s", "backup "+name, output)
+}
+
+func TestSnapshotResultAndPublicKeyEncoding(t *testing.T) {
+	var output bytes.Buffer
+	printSnapshotResult(&output, backupapp.SnapshotResult{CommitID: strings.Repeat("a", 64), CompleteMirrors: []string{"a"}, LaggingMirrors: []string{"b"}})
+	for _, want := range []string{"commit\t" + strings.Repeat("a", 64), "complete-mirror\ta", "lagging-mirror\tb"} {
+		if !strings.Contains(output.String(), want+"\n") {
+			t.Fatalf("snapshot output %q lacks %q", output.String(), want)
+		}
+	}
+	key := strings.Repeat("a", 64)
+	decoded, err := decodePublicKey(key)
+	if err != nil || len(decoded) != 32 {
+		t.Fatalf("decode valid public key: len=%d err=%v", len(decoded), err)
+	}
+	for _, invalid := range []string{strings.Repeat("a", 63), strings.Repeat("A", 64), strings.Repeat("z", 64)} {
+		if _, err := decodePublicKey(invalid); err == nil {
+			t.Fatalf("invalid public key %q accepted", invalid)
 		}
 	}
 }
 
-func TestCLIEndToEnd(t *testing.T) {
-	backupBin := buildBackupBinary(t)
+type failingWriter struct{}
 
-	root := t.TempDir()
-	remote := filepath.Join(t.TempDir(), "remote.git")
-	runCommand(t, "git", "init", "--bare", remote)
+func (failingWriter) Write([]byte) (int, error) { return 0, io.ErrClosedPipe }
 
-	serverDir := filepath.Join(t.TempDir(), "objects")
-	server := &s3server.Server{Dir: serverDir, AccessKey: "test", SecretKey: "secret", Region: "us-east-1"}
-	tlsServer := httptest.NewTLSServer(server)
-	defer tlsServer.Close()
-
-	publicKey, secretKey := makeKeys(t)
-
-	env := map[string]string{
-		"BACKUP_ROOT":              root,
-		"BACKUP_GIT":               remote,
-		"BACKUP_S3":                "s3://bucket/test",
-		"BACKUP_S3_ENDPOINT":       tlsServer.URL,
-		"BACKUP_S3_REGION":         "us-east-1",
-		"BACKUP_S3_INSECURE_TLS":   "1",
-		"BACKUP_CHUNK_MEGABYTES":   "1",
-		"AWS_ACCESS_KEY_ID":        "test",
-		"AWS_SECRET_ACCESS_KEY":    "secret",
-		"GIT_REMOTE_AWS_PUBLICKEY": hex.EncodeToString(publicKey),
-		"GIT_REMOTE_AWS_SECRETKEY": hex.EncodeToString(secretKey),
+func TestMandatoryResultOutputErrorsAreReturned(t *testing.T) {
+	if err := printSnapshotResult(failingWriter{}, backupapp.SnapshotResult{CommitID: strings.Repeat("a", 64)}); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("snapshot output error=%v", err)
 	}
-
-	runCLIExpectOK(t, backupBin, []string{"init"}, env)
-
-	err := os.WriteFile(filepath.Join(root, "alpha.txt"), []byte("alpha"), 0644)
-	if err != nil {
-		t.Fatalf("write: %v", err)
-	}
-
-	runCLIExpectOK(t, backupBin, []string{"add"}, env)
-	diff := runCLIExpectOK(t, backupBin, []string{"diff"}, env)
-	if !strings.Contains(diff.Stdout, "addition:") {
-		t.Fatalf("expected diff to contain addition, got:\n%s", diff.Stdout)
-	}
-
-	runCLIExpectOK(t, backupBin, []string{"commit"}, env)
-
-	secondRoot := t.TempDir()
-	env["BACKUP_ROOT"] = secondRoot
-	runCLIExpectOK(t, backupBin, []string{"restore", "alpha", "HEAD"}, env)
-	assertFile(t, filepath.Join(secondRoot, "alpha.txt"), "alpha")
-}
-
-type cliResult struct {
-	ExitCode int
-	Stdout   string
-	Stderr   string
-}
-
-func runCLIExpectOK(t *testing.T, backupBin string, args []string, env map[string]string) cliResult {
-	t.Helper()
-	result := runCLI(t, backupBin, args, env)
-	if result.ExitCode != 0 {
-		t.Fatalf("command failed: backup %s\nexitCode=%d\nstdout=%s\nstderr=%s", strings.Join(args, " "), result.ExitCode, result.Stdout, result.Stderr)
-	}
-	return result
-}
-
-func runCLI(t *testing.T, backupBin string, args []string, env map[string]string) cliResult {
-	t.Helper()
-	cmd := exec.Command(backupBin, args...)
-	cmd.Env = mergeEnv(os.Environ(), env)
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	err := cmd.Run()
-	exitCode := 0
-	if err != nil {
-		exitErr, ok := err.(*exec.ExitError)
-		if !ok {
-			t.Fatalf("run: %v", err)
-		}
-		exitCode = exitErr.ExitCode()
-	}
-	return cliResult{ExitCode: exitCode, Stdout: stdout.String(), Stderr: stderr.String()}
-}
-
-func mergeEnv(base []string, overrides map[string]string) []string {
-	if len(overrides) == 0 {
-		return base
-	}
-	result := make([]string, 0, len(base)+len(overrides))
-	seen := map[string]bool{}
-	for key := range overrides {
-		seen[key] = true
-	}
-	for _, value := range base {
-		key, _, ok := strings.Cut(value, "=")
-		if ok && seen[key] {
-			continue
-		}
-		result = append(result, value)
-	}
-	for key, value := range overrides {
-		result = append(result, key+"="+value)
-	}
-	return result
-}
-
-func buildBackupBinary(t *testing.T) string {
-	t.Helper()
-	out := filepath.Join(t.TempDir(), "backup")
-	cmd := exec.Command("go", "build", "-o", out, ".")
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	err := cmd.Run()
-	if err != nil {
-		t.Fatalf("go build failed: %v: %s", err, stderr.String())
-	}
-	return out
-}
-
-func runCommand(t *testing.T, name string, args ...string) {
-	t.Helper()
-	cmd := exec.Command(name, args...)
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	err := cmd.Run()
-	if err != nil {
-		t.Fatalf("%s failed: %v: %s", strings.Join(append([]string{name}, args...), " "), err, stderr.String())
+	if err := printRecoverResult(failingWriter{}, backupapp.RecoverResult{RecoveredTip: strings.Repeat("b", 64), Destination: "/tmp/recovered"}); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("recover output error=%v", err)
 	}
 }
 
-func makeKeys(t *testing.T) ([]byte, []byte) {
-	t.Helper()
-	libsodium.Init()
-	publicKey, secretKey, err := libsodium.BoxKeypair()
-	if err != nil {
-		t.Fatalf("keypair: %v", err)
+func TestTerminalErrorsEscapeControls(t *testing.T) {
+	got := escapeTerminal("bad\npath\x00")
+	if strings.ContainsAny(got, "\n\x00") || got != `bad\x0apath\x00` {
+		t.Fatalf("escaped=%q", got)
 	}
-	return publicKey, secretKey
-}
-
-func assertFile(t *testing.T, path string, expected string) {
-	t.Helper()
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read %s: %v", path, err)
-	}
-	if string(data) != expected {
-		t.Fatalf("expected %s to be %s", path, expected)
-	}
-}
-
-func captureStdout(t *testing.T, fn func()) string {
-	t.Helper()
-	original := os.Stdout
-	reader, writer, err := os.Pipe()
-	if err != nil {
-		t.Fatalf("pipe: %v", err)
-	}
-	os.Stdout = writer
-	t.Cleanup(func() {
-		os.Stdout = original
-	})
-	fn()
-	_ = writer.Close()
-	data, err := io.ReadAll(reader)
-	if err != nil {
-		t.Fatalf("read: %v", err)
-	}
-	return string(data)
 }
