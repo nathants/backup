@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"backup/internal/format"
+
 	"github.com/klauspost/compress/zstd"
 	"github.com/nathants/go-libsodium"
 	"golang.org/x/crypto/blake2b"
@@ -42,14 +43,18 @@ type StagedFile struct {
 	Open *os.File
 }
 
-func encryptRecipients(recipients [][]byte, input io.Reader, output io.Writer) (err error) {
+func encryptRecipients(recipients libsodium.KeyChains, input io.Reader, output io.Writer) (err error) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			err = fmt.Errorf("recipient encryption failed: %v", recovered)
 		}
 	}()
 	sodiumOnce.Do(libsodium.Init)
-	return libsodium.StreamEncryptRecipients(recipients, input, output)
+	keys, err := recipients.Latest()
+	if err != nil {
+		return err
+	}
+	return libsodium.StreamEncryptRecipients(keys, input, output)
 }
 
 func canonicalHeader(name string, size int64) *tar.Header {
@@ -189,7 +194,7 @@ func validateTarHeader(header *tar.Header) error {
 	return nil
 }
 
-func DecryptAndRead(ciphertext io.Reader, expectedHash string, expectedSize uint64, secretKey []byte, expectedMembers map[string]uint64, consume func(string, uint64, io.Reader) error) error {
+func DecryptAndRead(ciphertext io.Reader, expectedHash string, expectedSize uint64, secretKey *libsodium.Keyring, expectedMembers map[string]uint64, consume func(string, uint64, io.Reader) error) error {
 	if len(expectedHash) != 128 || stringsToLower(expectedHash) != expectedHash {
 		return fmt.Errorf("invalid expected ciphertext hash")
 	}
@@ -242,14 +247,14 @@ func DecryptAndRead(ciphertext io.Reader, expectedHash string, expectedSize uint
 	return nil
 }
 
-func decryptRecipients(secretKey []byte, input io.Reader, output io.Writer) (err error) {
+func decryptRecipients(secretKey *libsodium.Keyring, input io.Reader, output io.Writer) (err error) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			err = fmt.Errorf("recipient decryption failed: %v", recovered)
 		}
 	}()
 	sodiumOnce.Do(libsodium.Init)
-	return libsodium.StreamDecryptRecipients(secretKey, input, output)
+	return secretKey.Decrypt(input, output)
 }
 
 type countWriter struct {

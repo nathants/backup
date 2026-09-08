@@ -1,6 +1,7 @@
 package backup
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"fmt"
@@ -18,7 +19,9 @@ import (
 	"backup/internal/objectstore"
 	"backup/internal/repository"
 	"backup/internal/s3server"
+
 	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/nathants/go-libsodium"
 )
 
 func TestAddRejectsCanceledContextBeforeFilesystemAccess(t *testing.T) {
@@ -40,7 +43,7 @@ func TestResetAbandonsAcceptedUnpublishedGenesis(t *testing.T) {
 		}
 		return nil
 	}
-	if _, err := initializePublished(context.Background(), options, InitRequest{RecoveryPublicKey: harness.publicKey}); err == nil || !strings.Contains(err.Error(), "local-commit-accepted") {
+	if _, err := initializePublished(context.Background(), options, harness.publicKey); err == nil || !strings.Contains(err.Error(), "local-commit-accepted") {
 		t.Fatalf("genesis did not stop after local branch acceptance: %v", err)
 	}
 	txn := loadTestTransaction(t, harness.options)
@@ -78,19 +81,30 @@ func TestSecretKeyFileIsPrivateBoundedAndNoFollow(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Run("valid file", func(t *testing.T) {
-		t.Setenv("BACKUP_SECRET_KEY", "")
-		t.Setenv("BACKUP_SECRET_KEY_FILE", valid)
-		key, err := (&runtime{}).secretKey()
-		if err != nil || fmt.Sprintf("%x", key) != strings.TrimSpace(keyText) {
-			t.Fatalf("secret key=%x err=%v", key, err)
+		t.Setenv("GIT_REMOTE_AWS_SECRETKEY", "")
+		t.Setenv("GIT_REMOTE_AWS_SECRETKEY_FILE", valid)
+		key, err := (&runtime{}).secretKey(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		public, err := libsodium.BoxPublicKey(bytes.Repeat([]byte{0xaa}, 32))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var cipher bytes.Buffer
+		if err := libsodium.StreamEncryptRecipients([][]byte{public}, strings.NewReader("key source"), &cipher); err != nil {
+			t.Fatal(err)
+		}
+		var plain bytes.Buffer
+		if err := key.Decrypt(&cipher, &plain); err != nil || plain.String() != "key source" {
+			t.Fatalf("wrong loaded key: %v", err)
 		}
 	})
-	t.Run("environment takes precedence", func(t *testing.T) {
-		t.Setenv("BACKUP_SECRET_KEY", strings.Repeat("b", 64))
-		t.Setenv("BACKUP_SECRET_KEY_FILE", filepath.Join(t.TempDir(), "missing"))
-		key, err := (&runtime{}).secretKey()
-		if err != nil || fmt.Sprintf("%x", key) != strings.Repeat("b", 64) {
-			t.Fatalf("secret key=%x err=%v", key, err)
+	t.Run("sources are disjoint", func(t *testing.T) {
+		t.Setenv("GIT_REMOTE_AWS_SECRETKEY", strings.Repeat("b", 64))
+		t.Setenv("GIT_REMOTE_AWS_SECRETKEY_FILE", filepath.Join(t.TempDir(), "missing"))
+		if _, err := (&runtime{}).secretKey(context.Background()); err == nil || !strings.Contains(err.Error(), "exactly one") {
+			t.Fatalf("conflicting sources: %v", err)
 		}
 	})
 	t.Run("symlink", func(t *testing.T) {
@@ -98,9 +112,9 @@ func TestSecretKeyFileIsPrivateBoundedAndNoFollow(t *testing.T) {
 		if err := os.Symlink(valid, link); err != nil {
 			t.Fatal(err)
 		}
-		t.Setenv("BACKUP_SECRET_KEY", "")
-		t.Setenv("BACKUP_SECRET_KEY_FILE", link)
-		if _, err := (&runtime{}).secretKey(); err == nil {
+		t.Setenv("GIT_REMOTE_AWS_SECRETKEY", "")
+		t.Setenv("GIT_REMOTE_AWS_SECRETKEY_FILE", link)
+		if _, err := (&runtime{}).secretKey(context.Background()); err == nil {
 			t.Fatal("symlinked secret-key file was accepted")
 		}
 	})
@@ -112,20 +126,20 @@ func TestSecretKeyFileIsPrivateBoundedAndNoFollow(t *testing.T) {
 		if err := os.Chmod(path, 0o640); err != nil {
 			t.Fatal(err)
 		}
-		t.Setenv("BACKUP_SECRET_KEY", "")
-		t.Setenv("BACKUP_SECRET_KEY_FILE", path)
-		if _, err := (&runtime{}).secretKey(); err == nil {
+		t.Setenv("GIT_REMOTE_AWS_SECRETKEY", "")
+		t.Setenv("GIT_REMOTE_AWS_SECRETKEY_FILE", path)
+		if _, err := (&runtime{}).secretKey(context.Background()); err == nil {
 			t.Fatal("group-readable secret-key file was accepted")
 		}
 	})
 	t.Run("oversized", func(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "secret-key")
-		if err := os.WriteFile(path, []byte(strings.Repeat("a", maximumSecretKeyFileSize+1)), 0o600); err != nil {
+		if err := os.WriteFile(path, []byte(strings.Repeat("a", libsodium.MaxKeyChainsBytes+1)), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		t.Setenv("BACKUP_SECRET_KEY", "")
-		t.Setenv("BACKUP_SECRET_KEY_FILE", path)
-		if _, err := (&runtime{}).secretKey(); err == nil {
+		t.Setenv("GIT_REMOTE_AWS_SECRETKEY", "")
+		t.Setenv("GIT_REMOTE_AWS_SECRETKEY_FILE", path)
+		if _, err := (&runtime{}).secretKey(context.Background()); err == nil {
 			t.Fatal("oversized secret-key file was accepted")
 		}
 	})
@@ -133,11 +147,11 @@ func TestSecretKeyFileIsPrivateBoundedAndNoFollow(t *testing.T) {
 
 func TestRecoverWithWrongRecipientPublishesNothing(t *testing.T) {
 	harness := newIntegrationHarness(t)
-	genesis, err := initializePublished(context.Background(), harness.options, InitRequest{RecoveryPublicKey: harness.publicKey})
+	genesis, err := initializePublished(context.Background(), harness.options, harness.publicKey)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("BACKUP_SECRET_KEY", strings.Repeat("0", 64))
+	t.Setenv("GIT_REMOTE_AWS_SECRETKEY", strings.Repeat("0", 64))
 	destination := filepath.Join(t.TempDir(), "recovered.git")
 	_, err = Recover(context.Background(), harness.options, RecoverRequest{Mirror: "local", Tip: genesis.CommitID, Destination: destination})
 	if err == nil || !strings.Contains(err.Error(), "no verified metadata chain") {
@@ -164,7 +178,7 @@ func TestEmptyAndDeletionSnapshotsRequireExplicitPermission(t *testing.T) {
 	harness.configPath = externalConfig
 	harness.options.ConfigPath = externalConfig
 	ctx := context.Background()
-	if _, err := initializePublished(ctx, harness.options, InitRequest{RecoveryPublicKey: harness.publicKey}); err != nil {
+	if _, err := initializePublished(ctx, harness.options, harness.publicKey); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := Add(ctx, harness.options, false); err == nil || !strings.Contains(err.Error(), "empty snapshot") {
@@ -216,7 +230,7 @@ func TestEmptyAndDeletionSnapshotsRequireExplicitPermission(t *testing.T) {
 func TestRestoreOverwriteAndSymlinkConfinement(t *testing.T) {
 	harness := newIntegrationHarness(t)
 	ctx := context.Background()
-	if _, err := initializePublished(ctx, harness.options, InitRequest{RecoveryPublicKey: harness.publicKey}); err != nil {
+	if _, err := initializePublished(ctx, harness.options, harness.publicKey); err != nil {
 		t.Fatal(err)
 	}
 	path := filepath.Join(harness.root, "dir", "file")
@@ -233,7 +247,7 @@ func TestRestoreOverwriteAndSymlinkConfinement(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("BACKUP_SECRET_KEY", fmt.Sprintf("%x", harness.secretKey))
+	t.Setenv("GIT_REMOTE_AWS_SECRETKEY", fmt.Sprintf("%x", harness.secretKey))
 
 	target := t.TempDir()
 	if err := os.Mkdir(filepath.Join(target, "dir"), 0o700); err != nil {
@@ -288,7 +302,7 @@ func TestRestoreOverwriteAndSymlinkConfinement(t *testing.T) {
 func TestRestoreDoesNotImplicitlyIncludeSymlinkTarget(t *testing.T) {
 	harness := newIntegrationHarness(t)
 	ctx := context.Background()
-	if _, err := initializePublished(ctx, harness.options, InitRequest{RecoveryPublicKey: harness.publicKey}); err != nil {
+	if _, err := initializePublished(ctx, harness.options, harness.publicKey); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(harness.root, "target"), []byte("target payload"), 0o600); err != nil {
@@ -307,7 +321,7 @@ func TestRestoreDoesNotImplicitlyIncludeSymlinkTarget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("BACKUP_SECRET_KEY", "")
+	t.Setenv("GIT_REMOTE_AWS_SECRETKEY", "")
 	target := t.TempDir()
 	result, err := Restore(ctx, harness.options, RestoreRequest{Pattern: `^\./link$`, Revision: latest.CommitID, TargetRoot: target})
 	if err != nil || result.Published != 1 {
@@ -332,7 +346,7 @@ func TestRestoreDoesNotImplicitlyIncludeSymlinkTarget(t *testing.T) {
 func TestHistoricalRestoreReportsAndUsesExplicitRelocation(t *testing.T) {
 	harness := newIntegrationHarness(t)
 	ctx := context.Background()
-	genesis, err := initializePublished(ctx, harness.options, InitRequest{RecoveryPublicKey: harness.publicKey})
+	genesis, err := initializePublished(ctx, harness.options, harness.publicKey)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -384,18 +398,18 @@ func TestHistoricalRestoreReportsAndUsesExplicitRelocation(t *testing.T) {
 		t.Fatal(err)
 	}
 	pinnedTarget := t.TempDir()
-	t.Setenv("BACKUP_SECRET_KEY", fmt.Sprintf("%x", harness.secretKey))
+	t.Setenv("GIT_REMOTE_AWS_SECRETKEY", fmt.Sprintf("%x", harness.secretKey))
 	if _, err := Restore(ctx, harness.options, RestoreRequest{Pattern: `^\./file$`, Revision: snapshot.CommitID, TargetRoot: pinnedTarget}); err != nil {
 		t.Fatalf("default historical restore did not remain pinned to its snapshot catalog: %v", err)
 	}
 	if err := os.Rename(offlineNewPath, newPath); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("BACKUP_SECRET_KEY", strings.Repeat("0", 64))
+	t.Setenv("GIT_REMOTE_AWS_SECRETKEY", strings.Repeat("0", 64))
 	if _, err := Restore(ctx, harness.options, RestoreRequest{Pattern: `^\./file$`, Revision: snapshot.CommitID, TargetRoot: t.TempDir()}); err == nil || strings.Contains(err.Error(), "compatible immutable relocation") {
 		t.Fatalf("authenticated-content failure incorrectly suggested relocation: %v", err)
 	}
-	t.Setenv("BACKUP_SECRET_KEY", fmt.Sprintf("%x", harness.secretKey))
+	t.Setenv("GIT_REMOTE_AWS_SECRETKEY", fmt.Sprintf("%x", harness.secretKey))
 	oldPath := filepath.Join(harness.serverRoot, "objects", oldPart.PartHash, oldPart.ObjectID)
 	corrupt, err := os.OpenFile(oldPath, os.O_WRONLY|os.O_TRUNC, 0)
 	if err != nil {
@@ -434,7 +448,7 @@ func TestHistoricalRestoreDoesNotSuggestUnrelatedRelocation(t *testing.T) {
 	harness.options.PackTarget = 1
 	harness.options.PartSize = 1 << 20
 	ctx := context.Background()
-	if _, err := initializePublished(ctx, harness.options, InitRequest{RecoveryPublicKey: harness.publicKey}); err != nil {
+	if _, err := initializePublished(ctx, harness.options, harness.publicKey); err != nil {
 		t.Fatal(err)
 	}
 	for _, name := range []string{"selected", "unrelated"} {
@@ -466,7 +480,7 @@ func TestHistoricalRestoreDoesNotSuggestUnrelatedRelocation(t *testing.T) {
 	if err := os.WriteFile(selectedObject, []byte("corrupt selected historical representation"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("BACKUP_SECRET_KEY", fmt.Sprintf("%x", harness.secretKey))
+	t.Setenv("GIT_REMOTE_AWS_SECRETKEY", fmt.Sprintf("%x", harness.secretKey))
 	_, err = Restore(ctx, harness.options, RestoreRequest{Pattern: `^\./selected$`, Revision: snapshot.CommitID, TargetRoot: t.TempDir()})
 	if err == nil {
 		t.Fatal("restore accepted corrupt selected ciphertext")
@@ -481,7 +495,7 @@ func TestHistoricalRestoreDoesNotSuggestSupersededRelocation(t *testing.T) {
 	harness.options.PackTarget = 1
 	harness.options.PartSize = 1 << 20
 	ctx := context.Background()
-	if _, err := initializePublished(ctx, harness.options, InitRequest{RecoveryPublicKey: harness.publicKey}); err != nil {
+	if _, err := initializePublished(ctx, harness.options, harness.publicKey); err != nil {
 		t.Fatal(err)
 	}
 	for _, name := range []string{"selected", "unrelated"} {
@@ -514,7 +528,7 @@ func TestHistoricalRestoreDoesNotSuggestSupersededRelocation(t *testing.T) {
 	if err := os.WriteFile(firstRelocatedPath, []byte("corrupt superseded relocation"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("BACKUP_SECRET_KEY", fmt.Sprintf("%x", harness.secretKey))
+	t.Setenv("GIT_REMOTE_AWS_SECRETKEY", fmt.Sprintf("%x", harness.secretKey))
 	_, err = Restore(ctx, harness.options, RestoreRequest{
 		Pattern: `^\./selected$`, Revision: snapshot.CommitID, CatalogRevision: firstRelocation.CommitID, TargetRoot: t.TempDir(),
 	})
@@ -579,7 +593,7 @@ func (transport *observingTransport) observations() []requestObservation {
 func TestSyncCopiesCompleteRevisionIdempotentlyAndNeverTrustsConflict(t *testing.T) {
 	harness := newIntegrationHarness(t)
 	ctx := context.Background()
-	if _, err := initializePublished(ctx, harness.options, InitRequest{RecoveryPublicKey: harness.publicKey}); err != nil {
+	if _, err := initializePublished(ctx, harness.options, harness.publicKey); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(harness.root, "file"), []byte("sync payload"), 0o600); err != nil {
@@ -687,7 +701,7 @@ func TestLargeFileStreamsAcrossMultipleCiphertextParts(t *testing.T) {
 	harness.options.PartSize = 1 << 20
 	harness.options.MetadataPartSize = 1 << 20
 	ctx := context.Background()
-	if _, err := initializePublished(ctx, harness.options, InitRequest{RecoveryPublicKey: harness.publicKey}); err != nil {
+	if _, err := initializePublished(ctx, harness.options, harness.publicKey); err != nil {
 		t.Fatal(err)
 	}
 	path := filepath.Join(harness.root, "large")
@@ -728,7 +742,7 @@ func TestLargeFileStreamsAcrossMultipleCiphertextParts(t *testing.T) {
 	if len(largePackParts) < 2 || largePackParts[0].PartCount != uint32(len(largePackParts)) {
 		t.Fatalf("large encrypted pack was not split into multiple ordinary objects: %#v", largePackParts)
 	}
-	t.Setenv("BACKUP_SECRET_KEY", fmt.Sprintf("%x", harness.secretKey))
+	t.Setenv("GIT_REMOTE_AWS_SECRETKEY", fmt.Sprintf("%x", harness.secretKey))
 	target := t.TempDir()
 	if _, err := Restore(ctx, harness.options, RestoreRequest{Pattern: `^\./large$`, Revision: latest.CommitID, TargetRoot: target}); err != nil {
 		t.Fatal(err)
@@ -754,7 +768,7 @@ func TestLargeFileStreamsAcrossMultipleCiphertextParts(t *testing.T) {
 func TestRestoreLatePublicationFailureReportsExactSubset(t *testing.T) {
 	harness := newIntegrationHarness(t)
 	ctx := context.Background()
-	if _, err := initializePublished(ctx, harness.options, InitRequest{RecoveryPublicKey: harness.publicKey}); err != nil {
+	if _, err := initializePublished(ctx, harness.options, harness.publicKey); err != nil {
 		t.Fatal(err)
 	}
 	for _, name := range []string{"a", "b"} {
@@ -769,7 +783,7 @@ func TestRestoreLatePublicationFailureReportsExactSubset(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("BACKUP_SECRET_KEY", fmt.Sprintf("%x", harness.secretKey))
+	t.Setenv("GIT_REMOTE_AWS_SECRETKEY", fmt.Sprintf("%x", harness.secretKey))
 	prior := syncPublishedParent
 	calls := 0
 	syncPublishedParent = func(int) error {
@@ -807,7 +821,7 @@ func TestRestoreLatePublicationFailureReportsExactSubset(t *testing.T) {
 func TestVerifyReportsEveryMirrorWhenThresholdPasses(t *testing.T) {
 	harness := newIntegrationHarness(t)
 	ctx := context.Background()
-	if _, err := initializePublished(ctx, harness.options, InitRequest{RecoveryPublicKey: harness.publicKey}); err != nil {
+	if _, err := initializePublished(ctx, harness.options, harness.publicKey); err != nil {
 		t.Fatal(err)
 	}
 	metadataPath := filepath.Join(harness.root, ".backup", "mirrors.tsv")
@@ -846,7 +860,7 @@ func TestVerifyReportsEveryMirrorWhenThresholdPasses(t *testing.T) {
 func TestVerifyGetsOnlyBoundedPlaintextManifests(t *testing.T) {
 	harness := newIntegrationHarness(t)
 	ctx := context.Background()
-	if _, err := initializePublished(ctx, harness.options, InitRequest{RecoveryPublicKey: harness.publicKey}); err != nil {
+	if _, err := initializePublished(ctx, harness.options, harness.publicKey); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(harness.root, "file"), []byte("payload"), 0o600); err != nil {

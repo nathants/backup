@@ -16,6 +16,8 @@ import (
 
 	"backup/internal/format"
 	"backup/internal/repository"
+	"backup/internal/testkeys"
+
 	"golang.org/x/crypto/blake2b"
 	"golang.org/x/sys/unix"
 )
@@ -151,12 +153,12 @@ func TestRestoreReportFailureCountsEveryUnpublishedPath(t *testing.T) {
 func writeLargeRestoreMetadata(t *testing.T, directory string, records int) {
 	t.Helper()
 	key := make([]byte, 32)
-	repositoryFormat := format.NewRepositoryFormat("123e4567-e89b-42d3-a456-426614174000", format.RecoveryFingerprint(key))
+	repositoryFormat := format.NewRepositoryFormat("123e4567-e89b-42d3-a456-426614174000")
 	formatBytes, err := repositoryFormat.MarshalText()
 	if err != nil {
 		t.Fatal(err)
 	}
-	publicKeys, err := format.MarshalPublicKeys([][]byte{key})
+	publicKeys, err := testkeys.Chains(key).MarshalText()
 	if err != nil {
 		t.Fatal(err)
 	}

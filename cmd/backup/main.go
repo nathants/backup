@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"crypto/tls"
-	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
@@ -15,13 +14,13 @@ import (
 	"os/signal"
 	"regexp"
 	"strconv"
-	"strings"
 	"syscall"
 	"time"
 
 	backupapp "backup/internal/backup"
 	"backup/internal/format"
 	"backup/internal/s3server"
+
 	"golang.org/x/sys/unix"
 )
 
@@ -49,8 +48,10 @@ common environment:
   BACKUP_ROOT             source root (default: /)
   BACKUP_CONFIG           trusted local config (default: $BACKUP_ROOT/.backup-config)
   BACKUP_SPOOL_DIRECTORY  trusted parent for private plaintext capture spools
-  BACKUP_SECRET_KEY       64 lowercase hex recipient secret key for restore/recover
-  BACKUP_SECRET_KEY_FILE  mode-0600 file containing that key
+  GIT_REMOTE_AWS_SECRETKEY       recipient secret chains for restore/recover
+  GIT_REMOTE_AWS_SECRETKEY_FILE  private file containing those chains
+  GIT_REMOTE_AWS_SECRETKEY_CMD   executable producing those chains on demand
+  Configure exactly one nonempty secret source.
 `
 
 func main() {
@@ -139,37 +140,13 @@ func parseFlags(flags *flag.FlagSet, arguments []string) error {
 func runInit(ctx context.Context, arguments []string, stdout, stderr io.Writer) error {
 	flags := flag.NewFlagSet("init", flag.ContinueOnError)
 	common := addCommon(flags)
-	var recovery, publicKeysFile string
-	flags.StringVar(&recovery, "recovery-public-key", "", "permanent recovery public key (64 lowercase hex)")
-	flags.StringVar(&publicKeysFile, "public-keys", "", "canonical public-key list file")
 	if err := parseFlags(flags, arguments); err != nil {
 		return err
 	}
-	if flags.NArg() != 0 || recovery == "" {
-		return fmt.Errorf("init requires --recovery-public-key and no positional arguments")
+	if flags.NArg() != 0 {
+		return fmt.Errorf("init accepts no positional arguments")
 	}
-	recoveryKey, err := decodePublicKey(recovery)
-	if err != nil {
-		return err
-	}
-	keys := [][]byte{recoveryKey}
-	if publicKeysFile != "" {
-		file, err := os.Open(publicKeysFile)
-		if err != nil {
-			return err
-		}
-		limits := format.DefaultLimits()
-		limits.MaxFileBytes = format.MaximumPublicKeysBytes
-		keys, err = format.ParsePublicKeys(file, limits)
-		closeErr := file.Close()
-		if err == nil {
-			err = closeErr
-		}
-		if err != nil {
-			return err
-		}
-	}
-	result, err := backupapp.Init(ctx, common.options(stdout, stderr), backupapp.InitRequest{PublicKeys: keys, RecoveryPublicKey: recoveryKey})
+	result, err := backupapp.Init(ctx, common.options(stdout, stderr))
 	if err != nil {
 		return err
 	}
@@ -470,17 +447,6 @@ func printRecoverResult(output io.Writer, result backupapp.RecoverResult) error 
 	}
 	_, err := fmt.Fprintf(output, "recovered-tip\t%s\ndestination\t%s\n", result.RecoveredTip, escapeTerminal(result.Destination))
 	return err
-}
-
-func decodePublicKey(value string) ([]byte, error) {
-	if len(value) != 64 || strings.ToLower(value) != value {
-		return nil, fmt.Errorf("public key must be 64 lowercase hexadecimal characters")
-	}
-	key, err := hex.DecodeString(value)
-	if err != nil || len(key) != 32 {
-		return nil, fmt.Errorf("public key must be 64 lowercase hexadecimal characters")
-	}
-	return key, nil
 }
 
 func loadServerCertificate(certificatePath, privateKeyPath string) (tls.Certificate, error) {

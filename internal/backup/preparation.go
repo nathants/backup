@@ -83,7 +83,7 @@ func (run *runtime) preparationBlobs() (map[string][]byte, repository.State, err
 	if objectstore.HashBytes(blobs["FORMAT"]).BLAKE2b != run.preparation.FormatHash {
 		return nil, repository.State{}, fmt.Errorf("initialized repository identity changed")
 	}
-	state, err := repository.ParseState(blobs, format.DefaultLimits())
+	state, err := repository.ParsePreparationState(blobs, format.DefaultLimits())
 	return blobs, state, err
 }
 
@@ -165,7 +165,7 @@ func (run *runtime) startGenesis(txn *transaction) error {
 	if txn == nil || txn.Kind != "initial" || txn.Plan == nil {
 		return fmt.Errorf("run add before the first commit")
 	}
-	blobs, _, err := run.preparationBlobs()
+	blobs, initial, err := run.preparationBlobs()
 	if err != nil {
 		return err
 	}
@@ -177,6 +177,9 @@ func (run *runtime) startGenesis(txn *transaction) error {
 		if !bytes.Equal(planned, blobs[name]) {
 			return fmt.Errorf("metadata configuration %q changed after add; run add again", name)
 		}
+	}
+	if _, err := initial.PublicKeys.Latest(); err != nil {
+		return err
 	}
 	config, err := localconfig.Load(run.options.ConfigPath)
 	if err != nil {

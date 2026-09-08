@@ -58,7 +58,7 @@ func runCloudRoundTrip(t *testing.T, config cloudContractConfig) {
 	environment := cleanEnvironment(map[string]string{
 		"AWS_SHARED_CREDENTIALS_FILE": credentialPath,
 		"AWS_CONFIG_FILE":             "/dev/null", "AWS_EC2_METADATA_DISABLED": "true",
-		"BACKUP_SECRET_KEY": hex.EncodeToString(secret),
+		"GIT_REMOTE_AWS_SECRETKEY": hex.EncodeToString(secret),
 	})
 	command := func(name string, args ...string) string {
 		t.Helper()
@@ -67,12 +67,13 @@ func runCloudRoundTrip(t *testing.T, config cloudContractConfig) {
 		t.Logf("%s %s:\n%s", config.name, name, output)
 		return output
 	}
-	if output := command("init", "--recovery-public-key", hex.EncodeToString(public)); outputField(t, output, "publication") != "local-only" || strings.Contains(output, "commit\t") {
+	if output := command("init"); outputField(t, output, "publication") != "local-only" || strings.Contains(output, "commit\t") {
 		t.Fatalf("initialization claimed publication: %s", output)
 	}
 	if refs := strings.TrimSpace(run(t, "", "git", "--git-dir", remote, "for-each-ref", "--format=%(objectname)")); refs != "" {
 		t.Fatalf("initialization changed the remote: %s", refs)
 	}
+	writeFile(t, filepath.Join(source, ".backup", ".publickeys"), []byte(hex.EncodeToString(public)+"\n"), 0644)
 	mtime := time.Unix(1_700_000_000, 123_456_789)
 	for _, name := range []string{"file with spaces", "duplicate"} {
 		path := filepath.Join(source, name)
@@ -90,6 +91,27 @@ func runCloudRoundTrip(t *testing.T, config cloudContractConfig) {
 	genesis := strings.TrimSpace(run(t, "", "git", "--git-dir", remote, "rev-list", "--max-parents=0", first))
 	if len(genesis) != 64 {
 		t.Fatalf("first publication lacks a single genesis: %s", genesis)
+	}
+	// Rotate between cloud revisions. Restore/recovery must select both retained
+	// generations, while newly encrypted packs and bundles use only the tip key.
+	rotatedPublic, rotatedSecret, err := libsodium.RotateKeyChain(libsodium.KeyChains{{public}}, libsodium.KeyChains{{secret}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	publicText, err := rotatedPublic.MarshalText()
+	if err != nil {
+		t.Fatal(err)
+	}
+	secretText, err := rotatedSecret.MarshalText()
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(workspace, "recovery.secret"), secretText, 0600)
+	writeFile(t, filepath.Join(source, ".backup", ".publickeys"), publicText, 0644)
+	for i, entry := range environment {
+		if strings.HasPrefix(entry, "GIT_REMOTE_AWS_SECRETKEY=") {
+			environment[i] = "GIT_REMOTE_AWS_SECRETKEY=" + string(secretText)
+		}
 	}
 	writeFile(t, filepath.Join(source, "later"), []byte("second revision\n"), 0o600)
 	command("add")

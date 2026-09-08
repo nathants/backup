@@ -16,6 +16,8 @@ import (
 	"backup/internal/objectstore"
 	"backup/internal/pack"
 	"backup/internal/repository"
+
+	"github.com/nathants/go-libsodium"
 	"golang.org/x/sys/unix"
 )
 
@@ -40,11 +42,11 @@ func (run *runtime) capturePlan(ctx context.Context, txn *transaction, base repo
 			return false, fmt.Errorf("metadata configuration %q changed after add; run add again", name)
 		}
 	}
-	publicKeys, err := format.ParsePublicKeys(bytes.NewReader(configBlobs[".publickeys"]), configurationLimits(".publickeys"))
+	publicKeys, err := libsodium.ParseKeyChains(bytes.NewReader(configBlobs[".publickeys"]))
 	if err != nil {
 		return false, err
 	}
-	if err := format.RequireRecoveryRecipient(publicKeys, base.Format.RecoveryRecipientFingerprint); err != nil {
+	if err := libsodium.ValidateKeyChainTransition(base.PublicKeys, publicKeys); err != nil {
 		return false, err
 	}
 	mirrors, err := format.ParseMirrors(bytes.NewReader(configBlobs["mirrors.tsv"]), configurationLimits("mirrors.tsv"))

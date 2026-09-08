@@ -12,6 +12,8 @@ import (
 	"backup/internal/extsort"
 	"backup/internal/format"
 	"backup/internal/securefs"
+
+	"github.com/nathants/go-libsodium"
 )
 
 func validateStreamTransition(oldState, newState State) (TransitionKind, error) {
@@ -23,6 +25,9 @@ func validateStreamTransition(oldState, newState State) (TransitionKind, error) 
 	}
 	if !oldState.blobEqual(newState, "FORMAT") || oldState.Format != newState.Format {
 		return TransitionInvalid, fmt.Errorf("FORMAT changed after genesis")
+	}
+	if err := libsodium.ValidateKeyChainTransition(oldState.PublicKeys, newState.PublicKeys); err != nil {
+		return TransitionInvalid, err
 	}
 	if statesEqual(oldState, newState) {
 		return TransitionInvalid, fmt.Errorf("metadata transition has no changes")

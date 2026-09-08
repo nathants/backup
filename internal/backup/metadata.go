@@ -16,6 +16,8 @@ import (
 	"backup/internal/metadatachain"
 	"backup/internal/objectstore"
 	"backup/internal/repository"
+
+	"github.com/nathants/go-libsodium"
 )
 
 type manifestRepresentation struct {
@@ -243,7 +245,7 @@ func fetchMetadataBundle(ctx context.Context, client *objectstore.Client, repres
 	return nil
 }
 
-func decryptMetadataBundle(ciphertextPath, bundlePath string, manifest format.MetadataManifest, secretKey []byte) error {
+func decryptMetadataBundle(ciphertextPath, bundlePath string, manifest format.MetadataManifest, secretKey *libsodium.Keyring) error {
 	input, err := os.Open(ciphertextPath)
 	if err != nil {
 		return err
@@ -252,7 +254,7 @@ func decryptMetadataBundle(ciphertextPath, bundlePath string, manifest format.Me
 	return decryptMetadataBundleReader(input, bundlePath, manifest, secretKey)
 }
 
-func decryptMetadataBundleReader(input io.Reader, bundlePath string, manifest format.MetadataManifest, secretKey []byte) error {
+func decryptMetadataBundleReader(input io.Reader, bundlePath string, manifest format.MetadataManifest, secretKey *libsodium.Keyring) error {
 	if input == nil {
 		return fmt.Errorf("metadata ciphertext reader is required")
 	}
@@ -423,7 +425,7 @@ func readMetadataBundleHeader(reader *bufio.Reader, manifest format.MetadataMani
 	return nil
 }
 
-func materializeMetadataChain(ctx context.Context, client *objectstore.Client, chain [][]manifestRepresentation, secretKey []byte, quarantine, stage string) ([]manifestRepresentation, error) {
+func materializeMetadataChain(ctx context.Context, client *objectstore.Client, chain [][]manifestRepresentation, secretKey *libsodium.Keyring, quarantine, stage string) ([]manifestRepresentation, error) {
 	if len(chain) == 0 {
 		return nil, fmt.Errorf("metadata chain is empty")
 	}

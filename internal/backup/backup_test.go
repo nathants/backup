@@ -22,6 +22,8 @@ import (
 	"backup/internal/objectstore"
 	"backup/internal/repository"
 	"backup/internal/s3server"
+	"backup/internal/testkeys"
+
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/nathants/go-libsodium"
 	"golang.org/x/crypto/blake2b"
@@ -88,7 +90,7 @@ func newIntegrationHarness(t *testing.T) *integrationHarness {
 func TestInitAddDiffCommitAndNoOp(t *testing.T) {
 	harness := newIntegrationHarness(t)
 	ctx := context.Background()
-	initResult, err := initializePublished(ctx, harness.options, InitRequest{RecoveryPublicKey: harness.publicKey})
+	initResult, err := initializePublished(ctx, harness.options, harness.publicKey)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,7 +147,7 @@ func TestInitAddDiffCommitAndNoOp(t *testing.T) {
 func TestMirrorTopologyCanBeAddedAndRemovedWithoutRebinding(t *testing.T) {
 	harness := newIntegrationHarness(t)
 	ctx := context.Background()
-	if _, err := initializePublished(ctx, harness.options, InitRequest{RecoveryPublicKey: harness.publicKey}); err != nil {
+	if _, err := initializePublished(ctx, harness.options, harness.publicKey); err != nil {
 		t.Fatal(err)
 	}
 	metadataPath := filepath.Join(harness.root, ".backup", "mirrors.tsv")
@@ -185,7 +187,7 @@ func TestMirrorTopologyCanBeAddedAndRemovedWithoutRebinding(t *testing.T) {
 func TestVerifyAuditsDataAndMetadataChain(t *testing.T) {
 	harness := newIntegrationHarness(t)
 	ctx := context.Background()
-	if _, err := initializePublished(ctx, harness.options, InitRequest{RecoveryPublicKey: harness.publicKey}); err != nil {
+	if _, err := initializePublished(ctx, harness.options, harness.publicKey); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(harness.root, "file"), []byte("payload"), 0o600); err != nil {
@@ -210,7 +212,7 @@ func TestVerifyAuditsDataAndMetadataChain(t *testing.T) {
 func TestRestoreVerifiesBeforePublicationAndPreservesMetadata(t *testing.T) {
 	harness := newIntegrationHarness(t)
 	ctx := context.Background()
-	if _, err := initializePublished(ctx, harness.options, InitRequest{RecoveryPublicKey: harness.publicKey}); err != nil {
+	if _, err := initializePublished(ctx, harness.options, harness.publicKey); err != nil {
 		t.Fatal(err)
 	}
 	filePath := filepath.Join(harness.root, "dir", "file")
@@ -238,7 +240,7 @@ func TestRestoreVerifiesBeforePublicationAndPreservesMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("BACKUP_SECRET_KEY", fmt.Sprintf("%x", harness.secretKey))
+	t.Setenv("GIT_REMOTE_AWS_SECRETKEY", fmt.Sprintf("%x", harness.secretKey))
 	target := t.TempDir()
 	dry, err := Restore(ctx, harness.options, RestoreRequest{Pattern: `^\./(?:dir/file|link)$`, Revision: committed.CommitID, TargetRoot: target, DryRun: true})
 	if err != nil || dry.Planned != 2 || dry.Published != 0 {
@@ -271,7 +273,7 @@ func TestRestoreVerifiesBeforePublicationAndPreservesMetadata(t *testing.T) {
 func TestRestoreFailurePublishesNothing(t *testing.T) {
 	harness := newIntegrationHarness(t)
 	ctx := context.Background()
-	if _, err := initializePublished(ctx, harness.options, InitRequest{RecoveryPublicKey: harness.publicKey}); err != nil {
+	if _, err := initializePublished(ctx, harness.options, harness.publicKey); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(harness.root, "file"), []byte("payload"), 0o600); err != nil {
@@ -284,7 +286,7 @@ func TestRestoreFailurePublishesNothing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("BACKUP_SECRET_KEY", strings.Repeat("0", 64))
+	t.Setenv("GIT_REMOTE_AWS_SECRETKEY", strings.Repeat("0", 64))
 	target := t.TempDir()
 	if _, err := Restore(ctx, harness.options, RestoreRequest{Pattern: `^\./file$`, Revision: committed.CommitID, TargetRoot: target}); err == nil {
 		t.Fatal("wrong recipient secret was accepted")
@@ -324,7 +326,7 @@ func TestRestorePublicationErrorReportsAlreadyRenamedPath(t *testing.T) {
 func TestRepairRelocatesDataWithoutOverwritingOldObject(t *testing.T) {
 	harness := newIntegrationHarness(t)
 	ctx := context.Background()
-	if _, err := initializePublished(ctx, harness.options, InitRequest{RecoveryPublicKey: harness.publicKey}); err != nil {
+	if _, err := initializePublished(ctx, harness.options, harness.publicKey); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(harness.root, "file"), []byte("payload"), 0o600); err != nil {
@@ -413,7 +415,7 @@ func TestMetadataRepairReadsPartsWithOneOpenDescriptor(t *testing.T) {
 func TestRepairMetadataEdgePublishesAlternateWithoutGitCommit(t *testing.T) {
 	harness := newIntegrationHarness(t)
 	ctx := context.Background()
-	if _, err := initializePublished(ctx, harness.options, InitRequest{RecoveryPublicKey: harness.publicKey}); err != nil {
+	if _, err := initializePublished(ctx, harness.options, harness.publicKey); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(harness.root, "file"), []byte("payload"), 0o600); err != nil {
@@ -450,7 +452,7 @@ func TestRepairMetadataEdgePublishesAlternateWithoutGitCommit(t *testing.T) {
 		t.Fatal("verification accepted the corrupted only metadata representation")
 	}
 
-	t.Setenv("BACKUP_SECRET_KEY", fmt.Sprintf("%x", harness.secretKey))
+	t.Setenv("GIT_REMOTE_AWS_SECRETKEY", fmt.Sprintf("%x", harness.secretKey))
 	constrained := harness.options
 	constrained.SpaceReserveBytes = ^uint64(0)
 	if _, err := RepairMetadataEdge(ctx, constrained, "local", latest.CommitID); err == nil || !strings.Contains(err.Error(), "reserve") {
@@ -478,7 +480,7 @@ func TestRepairMetadataEdgePublishesAlternateWithoutGitCommit(t *testing.T) {
 	if _, err := Verify(ctx, harness.options, 1, latest.CommitID); err != nil {
 		t.Fatalf("verification after metadata repair: %v", err)
 	}
-	t.Setenv("BACKUP_SECRET_KEY", fmt.Sprintf("%x", harness.secretKey))
+	t.Setenv("GIT_REMOTE_AWS_SECRETKEY", fmt.Sprintf("%x", harness.secretKey))
 	if _, err := Recover(ctx, harness.options, RecoverRequest{Mirror: "local", Tip: latest.CommitID, Destination: filepath.Join(t.TempDir(), "recovered.git")}); err != nil {
 		t.Fatalf("recovery after metadata repair: %v", err)
 	}
@@ -487,7 +489,7 @@ func TestRepairMetadataEdgePublishesAlternateWithoutGitCommit(t *testing.T) {
 func TestRecoverReconstructsMetadataWithoutPrimaryRemote(t *testing.T) {
 	harness := newIntegrationHarness(t)
 	ctx := context.Background()
-	genesis, err := initializePublished(ctx, harness.options, InitRequest{RecoveryPublicKey: harness.publicKey})
+	genesis, err := initializePublished(ctx, harness.options, harness.publicKey)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -501,7 +503,7 @@ func TestRecoverReconstructsMetadataWithoutPrimaryRemote(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("BACKUP_SECRET_KEY", fmt.Sprintf("%x", harness.secretKey))
+	t.Setenv("GIT_REMOTE_AWS_SECRETKEY", fmt.Sprintf("%x", harness.secretKey))
 	latestDestination := filepath.Join(t.TempDir(), "latest.git")
 	recovered, err := Recover(ctx, harness.options, RecoverRequest{Mirror: "local", Tip: latest.CommitID, Destination: latestDestination})
 	if err != nil || recovered.RecoveredTip != latest.CommitID {
@@ -520,7 +522,7 @@ func TestRecoverReconstructsMetadataWithoutPrimaryRemote(t *testing.T) {
 func TestRecoverTriesAlternateLogicalPaths(t *testing.T) {
 	harness := newIntegrationHarness(t)
 	ctx := context.Background()
-	if _, err := initializePublished(ctx, harness.options, InitRequest{RecoveryPublicKey: harness.publicKey}); err != nil {
+	if _, err := initializePublished(ctx, harness.options, harness.publicKey); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(harness.root, "file"), []byte("payload"), 0o600); err != nil {
@@ -547,7 +549,7 @@ func TestRecoverTriesAlternateLogicalPaths(t *testing.T) {
 	manifest.BaseCommit = strings.Repeat("f", 64)
 	manifest.Parts[0].ObjectID = strings.Repeat("0", 32)
 	uploadTestManifest(t, ctx, client, manifest, strings.Repeat("1", 32))
-	t.Setenv("BACKUP_SECRET_KEY", fmt.Sprintf("%x", harness.secretKey))
+	t.Setenv("GIT_REMOTE_AWS_SECRETKEY", fmt.Sprintf("%x", harness.secretKey))
 	destination := filepath.Join(t.TempDir(), "recovered.git")
 	recovered, err := Recover(ctx, harness.options, RecoverRequest{Mirror: "local", Tip: latest.CommitID, Destination: destination})
 	if err != nil || recovered.RecoveredTip != latest.CommitID {
@@ -558,7 +560,7 @@ func TestRecoverTriesAlternateLogicalPaths(t *testing.T) {
 func TestRecoverIgnoresUnusableMaximalExtension(t *testing.T) {
 	harness := newIntegrationHarness(t)
 	ctx := context.Background()
-	if _, err := initializePublished(ctx, harness.options, InitRequest{RecoveryPublicKey: harness.publicKey}); err != nil {
+	if _, err := initializePublished(ctx, harness.options, harness.publicKey); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(harness.root, "file"), []byte("payload"), 0o600); err != nil {
@@ -588,7 +590,7 @@ func TestRecoverIgnoresUnusableMaximalExtension(t *testing.T) {
 	manifest.Kind = format.BundleIncremental
 	uploadTestManifest(t, ctx, client, manifest, strings.Repeat("e", 32))
 
-	t.Setenv("BACKUP_SECRET_KEY", fmt.Sprintf("%x", harness.secretKey))
+	t.Setenv("GIT_REMOTE_AWS_SECRETKEY", fmt.Sprintf("%x", harness.secretKey))
 	destination := filepath.Join(t.TempDir(), "recovered.git")
 	recovered, err := Recover(ctx, harness.options, RecoverRequest{Mirror: "local", Destination: destination})
 	if err != nil || recovered.RecoveredTip != latest.CommitID {
@@ -599,7 +601,7 @@ func TestRecoverIgnoresUnusableMaximalExtension(t *testing.T) {
 func TestRecoverRequiresChoiceForVerifiedForks(t *testing.T) {
 	harness := newIntegrationHarness(t)
 	ctx := context.Background()
-	genesis, err := initializePublished(ctx, harness.options, InitRequest{RecoveryPublicKey: harness.publicKey})
+	genesis, err := initializePublished(ctx, harness.options, harness.publicKey)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -628,7 +630,7 @@ func TestRecoverRequiresChoiceForVerifiedForks(t *testing.T) {
 	writer := testMirrorClient(t, ctx, harness)
 	uploadTestMetadataBundle(t, ctx, writer, repo, testHistoryGenesisFormat(t, genesisHistory).RepositoryUUID, genesis.CommitID, forkTip, 1, harness.publicKey, harness.options.MetadataPartSize)
 
-	t.Setenv("BACKUP_SECRET_KEY", fmt.Sprintf("%x", harness.secretKey))
+	t.Setenv("GIT_REMOTE_AWS_SECRETKEY", fmt.Sprintf("%x", harness.secretKey))
 	if _, err := Recover(ctx, harness.options, RecoverRequest{Mirror: "local", Destination: filepath.Join(t.TempDir(), "ambiguous.git")}); err == nil || !strings.Contains(err.Error(), "2 verified maximal tips") {
 		t.Fatalf("verified fork was not reported: %v", err)
 	}
@@ -647,7 +649,7 @@ func TestRecoverRequiresChoiceForVerifiedForks(t *testing.T) {
 func TestMetadataBundleRejectsUnreachableObjects(t *testing.T) {
 	harness := newIntegrationHarness(t)
 	ctx := context.Background()
-	genesis, err := initializePublished(ctx, harness.options, InitRequest{RecoveryPublicKey: harness.publicKey})
+	genesis, err := initializePublished(ctx, harness.options, harness.publicKey)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -694,7 +696,7 @@ func TestMetadataBundleRejectsUnreachableObjects(t *testing.T) {
 func TestMetadataRecoveryTriesAlternatePhysicalRepresentations(t *testing.T) {
 	harness := newIntegrationHarness(t)
 	ctx := context.Background()
-	genesis, err := initializePublished(ctx, harness.options, InitRequest{RecoveryPublicKey: harness.publicKey})
+	genesis, err := initializePublished(ctx, harness.options, harness.publicKey)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -725,7 +727,7 @@ func TestMetadataRecoveryTriesAlternatePhysicalRepresentations(t *testing.T) {
 		t.Fatal(err)
 	}
 	quarantine := filepath.Join(root, "recovered.git")
-	if _, err := materializeMetadataChain(ctx, reader, [][]manifestRepresentation{{bad, valid}}, harness.secretKey, quarantine, stage); err != nil {
+	if _, err := materializeMetadataChain(ctx, reader, [][]manifestRepresentation{{bad, valid}}, testkeys.Ring(harness.secretKey), quarantine, stage); err != nil {
 		t.Fatalf("healthy alternate was not tried: %v", err)
 	}
 	resolved := strings.TrimSpace(runGit(t, "--git-dir", quarantine, "rev-parse", "refs/backup/recovered-tip"))
@@ -737,7 +739,7 @@ func TestMetadataRecoveryTriesAlternatePhysicalRepresentations(t *testing.T) {
 func TestMetadataRecoveryTriesAlternativeAfterDeclaredTipMismatch(t *testing.T) {
 	harness := newIntegrationHarness(t)
 	ctx := context.Background()
-	genesis, err := initializePublished(ctx, harness.options, InitRequest{RecoveryPublicKey: harness.publicKey})
+	genesis, err := initializePublished(ctx, harness.options, harness.publicKey)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -770,7 +772,7 @@ func TestMetadataRecoveryTriesAlternativeAfterDeclaredTipMismatch(t *testing.T) 
 		t.Fatal(err)
 	}
 	quarantine := filepath.Join(root, "recovered.git")
-	if _, err := materializeMetadataChain(ctx, client, [][]manifestRepresentation{{bad, valid[0]}}, harness.secretKey, quarantine, stage); err != nil {
+	if _, err := materializeMetadataChain(ctx, client, [][]manifestRepresentation{{bad, valid[0]}}, testkeys.Ring(harness.secretKey), quarantine, stage); err != nil {
 		t.Fatalf("declared-tip mismatch prevented the healthy retry: %v", err)
 	}
 }
@@ -792,7 +794,7 @@ func TestWorkspaceCapacityRejectsInsufficientAndOverflowingBudgets(t *testing.T)
 func TestRestoreLowSpaceFailsBeforePublication(t *testing.T) {
 	harness := newIntegrationHarness(t)
 	ctx := context.Background()
-	if _, err := initializePublished(ctx, harness.options, InitRequest{RecoveryPublicKey: harness.publicKey}); err != nil {
+	if _, err := initializePublished(ctx, harness.options, harness.publicKey); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(harness.root, "file"), []byte("payload"), 0o600); err != nil {
@@ -805,7 +807,7 @@ func TestRestoreLowSpaceFailsBeforePublication(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("BACKUP_SECRET_KEY", fmt.Sprintf("%x", harness.secretKey))
+	t.Setenv("GIT_REMOTE_AWS_SECRETKEY", fmt.Sprintf("%x", harness.secretKey))
 	target := t.TempDir()
 	options := harness.options
 	options.SpaceReserveBytes = ^uint64(0)
@@ -821,11 +823,11 @@ func TestRestoreLowSpaceFailsBeforePublication(t *testing.T) {
 func TestRecoverLowSpaceFailsBeforeDestinationPublication(t *testing.T) {
 	harness := newIntegrationHarness(t)
 	ctx := context.Background()
-	genesis, err := initializePublished(ctx, harness.options, InitRequest{RecoveryPublicKey: harness.publicKey})
+	genesis, err := initializePublished(ctx, harness.options, harness.publicKey)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("BACKUP_SECRET_KEY", fmt.Sprintf("%x", harness.secretKey))
+	t.Setenv("GIT_REMOTE_AWS_SECRETKEY", fmt.Sprintf("%x", harness.secretKey))
 	destination := filepath.Join(t.TempDir(), "recovered.git")
 	options := harness.options
 	options.SpaceReserveBytes = ^uint64(0)
@@ -839,7 +841,7 @@ func TestRecoverLowSpaceFailsBeforeDestinationPublication(t *testing.T) {
 
 func TestAddRejectsOversizedMutableConfigurationBeforeAllocation(t *testing.T) {
 	harness := newIntegrationHarness(t)
-	if _, err := initializePublished(context.Background(), harness.options, InitRequest{RecoveryPublicKey: harness.publicKey}); err != nil {
+	if _, err := initializePublished(context.Background(), harness.options, harness.publicKey); err != nil {
 		t.Fatal(err)
 	}
 	path := filepath.Join(harness.root, ".backup", "ignore")
@@ -865,7 +867,7 @@ func (diagnosticErrorWriter) Write([]byte) (int, error) { return 0, io.ErrClosed
 
 func TestAddPropagatesMandatoryDiagnosticWriteFailure(t *testing.T) {
 	harness := newIntegrationHarness(t)
-	if _, err := initializePublished(context.Background(), harness.options, InitRequest{RecoveryPublicKey: harness.publicKey}); err != nil {
+	if _, err := initializePublished(context.Background(), harness.options, harness.publicKey); err != nil {
 		t.Fatal(err)
 	}
 	if err := unix.Mkfifo(filepath.Join(harness.root, "special"), 0o600); err != nil {
@@ -903,7 +905,7 @@ func TestInitRejectsMetadataRepositorySymlink(t *testing.T) {
 	if err := os.Symlink(target, filepath.Join(harness.root, ".backup")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := initializePublished(context.Background(), harness.options, InitRequest{RecoveryPublicKey: harness.publicKey}); err == nil {
+	if _, err := initializePublished(context.Background(), harness.options, harness.publicKey); err == nil {
 		t.Fatal("metadata repository symlink was accepted")
 	}
 	entries, err := os.ReadDir(target)
@@ -928,13 +930,13 @@ func TestInitUsesRootLockBeforeCreatingRepository(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := initializePublished(context.Background(), harness.options, InitRequest{RecoveryPublicKey: harness.publicKey}); err == nil || !strings.Contains(err.Error(), "initialization is in progress") {
+	if _, err := initializePublished(context.Background(), harness.options, harness.publicKey); err == nil || !strings.Contains(err.Error(), "initialization is in progress") {
 		t.Fatalf("concurrent initialization was not rejected: %v", err)
 	}
 	if err := lock.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := initializePublished(context.Background(), harness.options, InitRequest{RecoveryPublicKey: harness.publicKey}); err != nil {
+	if _, err := initializePublished(context.Background(), harness.options, harness.publicKey); err != nil {
 		t.Fatalf("initialization did not proceed after releasing root lock: %v", err)
 	}
 }
@@ -950,7 +952,7 @@ func TestInitPreservesRepositoryWithoutPreparationRecord(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Init(context.Background(), harness.options, InitRequest{RecoveryPublicKey: harness.publicKey}); err == nil {
+	if _, err := initWithKeys(context.Background(), harness.options, harness.publicKey); err == nil {
 		t.Fatal("init accepted ambiguous existing Git setup")
 	}
 	after, err := os.ReadFile(configPath)
@@ -965,11 +967,11 @@ func TestInitPreservesRepositoryWithoutPreparationRecord(t *testing.T) {
 func TestInitIsResumableAndRefusesSecondGenesis(t *testing.T) {
 	harness := newIntegrationHarness(t)
 	ctx := context.Background()
-	first, err := initializePublished(ctx, harness.options, InitRequest{RecoveryPublicKey: harness.publicKey})
+	first, err := initializePublished(ctx, harness.options, harness.publicKey)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := initializePublished(ctx, harness.options, InitRequest{RecoveryPublicKey: harness.publicKey})
+	second, err := initializePublished(ctx, harness.options, harness.publicKey)
 	if err == nil || second.CommitID != "" {
 		t.Fatalf("second genesis accepted: %#v %v", second, err)
 	}
@@ -1013,7 +1015,7 @@ func TestTransactionResumesAfterEveryDurableCheckpoint(t *testing.T) {
 		t.Run(point, func(t *testing.T) {
 			harness := newIntegrationHarness(t)
 			ctx := context.Background()
-			if _, err := initializePublished(ctx, harness.options, InitRequest{RecoveryPublicKey: harness.publicKey}); err != nil {
+			if _, err := initializePublished(ctx, harness.options, harness.publicKey); err != nil {
 				t.Fatal(err)
 			}
 			if err := os.WriteFile(filepath.Join(harness.root, "file"), []byte("payload for "+point), 0o600); err != nil {
@@ -1066,7 +1068,7 @@ func TestAddAndGenesisResumeAfterDurableIntent(t *testing.T) {
 			}
 			return nil
 		}
-		if _, err := initializePublished(context.Background(), options, InitRequest{RecoveryPublicKey: harness.publicKey}); err == nil {
+		if _, err := initializePublished(context.Background(), options, harness.publicKey); err == nil {
 			t.Fatal("genesis checkpoint did not stop first publication")
 		}
 		result, err := Commit(context.Background(), harness.options)
@@ -1078,7 +1080,7 @@ func TestAddAndGenesisResumeAfterDurableIntent(t *testing.T) {
 	t.Run("candidate", func(t *testing.T) {
 		harness := newIntegrationHarness(t)
 		ctx := context.Background()
-		if _, err := initializePublished(ctx, harness.options, InitRequest{RecoveryPublicKey: harness.publicKey}); err != nil {
+		if _, err := initializePublished(ctx, harness.options, harness.publicKey); err != nil {
 			t.Fatal(err)
 		}
 		if err := os.WriteFile(filepath.Join(harness.root, "file"), []byte("payload"), 0o600); err != nil {
@@ -1107,7 +1109,7 @@ func TestDeterministicMirrorUnavailabilityRetainsImmutableIdentities(t *testing.
 	t.Run("data", func(t *testing.T) {
 		harness := newIntegrationHarness(t)
 		ctx := context.Background()
-		if _, err := initializePublished(ctx, harness.options, InitRequest{RecoveryPublicKey: harness.publicKey}); err != nil {
+		if _, err := initializePublished(ctx, harness.options, harness.publicKey); err != nil {
 			t.Fatal(err)
 		}
 		if err := os.WriteFile(filepath.Join(harness.root, "file"), []byte("offline data payload"), 0o600); err != nil {
@@ -1135,7 +1137,7 @@ func TestDeterministicMirrorUnavailabilityRetainsImmutableIdentities(t *testing.
 	t.Run("metadata", func(t *testing.T) {
 		harness := newIntegrationHarness(t)
 		ctx := context.Background()
-		if _, err := initializePublished(ctx, harness.options, InitRequest{RecoveryPublicKey: harness.publicKey}); err != nil {
+		if _, err := initializePublished(ctx, harness.options, harness.publicKey); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := Add(ctx, harness.options, false); err != nil {
@@ -1178,7 +1180,7 @@ func TestUploadRelocationCheckpointsResumeAfterRestart(t *testing.T) {
 		t.Helper()
 		harness := newIntegrationHarness(t)
 		ctx := context.Background()
-		if _, err := initializePublished(ctx, harness.options, InitRequest{RecoveryPublicKey: harness.publicKey}); err != nil {
+		if _, err := initializePublished(ctx, harness.options, harness.publicKey); err != nil {
 			t.Fatal(err)
 		}
 		if err := os.WriteFile(filepath.Join(harness.root, "file"), []byte("repair checkpoint payload"), 0o600); err != nil {
@@ -1246,7 +1248,7 @@ func TestUploadRelocationCheckpointsResumeAfterRestart(t *testing.T) {
 	t.Run("metadata-representation-relocated", func(t *testing.T) {
 		harness := newIntegrationHarness(t)
 		ctx := context.Background()
-		if _, err := initializePublished(ctx, harness.options, InitRequest{RecoveryPublicKey: harness.publicKey}); err != nil {
+		if _, err := initializePublished(ctx, harness.options, harness.publicKey); err != nil {
 			t.Fatal(err)
 		}
 		if err := os.WriteFile(filepath.Join(harness.root, "file"), []byte("metadata relocation checkpoint"), 0o600); err != nil {
@@ -1284,7 +1286,7 @@ func TestAmbiguousUploadsUseAuditOrFreshImmutableIdentity(t *testing.T) {
 		harness.options.PartSize = 1 << 20
 		harness.options.MetadataPartSize = 1 << 20
 		ctx := context.Background()
-		if _, err := initializePublished(ctx, harness.options, InitRequest{RecoveryPublicKey: harness.publicKey}); err != nil {
+		if _, err := initializePublished(ctx, harness.options, harness.publicKey); err != nil {
 			t.Fatal(err)
 		}
 		if err := os.WriteFile(filepath.Join(harness.root, "file"), []byte("lost response payload"), 0o600); err != nil {
@@ -1317,7 +1319,7 @@ func TestAmbiguousUploadsUseAuditOrFreshImmutableIdentity(t *testing.T) {
 		harness.options.PartSize = 1 << 20
 		harness.options.MetadataPartSize = 1 << 20
 		ctx := context.Background()
-		if _, err := initializePublished(ctx, harness.options, InitRequest{RecoveryPublicKey: harness.publicKey}); err != nil {
+		if _, err := initializePublished(ctx, harness.options, harness.publicKey); err != nil {
 			t.Fatal(err)
 		}
 		if err := os.WriteFile(filepath.Join(harness.root, "file"), []byte("ambiguous data payload"), 0o600); err != nil {
@@ -1360,7 +1362,7 @@ func TestAmbiguousUploadsUseAuditOrFreshImmutableIdentity(t *testing.T) {
 			harness.options.PartSize = 1 << 20
 			harness.options.MetadataPartSize = 1 << 20
 			ctx := context.Background()
-			if _, err := initializePublished(ctx, harness.options, InitRequest{RecoveryPublicKey: harness.publicKey}); err != nil {
+			if _, err := initializePublished(ctx, harness.options, harness.publicKey); err != nil {
 				t.Fatal(err)
 			}
 			if err := os.WriteFile(filepath.Join(harness.root, "file"), []byte("metadata ambiguity payload"), 0o600); err != nil {
@@ -1479,7 +1481,7 @@ func withWriterTransport(harness *integrationHarness, wrap func(http.RoundTrippe
 func TestDurableTransactionRejectsEscapingStagedPath(t *testing.T) {
 	harness := newIntegrationHarness(t)
 	ctx := context.Background()
-	if _, err := initializePublished(ctx, harness.options, InitRequest{RecoveryPublicKey: harness.publicKey}); err != nil {
+	if _, err := initializePublished(ctx, harness.options, harness.publicKey); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(harness.root, "file"), []byte("payload"), 0o600); err != nil {
@@ -1516,7 +1518,7 @@ func TestDurableTransactionRejectsEscapingStagedPath(t *testing.T) {
 func TestDurableTransactionRejectsCatalogMismatch(t *testing.T) {
 	harness := newIntegrationHarness(t)
 	ctx := context.Background()
-	if _, err := initializePublished(ctx, harness.options, InitRequest{RecoveryPublicKey: harness.publicKey}); err != nil {
+	if _, err := initializePublished(ctx, harness.options, harness.publicKey); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(harness.root, "file"), []byte("payload"), 0o600); err != nil {
@@ -1567,7 +1569,7 @@ func TestDurableTransactionRejectsCatalogMismatch(t *testing.T) {
 func TestDurableTransactionRejectsMissingStagedCatalogPart(t *testing.T) {
 	harness := newIntegrationHarness(t)
 	ctx := context.Background()
-	if _, err := initializePublished(ctx, harness.options, InitRequest{RecoveryPublicKey: harness.publicKey}); err != nil {
+	if _, err := initializePublished(ctx, harness.options, harness.publicKey); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(harness.root, "file"), []byte("payload"), 0o600); err != nil {
@@ -1610,7 +1612,7 @@ func TestDurableTransactionRejectsMissingStagedCatalogPart(t *testing.T) {
 func TestDurableTransactionRejectsForgedMirrorCompletion(t *testing.T) {
 	harness := newIntegrationHarness(t)
 	ctx := context.Background()
-	if _, err := initializePublished(ctx, harness.options, InitRequest{RecoveryPublicKey: harness.publicKey}); err != nil {
+	if _, err := initializePublished(ctx, harness.options, harness.publicKey); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(harness.root, "file"), []byte("payload"), 0o600); err != nil {
@@ -1646,7 +1648,7 @@ func TestDurableTransactionRejectsForgedMirrorCompletion(t *testing.T) {
 func TestCommitDiscardsUnrecordedMetadataStaging(t *testing.T) {
 	harness := newIntegrationHarness(t)
 	ctx := context.Background()
-	if _, err := initializePublished(ctx, harness.options, InitRequest{RecoveryPublicKey: harness.publicKey}); err != nil {
+	if _, err := initializePublished(ctx, harness.options, harness.publicKey); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(harness.root, "file"), []byte("payload"), 0o600); err != nil {
@@ -1671,7 +1673,7 @@ func TestCommitDiscardsUnrecordedMetadataStaging(t *testing.T) {
 func TestResetResumesAfterControlRecordCleanupCrash(t *testing.T) {
 	harness := newIntegrationHarness(t)
 	ctx := context.Background()
-	if _, err := initializePublished(ctx, harness.options, InitRequest{RecoveryPublicKey: harness.publicKey}); err != nil {
+	if _, err := initializePublished(ctx, harness.options, harness.publicKey); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(harness.root, "file"), []byte("payload"), 0o600); err != nil {
@@ -1701,7 +1703,7 @@ func TestResetResumesAfterControlRecordCleanupCrash(t *testing.T) {
 func TestCompletedTransactionResumesAfterControlRecordCleanupCrash(t *testing.T) {
 	harness := newIntegrationHarness(t)
 	ctx := context.Background()
-	if _, err := initializePublished(ctx, harness.options, InitRequest{RecoveryPublicKey: harness.publicKey}); err != nil {
+	if _, err := initializePublished(ctx, harness.options, harness.publicKey); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(harness.root, "file"), []byte("payload"), 0o600); err != nil {
@@ -1741,7 +1743,7 @@ func TestCompletedTransactionResumesAfterControlRecordCleanupCrash(t *testing.T)
 func TestCommitConfirmsLostPushThroughValidatedRemoteDescendant(t *testing.T) {
 	harness := newIntegrationHarness(t)
 	ctx := context.Background()
-	if _, err := initializePublished(ctx, harness.options, InitRequest{RecoveryPublicKey: harness.publicKey}); err != nil {
+	if _, err := initializePublished(ctx, harness.options, harness.publicKey); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(harness.root, "file"), []byte("payload"), 0o600); err != nil {
@@ -1796,7 +1798,7 @@ func TestCommitConfirmsLostPushThroughValidatedRemoteDescendant(t *testing.T) {
 func TestResetRefusesAnyAttemptedMetadataPush(t *testing.T) {
 	harness := newIntegrationHarness(t)
 	ctx := context.Background()
-	if _, err := initializePublished(ctx, harness.options, InitRequest{RecoveryPublicKey: harness.publicKey}); err != nil {
+	if _, err := initializePublished(ctx, harness.options, harness.publicKey); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(harness.root, "file"), []byte("payload"), 0o600); err != nil {
@@ -1828,7 +1830,7 @@ func TestResetRefusesAnyAttemptedMetadataPush(t *testing.T) {
 func TestResetAllowsAbandonAfterCompetingRemoteAdvance(t *testing.T) {
 	harness := newIntegrationHarness(t)
 	ctx := context.Background()
-	if _, err := initializePublished(ctx, harness.options, InitRequest{RecoveryPublicKey: harness.publicKey}); err != nil {
+	if _, err := initializePublished(ctx, harness.options, harness.publicKey); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(harness.root, "file"), []byte("payload"), 0o600); err != nil {
@@ -1886,7 +1888,7 @@ func TestResetAllowsAbandonAfterCompetingRemoteAdvance(t *testing.T) {
 func TestOperationalStateDirectorySymlinkIsRejected(t *testing.T) {
 	harness := newIntegrationHarness(t)
 	ctx := context.Background()
-	if _, err := initializePublished(ctx, harness.options, InitRequest{RecoveryPublicKey: harness.publicKey}); err != nil {
+	if _, err := initializePublished(ctx, harness.options, harness.publicKey); err != nil {
 		t.Fatal(err)
 	}
 	state := harness.options.statePath()
@@ -1918,7 +1920,7 @@ func TestOperationalStateDirectorySymlinkIsRejected(t *testing.T) {
 func TestOperationalLockRejectsUnexpectedType(t *testing.T) {
 	harness := newIntegrationHarness(t)
 	ctx := context.Background()
-	if _, err := initializePublished(ctx, harness.options, InitRequest{RecoveryPublicKey: harness.publicKey}); err != nil {
+	if _, err := initializePublished(ctx, harness.options, harness.publicKey); err != nil {
 		t.Fatal(err)
 	}
 	lock := filepath.Join(harness.options.statePath(), "lock")
@@ -1936,7 +1938,7 @@ func TestOperationalLockRejectsUnexpectedType(t *testing.T) {
 func TestDurableTransactionRejectsChangedStagedBytes(t *testing.T) {
 	harness := newIntegrationHarness(t)
 	ctx := context.Background()
-	if _, err := initializePublished(ctx, harness.options, InitRequest{RecoveryPublicKey: harness.publicKey}); err != nil {
+	if _, err := initializePublished(ctx, harness.options, harness.publicKey); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(harness.root, "file"), []byte("payload"), 0o600); err != nil {
@@ -1993,7 +1995,7 @@ func TestDurableTransactionRejectsChangedStagedBytes(t *testing.T) {
 func TestResetResumesAfterRemovingTransactionState(t *testing.T) {
 	harness := newIntegrationHarness(t)
 	ctx := context.Background()
-	genesis, err := initializePublished(ctx, harness.options, InitRequest{RecoveryPublicKey: harness.publicKey})
+	genesis, err := initializePublished(ctx, harness.options, harness.publicKey)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2057,7 +2059,7 @@ func TestResetResumesAfterRemovingTransactionState(t *testing.T) {
 func TestResetRepairsWorktreeAfterCrashFollowingBranchRollback(t *testing.T) {
 	harness := newIntegrationHarness(t)
 	ctx := context.Background()
-	genesis, err := initializePublished(ctx, harness.options, InitRequest{RecoveryPublicKey: harness.publicKey})
+	genesis, err := initializePublished(ctx, harness.options, harness.publicKey)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2257,7 +2259,7 @@ func uploadTestManifest(t *testing.T, ctx context.Context, writer *objectstore.C
 func uploadTestMetadataBundle(t *testing.T, ctx context.Context, writer *objectstore.Client, repo *repository.Managed, repositoryUUID, base, tip string, sequence uint64, publicKey []byte, partSize uint64) manifestRepresentation {
 	t.Helper()
 	stage := t.TempDir()
-	built, err := metadatachain.Build(repo, repositoryUUID, base, tip, sequence, [][]byte{publicKey}, stage, partSize, ^uint64(0))
+	built, err := metadatachain.Build(repo, repositoryUUID, base, tip, sequence, testkeys.Chains(publicKey), stage, partSize, ^uint64(0))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2323,7 +2325,7 @@ func TestSyncDoesNotRegressCompletionLedger(t *testing.T) {
 
 func TestApplyMetadataBundleRejectsUnexpectedAdvertisedRef(t *testing.T) {
 	harness := newIntegrationHarness(t)
-	genesis, err := initializePublished(context.Background(), harness.options, InitRequest{RecoveryPublicKey: harness.publicKey})
+	genesis, err := initializePublished(context.Background(), harness.options, harness.publicKey)
 	if err != nil {
 		t.Fatal(err)
 	}

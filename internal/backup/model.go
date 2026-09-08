@@ -12,25 +12,25 @@ import (
 	"backup/internal/format"
 	"backup/internal/localconfig"
 	"backup/internal/objectstore"
+
 	"golang.org/x/sys/unix"
 )
 
 type ClientFactory func(context.Context, localconfig.Mirror) (*objectstore.Client, error)
 
 const (
-	stateVersion             = 4
-	transactionFilename      = "transaction.json"
-	ledgerFilename           = "completion-ledger.json"
-	validatedAncestorFile    = "validated-ancestor.json"
-	defaultPackTarget        = uint64(100 << 20)
-	defaultPartSize          = uint64(1 << 30)
-	defaultMetadataPartSize  = uint64(64 << 20)
-	defaultSpaceReserve      = uint64(1 << 30)
-	metadataRepositoryName   = ".backup"
-	operationalStateDirName  = ".backup-state"
-	transactionFilesDirName  = "transaction-files"
-	restoreTemporaryPrefix   = "backup-restore-"
-	maximumSecretKeyFileSize = 4096
+	stateVersion            = 4
+	transactionFilename     = "transaction.json"
+	ledgerFilename          = "completion-ledger.json"
+	validatedAncestorFile   = "validated-ancestor.json"
+	defaultPackTarget       = uint64(100 << 20)
+	defaultPartSize         = uint64(1 << 30)
+	defaultMetadataPartSize = uint64(64 << 20)
+	defaultSpaceReserve     = uint64(1 << 30)
+	metadataRepositoryName  = ".backup"
+	operationalStateDirName = ".backup-state"
+	transactionFilesDirName = "transaction-files"
+	restoreTemporaryPrefix  = "backup-restore-"
 )
 
 type Options struct {
@@ -104,11 +104,6 @@ func (options Options) statePath() string {
 
 func (options Options) transactionFilesPath() string {
 	return filepath.Join(options.statePath(), transactionFilesDirName)
-}
-
-type InitRequest struct {
-	PublicKeys        [][]byte
-	RecoveryPublicKey []byte
 }
 
 type InitResult struct {

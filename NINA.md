@@ -60,13 +60,15 @@ A replacement machine may take over explicitly: retire/revoke the old writer, re
 
 ## Build and trusted local configuration
 
+The sibling `../go-libsodium` checkout is a required local build dependency, selected by `go.mod` replacement; no published GitHub version is used for it. Keep the repositories side by side. Docker builds supply it with `--build-context go-libsodium=../go-libsodium`; the integration harness does this automatically.
+
 Build `./backup` with either `make` (the default target) or:
 
 ```sh
 make build
 ```
 
-Linux 5.8 or newer, Git 2.36 or newer with SHA-256 support, and libsodium are required. Every hardened Git invocation pins `core.fsync=objects,reference` and `core.fsyncMethod=fsync`, overriding repository and ambient settings. A bounded version preflight rejects unsupported/unrecognized Git before running repository commands and retains the checked executable path for the process. This hardens local crash resumability at the cost of storage-dependent metadata sync latency; it relies on Git and the filesystem/hardware honoring fsync, not custom journaling or a universal power-loss guarantee. Restore uses `utimensat` with `AT_EMPTY_PATH` to apply nanosecond timestamps through the verified file descriptor, never through a mutable temporary filename. Production metadata hosting uses `git-remote-aws`.
+Go 1.27 or newer, Linux 5.8 or newer, Git 2.36 or newer with SHA-256 support, and libsodium are required. Every hardened Git invocation pins `core.fsync=objects,reference` and `core.fsyncMethod=fsync`, overriding repository and ambient settings. A bounded version preflight rejects unsupported/unrecognized Git before running repository commands and retains the checked executable path for the process. This hardens local crash resumability at the cost of storage-dependent metadata sync latency; it relies on Git and the filesystem/hardware honoring fsync, not custom journaling or a universal power-loss guarantee. Restore uses `utimensat` with `AT_EMPTY_PATH` to apply nanosecond timestamps through the verified file descriptor, never through a mutable temporary filename. Production metadata hosting uses `git-remote-aws`.
 
 By default the client reads `$BACKUP_ROOT/.backup-config`, where `BACKUP_ROOT` defaults to `/`. The file must be a bounded regular file that is not group/other writable. Its raw tab/LF format is:
 
@@ -80,7 +82,7 @@ A mirror row is `mirror name kind s3_url endpoint region profile ca_file`, with 
 
 ## Metadata files
 
-All canonical metadata is versioned in Git. `FORMAT` is a small headerless `key<TAB>value<LF>` file with unique keys sorted by unsigned UTF-8 bytes. Each recognized schema version has an exact required key set that includes the schema version, repository UUID, Git object format, content/pack/checksum/compression/encryption/tar algorithms, and permanent recovery-recipient fingerprint. Every value is fixed at repository initialization and may never change; missing, duplicate, extra, or unsupported keys/versions fail closed.
+All canonical metadata is versioned in Git. `FORMAT` is a small headerless `key<TAB>value<LF>` file with unique keys sorted by unsigned UTF-8 bytes. Each recognized schema version has an exact required key set that includes the schema version, repository UUID, Git object format, content/pack/checksum/compression/encryption/tar algorithms. FORMAT version 2 has no recovery-recipient field; the earlier test-only version 1 is rejected without migration. Every value is fixed at repository initialization and may never change; missing, duplicate, extra, or unsupported keys/versions fail closed.
 
 Every canonical `.tsv` is raw, unquoted, headerless UTF-8: fields are separated by one tab, records by one LF, every nonempty file ends in LF, and an empty table is a zero-byte file. The schema lines shown below are documentation, not stored rows. No CSV quoting, escaping, BOM, CR, Unicode normalization, locale collation, or insignificant whitespace exists. Sort and compare canonical strings by unsigned UTF-8 bytes and encode decimal integers without a sign or leading zero except `0`; fields whose schemas allow signed values define that explicitly.
 
@@ -138,9 +140,11 @@ One exact Go regular expression per nonempty UTF-8/LF line, with no trimming, co
 
 ### `.publickeys`
 
-The tracked recipient list uses `git-remote-aws` serialized-public-key semantics: one exact key per LF-terminated line, no blank/comment/duplicate lines, valid fixed key lengths, and unique keys sorted by unsigned bytes. `backup init` requires a designated permanent offline recovery recipient, records its versioned fingerprint in `FORMAT`, and every later `.publickeys` plus every encrypted pack and metadata bundle must include it exactly once. Additional operator recipients may be added or removed.
+The tracked list uses the shared go-libsodium key-chain model also used by git-remote-aws. Each nonempty line is one individual's public chain: 64 lowercase hex characters per generation, joined with `:`, oldest first. Recipient rows form an unordered set: no sorting is required or performed. Blank lines are ignored and a final LF is optional; spaces, tabs, CR, comments, and duplicate keys remain forbidden. Generations within a chain remain ordered. Serialization preserves recipient row order and emits one LF per nonempty row; tracked file bytes are preserved, not automatically normalized. There are at most 1,024 generations per chain and 65,536 keys in total, bounded to 4,259,840 raw input bytes including blank lines. A single key is a one-generation chain. Retained chains may only extend on the right; entire recipients may be added or removed, leaving at least one for publication. Chains are not signed and do not confer storage/Git write authorization.
 
-Recipient changes affect newly encrypted objects only: adding a key cannot decrypt history, and removing a key cannot revoke ciphertext already obtained. Do not add automatic re-encryption/key migration. Losing all historical secret keys loses the backup, so the permanent recovery secret must be stored and periodically tested independently.
+Encrypt new objects to only the final generation of each recipient. Each encrypted object can be decrypted with any matching retained secret generation; other recipients' secrets are not required. Retain historical private generations for historical decryption. There is no permanent/offline recovery-recipient requirement or special decryption path. Losing all matching secrets loses the corresponding ciphertext; rotations and recipient removal cannot revoke already obtained ciphertext. Existing ciphertext is not automatically re-encrypted.
+
+`init` creates this file empty; local preparation add/diff/reset permit emptiness, but commit rejects it before remote binding or publication. Read [Key management](docs/key-management.md) before generating/rotating keys or configuring secret sources. Keygen lives in git-remote-aws and manages only explicit personal public/private files; it never automatically updates repository recipient lists. Pass only personal files to keygen, not repository `.publickeys`. Shared parsing, native key-chain validation, generation, key selection, and encryption live in go-libsodium; recipient decryption uses only `Keyring.Decrypt`, with no single-secret compatibility wrapper. Both applications use exactly one nonempty `GIT_REMOTE_AWS_SECRETKEY`, `GIT_REMOTE_AWS_SECRETKEY_FILE`, or `GIT_REMOTE_AWS_SECRETKEY_CMD` source, loaded only for decryption and reused across objects. Secret files allow only owner read/write permission bits, with no execute or special bits. While an external secret command runs, the shared application loader connects SIGINT/SIGTERM to cancellation, terminates its process group on cancellation/output overflow, and gives inherited output pipes a 250ms post-exit drain limit. It hands a foreground terminal to the loader and restores it before returning, including on exec failure. Terminal-attached background command loading fails explicitly; use the foreground or a detached invocation. Signal handling is scoped to loading, not global interception of unrelated CLI operations. There is no overall pinentry deadline, SIGKILL cleanup guarantee, or escaped-job sandbox. Backup's former `BACKUP_SECRET_KEY` variables are removed.
 
 ### `mirrors.tsv`
 
@@ -264,11 +268,11 @@ The operator must exclusively control the local metadata/operational namespace a
 
 Source scanning and plaintext-spool cleanup each open an independent directory description for every enumeration and read entries in batches of 256. A reused root or spool must not inherit an exhausted directory offset from an earlier scan/cleanup. The durable JSON store has no reset/removal API; `backup reset` continues to use its existing transaction-aware cleanup path.
 
-`backup init` is local preparation only. It creates an unborn Git SHA-256 repository, fixes the repository UUID and permanent recovery-recipient fingerprint, and writes the seven draft metadata files with empty catalogs and an initially empty `mirrors.tsv`. It requires the recovery public key but does not read trusted remote configuration, construct an object client, fetch, push, or upload. Its output is `initialized<TAB>UUID` plus `publication<TAB>local-only`, not a commit ID or a mirror-completion claim. The local branch initially names `main`; first publication binds the branch from trusted configuration.
+`backup init` is local preparation only. It creates an unborn Git SHA-256 repository, fixes the repository UUID, and writes the seven draft metadata files with empty catalogs, `.publickeys`, and `mirrors.tsv`. It requires no keys and does not read trusted remote configuration, construct an object client, fetch, push, or upload. Its output is `initialized<TAB>UUID` plus `publication<TAB>local-only`, not a commit ID or a mirror-completion claim. The local branch initially names `main`; first publication binds the branch from trusted configuration.
 
 A small private `preparation.json` pins the exact initial `FORMAT` hash and identifies this intentionally unborn state. Before first publication, `add`, `diff`, and `reset` work locally without remotes or credentials. They use the normal bounded scanner and file-backed path plan against empty catalogs, reject unrelated metadata edits, preserve identity/recipient checks, and never guess that a repository missing its preparation record is fresh. Reset discards the plan, not initialization or configuration. `init` refuses every nonempty existing metadata directory; it never deletes one or resumes publication.
 
-The first `backup commit` requires an add plan and complete trusted Git/mirror configuration. It checks that mutable metadata still matches the add-time plan. If the planned `mirrors.tsv` is empty, this first commit fills it from the trusted mirror configuration; a nonempty table must already match exactly. Ignore/recipient edits still require another `add`. The selected source path set is unchanged even when configuration or source files are created after add.
+The first `backup commit` requires an add plan, nonempty valid recipient chains, and complete trusted Git/mirror configuration. It checks that mutable metadata still matches the add-time plan. If the planned `mirrors.tsv` is empty, this first commit fills it from the trusted mirror configuration; a nonempty table must already match exactly. Ignore/recipient edits still require another `add`. The selected source path set is unchanged even when configuration or source files are created after add.
 
 First commit durably pins Git destination/branch before configuring `origin`, then internally creates and publishes the existing empty genesis and its full encrypted metadata bundle. Only after at least one mirror completes that base does it capture the saved first data plan and publish the ordinary snapshot/delta. The first command reports success for the selected snapshot, not for bootstrap alone. A disappeared/unsupported entire plan still fails unless add explicitly allowed emptiness; an explicitly empty plan may complete at genesis when its final metadata is identical. All committed-format rules remain unchanged, including empty genesis catalogs, at least one genesis mirror, and incremental later edges. No second operator commit command is needed on the healthy path.
 
@@ -282,7 +286,7 @@ Use preservation-first manual recovery:
 2. Preserve the entire `.backup`, including `.git`, hidden operational state, refs, reflogs, objects, and draft configuration, in private storage without dereferencing unexpected symlinks. Do not start with deletion, reset, clean, or reinitialization.
 3. Inspect file types, all loose/packed refs and objects (including unreachable objects), reflogs, canonical files, preparation state, and transactions. A valid completed local preparation should continue with `add`/`commit`; meaningful or ambiguous state requires targeted diagnosis, not another identity.
 4. Where prior remote use is possible, inspect the exact trusted primary branch and mirrors read-only. Authentication failure, timeout, or unavailability does not prove emptiness. Existing history requires preserving/recovering its identity.
-5. Only after positively identifying fresh unpublished setup residue, quarantine it under a unique non-overwriting private name and retry initialization with the intended permanent recipient. Keep preserved/quarantined state outside the source tree or explicitly exclude it before add. Retain useful draft configuration and independently stored recovery keys.
+5. Only after positively identifying fresh unpublished setup residue, quarantine it under a unique non-overwriting private name and retry initialization, then restore the intended public recipient chains. Keep preserved/quarantined state outside the source tree or explicitly exclude it before add. Retain useful draft configuration and independently stored private key chains.
 
 Git setup `HEAD`, `config`, exclusion file, and initial directories are fsynced before reporting local initialization or completing first remote binding; ordinary Git object/reference fsync hardening remains in force. This is localized setup durability, not custom journaling or a universal storage power-loss guarantee.
 
@@ -404,7 +408,7 @@ Bit-flip repair is by immutable relocation, never overwrite:
 
 If no healthy copy exists, hashes cannot reconstruct lost pack bytes and data-pack repair fails honestly. For local disks, `~/repos/mirror` remains the lower-layer redundancy/repair mechanism. S3/R2 provide their own media-integrity systems, while backup still performs end-to-end verification.
 
-Metadata-bundle repair does not modify canonical Git catalogs. It may copy a healthy exact representation, or—when the exact validated Git base/tip object graph is available—generate, encrypt, split, and publish a new immutable representation for the same edge. Accept it only after recovery reconstructs the exact declared commits; leave every old manifest and part untouched. If neither healthy representation nor the required Git objects survive, repair fails honestly.
+Metadata-bundle repair does not modify canonical Git catalogs. Newly regenerated representations always use today's validated HEAD recipient chains, even for a historical Git edge; copying existing ciphertext preserves its original recipients. It may copy a healthy exact representation, or—when the exact validated Git base/tip object graph is available—generate, encrypt, split, and publish a new immutable representation for the same edge. Accept it only after recovery reconstructs the exact declared commits; leave every old manifest and part untouched. If neither healthy representation nor the required Git objects survive, repair fails honestly.
 
 The ordinary client has no effective overwrite/delete capability against existing protected objects. For data packs, `backup repair` uses the ordinary profiles to read a healthy source and create immutable objects at each destination, then creates a normal fast-forward relocation commit. For metadata bundles it publishes only the alternate physical representation described above and creates no Git-history edge.
 
@@ -486,15 +490,15 @@ Each handled request emits one structured log with its actual response status. I
 
 ## `git-remote-aws` integration
 
-Use the existing public `git-remote-aws` project unchanged and preserve compatibility with its repositories and object layout. Do not make backup-driven protocol, naming, recipient, recovery, or permission changes there. Backup verifies that its candidate commit is the current local metadata branch, then pushes `refs/heads/<branch>:refs/heads/<branch>` because the helper accepts branch rather than raw commit-ID sources. The helper reads tracked `.publickeys`; the permanent-recipient invariant above applies to every revision. Its S3/DynamoDB state remains only the mandatory concurrency authority, while the object-mirror bundle chain provides disaster recovery. A live two-commit push and fresh clone against the helper's AWS/DynamoDB format passed on 2026-08-02.
+Use the existing public `git-remote-aws` project and preserve readability of its existing repositories, keys, ciphertext, and S3/DynamoDB object layout. The shared key-chain feature intentionally changes key configuration and disjoint secret-source selection, not the encrypted wire format or storage protocol. Backup verifies that its candidate commit is the current local metadata branch, then pushes `refs/heads/<branch>:refs/heads/<branch>` because the helper accepts branch rather than raw commit-ID sources. The helper reads `.publickeys` from the exact commit being pushed, selects chain tips for encryption, and checks retained-chain extensions against the previously published tip. A previously published commit with no `.publickeys` entry adopts the selected tip policy; a present empty, malformed, or non-regular entry fails rather than masquerading as absence. This helper compatibility case does not relax backup’s canonical seven-blob history. It rejects staged/unstaged recipient edits, including during no-op push discovery; read-only fetch/clone remain available. Backup creates commit trees directly without a Git index; an absent index contains no staged entries, but an existing index must agree with the pushed policy, and the actual working recipient file must always match the commit. Before encryption/upload the helper verifies the generated bundle's advertised tip agrees with the commit used for ancestry, identity, and recipients; a concurrent local branch advance fails rather than publishing a mismatched bundle. Backup validates every metadata-history transition, including recipient chains. Its S3/DynamoDB state remains only the mandatory concurrency authority, while the object-mirror bundle chain provides disaster recovery. A live two-commit push and fresh clone against the helper's AWS/DynamoDB format passed on 2026-08-02.
 
 ## Operator commands
 
-Generate and independently store the permanent recovery keypair, then initialize locally (no remote required):
+Initialize locally with no keys or remote required, then populate `.backup/.publickeys` from independently retained personal public chains:
 
 ```sh
-git-remote-aws --keygen
-backup init --root /data --recovery-public-key "$GIT_REMOTE_AWS_PUBLICKEY"
+backup init --root /data
+# Edit /data/.backup/.publickeys with your public recipient chains.
 ```
 
 Edit `.backup/ignore` and any additional recipients, then create and inspect a path plan locally. Configure the trusted Git remote and mirrors before the first commit, which publishes genesis and the selected snapshot together as one operator operation:
@@ -514,10 +518,10 @@ backup find --root /data REGEX HEAD
 backup reset --root /data
 ```
 
-Verify and restore with the permanent or another eligible recipient secret:
+Verify and restore with an eligible historical recipient secret chain:
 
 ```sh
-export BACKUP_SECRET_KEY=...
+export GIT_REMOTE_AWS_SECRETKEY_CMD=/path/to/your-secret-loader
 backup verify --root /data --minimum-mirrors 1
 backup restore --root /data --target /safe/restore '^\./home/' HEAD
 ```
@@ -539,6 +543,8 @@ After losing the primary Git service, follow [Restore from recovered metadata](d
 Errors are concise stderr messages with nonzero status, not Go panics or stack traces; help exits successfully. Escape control characters in every untrusted path/key/error before terminal output, use structured encodings for machine/audit logs, and never log authorization headers, credentials, recipient secrets, or raw key material.
 
 ## Testing requirements
+
+Cloud-free executable/PTY secret-loader regressions require Python 3.8 or newer; they use synthetic keys and exercise both actual CLIs. Parser-only key-chain cases live in go-libsodium; backup tests its metadata and application boundaries.
 
 Run the cloud-free release checks and fuzz campaigns with:
 
@@ -706,15 +712,17 @@ Separately on 2026-08-29, the real backup binary completed an AWS-only test revi
 
 The local-only initialization/first-commit lifecycle passed `make check`, all ten fuzz campaigns, Docker contracts, and live AWS/R2 contracts normally and under the race detector on 2026-09-06. Both clouds exercised local initialization followed by first-data publication, later backup, checksum verification, fidelity-checked broad/selected restore, and latest/anchored-genesis recovery with primary Git unavailable. Independent inventory confirmed the fresh AWS scratch bucket/user and both Docker runs were fully cleaned up; independent R2 checksum HEAD rechecked both new immutable probes and its existing indefinite lock was unchanged. Private logs and retained fixture recovery material are under `<private-contract-evidence>`. R2 test objects and incomplete multipart probes remain intentionally retained in the dedicated locked test bucket. These are test-deployment results, not first-production-backup acceptance.
 
+On 2026-09-07, shared recipient chains passed `make check`, all ten backup fuzz campaigns, and unified Docker/AWS/R2 contracts normally and under the race detector. Both cloud CLI roundtrips rotated between revisions and restored/recovered mixed-generation history. Separate live AWS Git-primary tests passed, and git-remote-aws cloned independently generated pre-keychain full/incremental SHA-1 and SHA-256 histories, then rotated and cloned mixed-generation history; incomplete private chains failed. Shared-library checks, coverage, race, and key-chain fuzzing passed. Independent inventory confirmed scratch AWS/Docker cleanup, and checksum HEAD rechecked both new R2 probes with its bucket-wide indefinite lock unchanged. Final suite evidence and retained R2 fixture recovery material are under `<private-contract-evidence>`. Personal keys and `~/.backup` were untouched. These are test-deployment results, not first-production-backup acceptance.
+
 ## Release and first-backup gates
 
 These are deployment acceptance gates, not implementation prerequisites or new features. The first production revision is not accepted until all have succeeded:
 
-1. Complete `make integration` and the exact-production contract runbook above for every configured cloud backend; retain and recheck each immutable probe.
+1. Complete `make integration`, the separate [AWS Git-primary gate](docs/git-primary-contract.md) (`make integration-git-remote`), and the exact-production contract runbook above for every configured cloud backend; retain and recheck each immutable probe. The Git-primary gate requires the independent pre-keychain helper artifact and provisions/cleans its own guarded scratch S3/DynamoDB resources, without expanding mirror credentials.
 2. Complete the revision on at least two individual mirrors when two are configured.
 3. Verify each configured mirror using its backend-appropriate trustworthy checksum path.
 4. Perform full local decrypt/decompress/plaintext verification.
 5. Recover metadata solely from one object mirror with the primary Git remote unavailable, both at the latest tip and at an explicitly selected externally recorded earlier tip. Follow the recovery-to-restore runbook to restore actual content using the recovered metadata and surviving mirror while the original primary and checkout remain unavailable.
 6. Restore selected and broad snapshots into a clean temporary root and compare expected content, modes, mtimes, and symlinks.
-7. Confirm the permanent offline recovery key decrypts both pack and metadata-bundle fixtures.
+7. Confirm the retained private key chain decrypts both pack and metadata-bundle fixtures.
 8. Accept the exact production `backup-server` deployment as described above.

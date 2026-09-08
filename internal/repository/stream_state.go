@@ -15,6 +15,8 @@ import (
 	"backup/internal/extsort"
 	"backup/internal/format"
 	"backup/internal/securefs"
+
+	"github.com/nathants/go-libsodium"
 	"golang.org/x/crypto/blake2b"
 	"golang.org/x/sys/unix"
 )
@@ -116,7 +118,7 @@ func ParseFileState(files map[string]BlobFile, limits format.Limits) (State, err
 		}
 		source[name] = blob
 	}
-	return parseStreamState(source, limits)
+	return parseStreamState(source, limits, false)
 }
 
 func readBounded(reader io.Reader, maximum int64) ([]byte, error) {
@@ -131,7 +133,7 @@ func readBounded(reader io.Reader, maximum int64) ([]byte, error) {
 	return data, err
 }
 
-func parseStreamState(source stateSource, limits format.Limits) (State, error) {
+func parseStreamState(source stateSource, limits format.Limits, preparation bool) (State, error) {
 	state := State{source: source, BlobHashes: make(map[string]string, len(RequiredBlobNames)), BlobSizes: make(map[string]uint64, len(RequiredBlobNames))}
 	readConfig := func(name string, maximum int64) ([]byte, error) {
 		var data []byte
@@ -174,7 +176,7 @@ func parseStreamState(source stateSource, limits format.Limits) (State, error) {
 	if err != nil {
 		return State{}, err
 	}
-	state.PublicKeys, err = format.ParsePublicKeys(bytes.NewReader(keyBytes), limits)
+	state.PublicKeys, err = libsodium.ParseKeyChains(bytes.NewReader(keyBytes))
 	if err != nil {
 		return State{}, err
 	}
@@ -198,8 +200,8 @@ func parseStreamState(source stateSource, limits format.Limits) (State, error) {
 	if err := validateStreamCatalogs(&state, limits, workspace); err != nil {
 		return State{}, fmt.Errorf("metadata catalogs: %w", err)
 	}
-	if err := format.RequireRecoveryRecipient(state.PublicKeys, state.Format.RecoveryRecipientFingerprint); err != nil {
-		return State{}, err
+	if !preparation && len(state.PublicKeys) == 0 {
+		return State{}, fmt.Errorf(".publickeys is empty")
 	}
 	return state, nil
 }

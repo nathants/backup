@@ -1,6 +1,6 @@
 module backup
 
-go 1.25.6
+go 1.27.0
 
 require (
 	github.com/aws/aws-sdk-go-v2 v1.42.1
@@ -9,8 +9,8 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.105.2
 	github.com/aws/smithy-go v1.27.3
 	github.com/klauspost/compress v1.19.0
-	github.com/nathants/go-libsodium v0.0.0-20260502104057-4e1a79aae4f3
-	golang.org/x/crypto v0.55.0
+	github.com/nathants/go-libsodium v0.0.0-20260907150908-165cd76c0d68
+	golang.org/x/crypto v0.56.0
 	golang.org/x/sys v0.47.0
 )
 
@@ -29,3 +29,5 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.37.1 // indirect
 	github.com/aws/aws-sdk-go-v2/service/sts v1.44.1 // indirect
 )
+
+replace github.com/nathants/go-libsodium => ../go-libsodium

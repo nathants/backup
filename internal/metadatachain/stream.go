@@ -12,13 +12,15 @@ import (
 
 	"backup/internal/format"
 	"backup/internal/repository"
+
+	"github.com/nathants/go-libsodium"
 	"golang.org/x/crypto/blake2b"
 )
 
 // Build streams Git bundle creation directly through recipient encryption into
 // bounded parts. It never stages a plaintext bundle or a complete encrypted
 // bundle. maxCiphertextBytes protects caller-reserved filesystem headroom.
-func Build(repo *repository.Managed, repositoryUUID, base, tip string, sequence uint64, recipients [][]byte, staging string, partSize, maxCiphertextBytes uint64) (Result, error) {
+func Build(repo *repository.Managed, repositoryUUID, base, tip string, sequence uint64, recipients libsodium.KeyChains, staging string, partSize, maxCiphertextBytes uint64) (Result, error) {
 	if repo == nil || repositoryUUID == "" || tip == "" || len(recipients) == 0 || partSize == 0 || partSize > uint64(^uint64(0)>>1) || maxCiphertextBytes == 0 {
 		return Result{}, fmt.Errorf("invalid metadata-chain build arguments")
 	}

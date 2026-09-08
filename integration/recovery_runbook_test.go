@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"backup/internal/s3server"
+
 	libsodium "github.com/nathants/go-libsodium"
 )
 
@@ -55,15 +56,20 @@ func TestRecoveryRestoreRunbook(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	secretFile := filepath.Join(workspace, "secret")
+	loader := filepath.Join(workspace, "loader")
+	writeFile(t, secretFile, []byte(hex.EncodeToString(secret)), 0600)
+	writeFile(t, loader, []byte("#!/bin/sh\n[ \"$1\" = '"+remote+"' ] || exit 2\ncat '"+secretFile+"'\n"), 0700)
 	environment := cleanEnvironment(map[string]string{
 		"AWS_SHARED_CREDENTIALS_FILE": credentials, "AWS_CONFIG_FILE": "/dev/null",
-		"AWS_EC2_METADATA_DISABLED": "true", "BACKUP_SECRET_KEY": hex.EncodeToString(secret),
+		"AWS_EC2_METADATA_DISABLED": "true", "GIT_REMOTE_AWS_SECRETKEY_CMD": loader,
 	})
 	command := func(name string, args ...string) string {
 		t.Helper()
 		return runEnv(t, "", environment, binary, append([]string{name, "--root", source, "--config", config}, args...)...)
 	}
-	command("init", "--recovery-public-key", hex.EncodeToString(public))
+	command("init")
+	writeFile(t, filepath.Join(source, ".backup", ".publickeys"), []byte(hex.EncodeToString(public)+"\n"), 0644)
 	mtime := time.Unix(1_700_000_000, 123_456_789)
 	for _, name := range []string{"file with spaces", "duplicate"} {
 		path := filepath.Join(source, name)
@@ -81,6 +87,20 @@ func TestRecoveryRestoreRunbook(t *testing.T) {
 	command("add")
 	latest := outputField(t, command("commit"), "commit")
 	command("verify")
+	t.Run("secret-command-lifecycle", func(t *testing.T) {
+		target := t.TempDir()
+		shared := strings.TrimSpace(run(t, "..", "go", "list", "-m", "-f", "{{.Dir}}", "github.com/nathants/go-libsodium"))
+		cmd := exec.Command("python3", "-I", filepath.Join(shared, "keysource", "testdata", "command-lifecycle.py"), binary,
+			"restore", "--root", source, "--config", config, "--target", target, `^\./file with spaces$`, first)
+		cmd.Env = environment
+		if output, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("CLI secret command lifecycle: %v\n%s", err, output)
+		}
+		// The lifecycle fixture deliberately supplies an unrelated synthetic key.
+		if entries, err := os.ReadDir(target); err != nil || len(entries) != 0 {
+			t.Fatalf("failed/canceled secret loading published paths: %v", err)
+		}
+	})
 	priorPuts := puts.Load()
 	if priorPuts == 0 {
 		t.Fatal("positive control did not observe uploads")
@@ -107,7 +127,10 @@ func TestRecoveryRestoreRunbook(t *testing.T) {
 				t.Fatalf("recovered wrong tip: %s", got)
 			}
 			root := filepath.Join(workspace, "rescue-"+tip)
-			env := append(append([]string(nil), environment...),
+			rescueLoader := filepath.Join(workspace, "rescue-loader-"+tip)
+			writeFile(t, rescueLoader, []byte(recoverySecretMapping(t, recovered, remote, loader)), 0700)
+			rescueEnvironment := append(append([]string(nil), environment...), "GIT_REMOTE_AWS_SECRETKEY_CMD="+rescueLoader)
+			env := append(append([]string(nil), rescueEnvironment...),
 				"BACKUP_BIN="+binary, "RECOVERED="+recovered, "TIP="+tip,
 				"BRANCH=main", "RESCUE_ROOT="+root, "TRUSTED_CONFIG="+config,
 				"GIT_DIR="+filepath.Join(workspace, "wrong-git-dir"), "GIT_WORK_TREE="+source)
@@ -125,6 +148,17 @@ func TestRecoveryRestoreRunbook(t *testing.T) {
 			output := runRecoveryRestoreRunbook(t, env)
 			if outputField(t, output, "snapshot-commit") != tip {
 				t.Fatalf("restore selected wrong revision: %s", output)
+			}
+			// The normal URL-pinned source is still valid for recovery, but must
+			// not silently change identity when the metadata remote is repinned.
+			unmappedTarget := t.TempDir()
+			failure = runEnvFailure(t, "", environment, binary, "restore", "--root", root,
+				"--target", unmappedTarget, `^\./file with spaces$`, tip)
+			if !strings.Contains(failure, "exit status 2") {
+				t.Fatalf("normal loader did not reject the rescue identity: %s", failure)
+			}
+			if entries, err := os.ReadDir(unmappedTarget); err != nil || len(entries) != 0 {
+				t.Fatalf("unmapped source published files: %v", err)
 			}
 			target := filepath.Join(root, "restored")
 			for _, name := range []string{"file with spaces", "duplicate"} {
@@ -148,7 +182,7 @@ func TestRecoveryRestoreRunbook(t *testing.T) {
 				if err := os.Mkdir(selected, 0o700); err != nil {
 					t.Fatal(err)
 				}
-				output := runEnv(t, "", environment, binary, "restore", "--root", root, "--target", selected, `^\./file with spaces$`, first)
+				output := runEnv(t, "", rescueEnvironment, binary, "restore", "--root", root, "--target", selected, `^\./file with spaces$`, first)
 				if outputField(t, output, "snapshot-commit") != first {
 					t.Fatalf("selected restore used the wrong historical commit: %s", output)
 				}
@@ -230,4 +264,34 @@ func recoveryRestoreRunbook(t *testing.T) string {
 		t.Fatal("unterminated runbook Bash block")
 	}
 	return block
+}
+
+func TestCleanEnvironmentRemovesRecipientSources(t *testing.T) {
+	for _, name := range []string{"GIT_REMOTE_AWS_SECRETKEY", "GIT_REMOTE_AWS_SECRETKEY_FILE", "GIT_REMOTE_AWS_SECRETKEY_CMD"} {
+		t.Setenv(name, "synthetic-secret")
+	}
+	for _, entry := range cleanEnvironment(nil) {
+		if strings.HasPrefix(entry, "GIT_REMOTE_AWS_") {
+			t.Fatal("recipient source leaked into fixture environment")
+		}
+	}
+}
+
+func recoverySecretMapping(t *testing.T, recovered, original, loader string) string {
+	t.Helper()
+	data, err := os.ReadFile("../docs/recovery-restore.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, block, ok := strings.Cut(string(data), "   ```sh\n")
+	if !ok {
+		t.Fatal("missing documented rescue-loader mapping")
+	}
+	block, _, ok = strings.Cut(block, "   ```")
+	if !ok {
+		t.Fatal("unterminated rescue-loader mapping")
+	}
+	block = strings.ReplaceAll(block, "   ", "")
+	return strings.NewReplacer("/safe/recovered.git", recovered,
+		"/private/original-loader", loader, "aws://original-bucket+table/repository", original).Replace(block)
 }

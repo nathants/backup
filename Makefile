@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := build
-.PHONY: build check check-deps check-lint integration fuzz
+.PHONY: build check check-deps check-lint integration integration-git-remote fuzz
 
 build:
 	go build -o backup ./cmd/backup
@@ -42,6 +42,9 @@ check-lint: check-deps
 
 integration: check
 	./integration/run.sh
+
+integration-git-remote: check
+	./integration/git-remote.sh
 
 fuzz:
 	@set -eu; \

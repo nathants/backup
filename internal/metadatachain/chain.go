@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"backup/internal/format"
+
 	"github.com/nathants/go-libsodium"
 	"golang.org/x/crypto/blake2b"
 )
@@ -29,17 +30,21 @@ type Result struct {
 	Parts            []StagedPart
 }
 
-func encrypt(input io.Reader, recipients [][]byte, output io.Writer) (err error) {
+func encrypt(input io.Reader, recipients libsodium.KeyChains, output io.Writer) (err error) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			err = fmt.Errorf("metadata encryption failed: %v", recovered)
 		}
 	}()
 	sodiumOnce.Do(libsodium.Init)
-	return libsodium.StreamEncryptRecipients(recipients, input, output)
+	keys, err := recipients.Latest()
+	if err != nil {
+		return err
+	}
+	return libsodium.StreamEncryptRecipients(keys, input, output)
 }
 
-func Decrypt(ciphertext io.Reader, expectedHash string, expectedSize uint64, secretKey []byte, output io.Writer) error {
+func Decrypt(ciphertext io.Reader, expectedHash string, expectedSize uint64, secretKey *libsodium.Keyring, output io.Writer) error {
 	if expectedSize > uint64(^uint64(0)>>1)-1 || len(expectedHash) != 128 {
 		return fmt.Errorf("invalid encrypted metadata identity")
 	}
@@ -60,14 +65,14 @@ func Decrypt(ciphertext io.Reader, expectedHash string, expectedSize uint64, sec
 	return nil
 }
 
-func decrypt(secretKey []byte, input io.Reader, output io.Writer) (err error) {
+func decrypt(secretKey *libsodium.Keyring, input io.Reader, output io.Writer) (err error) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			err = fmt.Errorf("metadata decryption failed: %v", recovered)
 		}
 	}()
 	sodiumOnce.Do(libsodium.Init)
-	return libsodium.StreamDecryptRecipients(secretKey, input, output)
+	return secretKey.Decrypt(input, output)
 }
 
 func hashBytes(data []byte) objectIdentity {

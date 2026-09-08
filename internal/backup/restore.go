@@ -13,6 +13,7 @@ import (
 
 	"backup/internal/format"
 	"backup/internal/repository"
+
 	"golang.org/x/crypto/blake2b"
 	"golang.org/x/sys/unix"
 )
@@ -137,7 +138,7 @@ func Restore(ctx context.Context, options Options, request RestoreRequest) (Rest
 		if err := prepareRestoreCatalogs(snapshot.State, selection); err != nil {
 			return result, err
 		}
-		secretKey, err := run.secretKey()
+		secretKey, err := run.secretKey(ctx)
 		if err != nil {
 			return result, err
 		}

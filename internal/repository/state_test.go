@@ -2,10 +2,14 @@ package repository
 
 import (
 	"bytes"
+	"fmt"
 	"strings"
 	"testing"
 
 	"backup/internal/format"
+	"backup/internal/testkeys"
+
+	"github.com/nathants/go-libsodium"
 )
 
 const (
@@ -38,11 +42,29 @@ func TestStateRequiresExactlySevenCanonicalBlobs(t *testing.T) {
 	}
 }
 
-func TestRecoveryRecipientIsPermanent(t *testing.T) {
+func TestRecipientChainsReplacePermanentRecoveryRecipient(t *testing.T) {
 	blobs := validGenesisBlobs(t)
+	old := parseState(t, blobs)
+	// An entirely different individual is permitted; there is no special key.
 	blobs[".publickeys"] = []byte(strings.Repeat("1", 64) + "\n")
+	next := parseState(t, blobs)
+	if _, err := ValidateTransition(old, next); err != nil {
+		t.Fatal(err)
+	}
+	blobs[".publickeys"] = []byte(strings.Repeat("1", 64) + ":" + strings.Repeat("2", 64) + "\n")
+	rotated := parseState(t, blobs)
+	if _, err := ValidateTransition(next, rotated); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ValidateTransition(rotated, next); err == nil {
+		t.Fatal("accepted chain truncation")
+	}
+	blobs[".publickeys"] = nil
 	if _, err := ParseState(blobs, format.DefaultLimits()); err == nil {
-		t.Fatal("accepted a state without the permanent recovery recipient")
+		t.Fatal("accepted empty committed recipients")
+	}
+	if _, err := ParsePreparationState(blobs, format.DefaultLimits()); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -142,12 +164,12 @@ func TestHistoricalCatalogCompatibilityAllowsOnlyRelocation(t *testing.T) {
 func validGenesisBlobs(t *testing.T) map[string][]byte {
 	t.Helper()
 	key := make([]byte, 32)
-	repositoryFormat := format.NewRepositoryFormat("123e4567-e89b-42d3-a456-426614174000", format.RecoveryFingerprint(key))
+	repositoryFormat := format.NewRepositoryFormat("123e4567-e89b-42d3-a456-426614174000")
 	formatBytes, err := repositoryFormat.MarshalText()
 	if err != nil {
 		t.Fatal(err)
 	}
-	publicKeys, err := format.MarshalPublicKeys([][]byte{key})
+	publicKeys, err := testkeys.Chains(key).MarshalText()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -202,4 +224,32 @@ func mustBytes(t *testing.T, data []byte, err error) []byte {
 		t.Fatal(err)
 	}
 	return data
+}
+
+func TestSharedMaximumRecipientChainIsAccepted(t *testing.T) {
+	blobs := validGenesisBlobs(t)
+	var generations []string
+	for i := 0; i < libsodium.MaxKeyGenerations; i++ {
+		generations = append(generations, fmt.Sprintf("%064x", i+1))
+	}
+	blobs[".publickeys"] = []byte(strings.Join(generations, ":") + "\n")
+	if _, err := ParseState(blobs, format.DefaultLimits()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRecipientRowsAreAnUnorderedSet(t *testing.T) {
+	blobs := validGenesisBlobs(t)
+	a, b := strings.Repeat("1", 64), strings.Repeat("2", 64)
+	blobs[".publickeys"] = []byte("\n" + b + "\n\n" + a)
+	before := parseState(t, blobs)
+	blobs[".publickeys"] = []byte(a + "\n" + b + "\n")
+	after := parseState(t, blobs)
+	if _, err := ValidateTransition(before, after); err != nil {
+		t.Fatal(err)
+	}
+	blobs[".publickeys"] = []byte("\n\n")
+	if _, err := ParseState(blobs, format.DefaultLimits()); err == nil {
+		t.Fatal("blank lines counted as committed recipients")
+	}
 }

@@ -12,6 +12,8 @@ import (
 	"testing"
 
 	"backup/internal/format"
+	"backup/internal/testkeys"
+
 	"github.com/klauspost/compress/zstd"
 	"github.com/nathants/go-libsodium"
 	"golang.org/x/crypto/blake2b"
@@ -90,7 +92,7 @@ func TestStreamingPackUploadsBoundedPartsAndAcceptsNonHashOrder(t *testing.T) {
 	}
 	var ciphertext bytes.Buffer
 	stage := filepath.Join(t.TempDir(), "parts")
-	builder, err := NewStreamBuilder([][]byte{publicKey}, stage, 128, func(part *StreamPart) error {
+	builder, err := NewStreamBuilder(testkeys.Chains(publicKey), stage, 128, func(part *StreamPart) error {
 		data, err := os.ReadFile(part.Path)
 		if err != nil {
 			return err
@@ -169,7 +171,7 @@ func TestStreamingPackUploadsBoundedPartsAndAcceptsNonHashOrder(t *testing.T) {
 		hex.EncodeToString(firstDigest[:]):  uint64(len(firstData)),
 		hex.EncodeToString(secondDigest[:]): uint64(len(secondData)),
 	}
-	if err := DecryptAndRead(bytes.NewReader(ciphertext.Bytes()), created.Hash, created.Size, secretKey, expected, discardMember); err != nil {
+	if err := DecryptAndRead(bytes.NewReader(ciphertext.Bytes()), created.Hash, created.Size, testkeys.Ring(secretKey), expected, discardMember); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -187,7 +189,7 @@ func TestStreamingPackIdentityFailurePoisonsBuilder(t *testing.T) {
 	}
 	wrong := blake2b.Sum512([]byte("wrong-sized-data!"))
 	valid := blake2b.Sum512(data)
-	builder, err := NewStreamBuilder([][]byte{publicKey}, t.TempDir(), 1<<20, func(*StreamPart) error { return nil })
+	builder, err := NewStreamBuilder(testkeys.Chains(publicKey), t.TempDir(), 1<<20, func(*StreamPart) error { return nil })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -257,12 +259,12 @@ func TestDecryptRejectsOversizedZstdWindow(t *testing.T) {
 		t.Fatal(err)
 	}
 	var ciphertext bytes.Buffer
-	if err := encryptRecipients([][]byte{publicKey}, bytes.NewReader(compressed.Bytes()), &ciphertext); err != nil {
+	if err := encryptRecipients(testkeys.Chains(publicKey), bytes.NewReader(compressed.Bytes()), &ciphertext); err != nil {
 		t.Fatal(err)
 	}
 	cipherDigest := blake2b.Sum512(ciphertext.Bytes())
 	err = DecryptAndRead(
-		bytes.NewReader(ciphertext.Bytes()), hex.EncodeToString(cipherDigest[:]), uint64(ciphertext.Len()), secretKey,
+		bytes.NewReader(ciphertext.Bytes()), hex.EncodeToString(cipherDigest[:]), uint64(ciphertext.Len()), testkeys.Ring(secretKey),
 		map[string]uint64{name: uint64(len(data))}, discardMember,
 	)
 	if err == nil {
@@ -287,27 +289,27 @@ func TestDecryptRejectsWrongRecipientAndTrailingCiphertext(t *testing.T) {
 		t.Fatal(err)
 	}
 	var compressedEncrypted bytes.Buffer
-	if err := encryptTestArchive(bytes.NewReader(archive), [][]byte{publicKey}, &compressedEncrypted); err != nil {
+	if err := encryptTestArchive(bytes.NewReader(archive), testkeys.Chains(publicKey), &compressedEncrypted); err != nil {
 		t.Fatal(err)
 	}
 	cipher := compressedEncrypted.Bytes()
 	digest := blake2b.Sum512(cipher)
 	hash := hex.EncodeToString(digest[:])
 	expected := map[string]uint64{name: 1}
-	if err := DecryptAndRead(bytes.NewReader(cipher), hash, uint64(len(cipher)), secretKey, expected, discardMember); err != nil {
+	if err := DecryptAndRead(bytes.NewReader(cipher), hash, uint64(len(cipher)), testkeys.Ring(secretKey), expected, discardMember); err != nil {
 		t.Fatalf("valid encrypted baseline rejected: %v", err)
 	}
-	if err := DecryptAndRead(bytes.NewReader(cipher), hash, uint64(len(cipher)), wrongSecret, expected, discardMember); err == nil || err.Error() != "read tar header: no recipient matched secret key" {
+	if err := DecryptAndRead(bytes.NewReader(cipher), hash, uint64(len(cipher)), testkeys.Ring(wrongSecret), expected, discardMember); err == nil || err.Error() != "read tar header: no recipient matched secret key" {
 		t.Fatalf("expected recipient rejection, got %v", err)
 	}
 	trailing := append(append([]byte(nil), cipher...), 0)
 	trailingDigest := blake2b.Sum512(trailing)
-	if err := DecryptAndRead(bytes.NewReader(trailing), hex.EncodeToString(trailingDigest[:]), uint64(len(trailing)), secretKey, expected, discardMember); err == nil || err.Error() != "ciphertext size disagrees with metadata or contains trailing bytes" {
+	if err := DecryptAndRead(bytes.NewReader(trailing), hex.EncodeToString(trailingDigest[:]), uint64(len(trailing)), testkeys.Ring(secretKey), expected, discardMember); err == nil || err.Error() != "ciphertext size disagrees with metadata or contains trailing bytes" {
 		t.Fatalf("expected trailing-ciphertext rejection, got %v", err)
 	}
 }
 
-func encryptTestArchive(input io.Reader, recipients [][]byte, output io.Writer) error {
+func encryptTestArchive(input io.Reader, recipients libsodium.KeyChains, output io.Writer) error {
 	plainReader, plainWriter := io.Pipe()
 	result := make(chan error, 1)
 	go func() {

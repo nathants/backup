@@ -1,7 +1,6 @@
 package format
 
 import (
-	"encoding/hex"
 	"fmt"
 	"io"
 	"net/url"
@@ -9,8 +8,6 @@ import (
 	"regexp"
 	"sort"
 	"strings"
-
-	"golang.org/x/crypto/blake2b"
 )
 
 const (
@@ -23,45 +20,41 @@ const (
 )
 
 var (
-	uuidPattern        = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
-	namePattern        = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,62}$`)
-	regionPattern      = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
-	objectIDPattern    = regexp.MustCompile(`^[0-9a-f]{32}$`)
-	blake2bPattern     = regexp.MustCompile(`^[0-9a-f]{128}$`)
-	sha256Pattern      = regexp.MustCompile(`^[0-9a-f]{64}$`)
-	md5Pattern         = regexp.MustCompile(`^[0-9a-f]{32}$`)
-	commitPattern      = regexp.MustCompile(`^[0-9a-f]{64}$`)
-	publicKeyPattern   = regexp.MustCompile(`^[0-9a-f]{64}$`)
-	fingerprintPattern = regexp.MustCompile(`^v1:blake2b-512:[0-9a-f]{128}$`)
+	uuidPattern     = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
+	namePattern     = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,62}$`)
+	regionPattern   = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
+	objectIDPattern = regexp.MustCompile(`^[0-9a-f]{32}$`)
+	blake2bPattern  = regexp.MustCompile(`^[0-9a-f]{128}$`)
+	sha256Pattern   = regexp.MustCompile(`^[0-9a-f]{64}$`)
+	md5Pattern      = regexp.MustCompile(`^[0-9a-f]{32}$`)
+	commitPattern   = regexp.MustCompile(`^[0-9a-f]{64}$`)
 )
 
 type RepositoryFormat struct {
-	ChecksumAlgorithms           string
-	CompressionAlgorithm         string
-	ContentHashAlgorithm         string
-	EncryptionAlgorithm          string
-	FormatVersion                string
-	GitObjectFormat              string
-	PackFormatVersion            string
-	PackHashAlgorithm            string
-	RecoveryRecipientFingerprint string
-	RepositoryUUID               string
-	TarAlgorithm                 string
+	ChecksumAlgorithms   string
+	CompressionAlgorithm string
+	ContentHashAlgorithm string
+	EncryptionAlgorithm  string
+	FormatVersion        string
+	GitObjectFormat      string
+	PackFormatVersion    string
+	PackHashAlgorithm    string
+	RepositoryUUID       string
+	TarAlgorithm         string
 }
 
-func NewRepositoryFormat(repositoryUUID, recoveryFingerprint string) RepositoryFormat {
+func NewRepositoryFormat(repositoryUUID string) RepositoryFormat {
 	return RepositoryFormat{
-		ChecksumAlgorithms:           "blake2b-512,sha256,md5",
-		CompressionAlgorithm:         "zstd",
-		ContentHashAlgorithm:         "blake2b-512",
-		EncryptionAlgorithm:          "go-libsodium-recipient-stream-v1",
-		FormatVersion:                "1",
-		GitObjectFormat:              "sha256",
-		PackFormatVersion:            "1",
-		PackHashAlgorithm:            "blake2b-512",
-		RecoveryRecipientFingerprint: recoveryFingerprint,
-		RepositoryUUID:               repositoryUUID,
-		TarAlgorithm:                 "posix-pax-go-archive-tar-v1",
+		ChecksumAlgorithms:   "blake2b-512,sha256,md5",
+		CompressionAlgorithm: "zstd",
+		ContentHashAlgorithm: "blake2b-512",
+		EncryptionAlgorithm:  "go-libsodium-recipient-stream-v1",
+		FormatVersion:        "2",
+		GitObjectFormat:      "sha256",
+		PackFormatVersion:    "1",
+		PackHashAlgorithm:    "blake2b-512",
+		RepositoryUUID:       repositoryUUID,
+		TarAlgorithm:         "posix-pax-go-archive-tar-v1",
 	}
 }
 
@@ -75,7 +68,6 @@ func (format RepositoryFormat) rows() [][]string {
 		{"git-object-format", format.GitObjectFormat},
 		{"pack-format-version", format.PackFormatVersion},
 		{"pack-hash-algorithm", format.PackHashAlgorithm},
-		{"recovery-recipient-fingerprint", format.RecoveryRecipientFingerprint},
 		{"repository-uuid", format.RepositoryUUID},
 		{"tar-algorithm", format.TarAlgorithm},
 	}
@@ -93,7 +85,7 @@ func ParseRepositoryFormat(reader io.Reader, limits Limits) (RepositoryFormat, e
 	if err != nil {
 		return RepositoryFormat{}, fmt.Errorf("FORMAT: %w", err)
 	}
-	expected := NewRepositoryFormat("00000000-0000-4000-8000-000000000000", "v1:blake2b-512:"+strings.Repeat("0", 128)).rows()
+	expected := NewRepositoryFormat("00000000-0000-4000-8000-000000000000").rows()
 	if len(rows) != len(expected) {
 		return RepositoryFormat{}, fmt.Errorf("FORMAT has %d keys, expected %d", len(rows), len(expected))
 	}
@@ -108,17 +100,16 @@ func ParseRepositoryFormat(reader io.Reader, limits Limits) (RepositoryFormat, e
 		values[row[0]] = row[1]
 	}
 	format := RepositoryFormat{
-		ChecksumAlgorithms:           values["checksum-algorithms"],
-		CompressionAlgorithm:         values["compression-algorithm"],
-		ContentHashAlgorithm:         values["content-hash-algorithm"],
-		EncryptionAlgorithm:          values["encryption-algorithm"],
-		FormatVersion:                values["format-version"],
-		GitObjectFormat:              values["git-object-format"],
-		PackFormatVersion:            values["pack-format-version"],
-		PackHashAlgorithm:            values["pack-hash-algorithm"],
-		RecoveryRecipientFingerprint: values["recovery-recipient-fingerprint"],
-		RepositoryUUID:               values["repository-uuid"],
-		TarAlgorithm:                 values["tar-algorithm"],
+		ChecksumAlgorithms:   values["checksum-algorithms"],
+		CompressionAlgorithm: values["compression-algorithm"],
+		ContentHashAlgorithm: values["content-hash-algorithm"],
+		EncryptionAlgorithm:  values["encryption-algorithm"],
+		FormatVersion:        values["format-version"],
+		GitObjectFormat:      values["git-object-format"],
+		PackFormatVersion:    values["pack-format-version"],
+		PackHashAlgorithm:    values["pack-hash-algorithm"],
+		RepositoryUUID:       values["repository-uuid"],
+		TarAlgorithm:         values["tar-algorithm"],
 	}
 	if err := format.validate(); err != nil {
 		return RepositoryFormat{}, fmt.Errorf("FORMAT: %w", err)
@@ -143,7 +134,7 @@ func (format RepositoryFormat) validate() error {
 		"compression-algorithm":  "zstd",
 		"content-hash-algorithm": "blake2b-512",
 		"encryption-algorithm":   "go-libsodium-recipient-stream-v1",
-		"format-version":         "1",
+		"format-version":         "2",
 		"git-object-format":      "sha256",
 		"pack-format-version":    "1",
 		"pack-hash-algorithm":    "blake2b-512",
@@ -156,9 +147,6 @@ func (format RepositoryFormat) validate() error {
 	}
 	if !uuidPattern.MatchString(format.RepositoryUUID) {
 		return fmt.Errorf("invalid repository UUID %q", format.RepositoryUUID)
-	}
-	if !fingerprintPattern.MatchString(format.RecoveryRecipientFingerprint) {
-		return fmt.Errorf("invalid recovery recipient fingerprint %q", format.RecoveryRecipientFingerprint)
 	}
 	return nil
 }
@@ -541,11 +529,6 @@ func ValidateCatalogs(index []IndexEntry, objects []ObjectEntry, packs []PackEnt
 		}
 	}
 	return nil
-}
-
-func RecoveryFingerprint(publicKey []byte) string {
-	digest := blake2b.Sum512(publicKey)
-	return "v1:blake2b-512:" + hex.EncodeToString(digest[:])
 }
 
 func ObjectKey(partHash, objectID string) (string, error) {

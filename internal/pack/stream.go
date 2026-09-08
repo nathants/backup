@@ -13,7 +13,9 @@ import (
 	"os"
 
 	"backup/internal/format"
+
 	"github.com/klauspost/compress/zstd"
+	"github.com/nathants/go-libsodium"
 	"golang.org/x/crypto/blake2b"
 	"golang.org/x/sys/unix"
 )
@@ -47,7 +49,7 @@ type StreamBuilder struct {
 	pipelineFail error
 }
 
-func NewStreamBuilder(recipients [][]byte, stagingDirectory string, partSize uint64, consume PartConsumer) (*StreamBuilder, error) {
+func NewStreamBuilder(recipients libsodium.KeyChains, stagingDirectory string, partSize uint64, consume PartConsumer) (*StreamBuilder, error) {
 	if len(recipients) == 0 || consume == nil {
 		return nil, fmt.Errorf("streaming pack requires recipients and a part consumer")
 	}

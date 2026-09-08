@@ -21,7 +21,6 @@ const (
 func TestFormatRoundTripAndExactKeys(t *testing.T) {
 	f := NewRepositoryFormat(
 		"123e4567-e89b-42d3-a456-426614174000",
-		"v1:blake2b-512:"+hashA,
 	)
 	data, err := f.MarshalText()
 	if err != nil {
@@ -31,11 +30,10 @@ func TestFormatRoundTripAndExactKeys(t *testing.T) {
 		"compression-algorithm\tzstd\n" +
 		"content-hash-algorithm\tblake2b-512\n" +
 		"encryption-algorithm\tgo-libsodium-recipient-stream-v1\n" +
-		"format-version\t1\n" +
+		"format-version\t2\n" +
 		"git-object-format\tsha256\n" +
 		"pack-format-version\t1\n" +
 		"pack-hash-algorithm\tblake2b-512\n" +
-		"recovery-recipient-fingerprint\tv1:blake2b-512:" + hashA + "\n" +
 		"repository-uuid\t123e4567-e89b-42d3-a456-426614174000\n" +
 		"tar-algorithm\tposix-pax-go-archive-tar-v1\n"
 	if string(data) != want {
@@ -49,7 +47,7 @@ func TestFormatRoundTripAndExactKeys(t *testing.T) {
 		t.Fatalf("round trip mismatch: %#v != %#v", got, f)
 	}
 	for _, mutation := range []string{
-		strings.Replace(want, "format-version\t1\n", "", 1),
+		strings.Replace(want, "format-version\t2\n", "", 1),
 		want + "unknown\tvalue\n",
 		strings.Replace(want, "pack-format-version\t1\n", "object-namespace\t55555555555555555555555555555555\npack-format-version\t1\n", 1),
 		strings.Replace(want, "zstd", "gzip", 1),
@@ -233,7 +231,7 @@ func TestCrossCatalogValidation(t *testing.T) {
 	}
 }
 
-func TestIgnoreAndPublicKeysAreExact(t *testing.T) {
+func TestIgnoreIsExact(t *testing.T) {
 	ignore, err := ParseIgnore(strings.NewReader("^\\./proc(?:/|$)\nfoo bar\n\n#literal\n"), DefaultLimits())
 	if err != nil {
 		t.Fatal(err)
@@ -244,22 +242,6 @@ func TestIgnoreAndPublicKeysAreExact(t *testing.T) {
 	for _, bad := range []string{"x", "[\n", "x\r\n", "x\x00\n"} {
 		if _, err := ParseIgnore(strings.NewReader(bad), DefaultLimits()); err == nil {
 			t.Fatalf("accepted invalid ignore %q", bad)
-		}
-	}
-
-	keyA := strings.Repeat("0", 64)
-	keyB := strings.Repeat("1", 64)
-	keys, err := ParsePublicKeys(strings.NewReader(keyA+"\n"+keyB+"\n"), DefaultLimits())
-	if err != nil || len(keys) != 2 {
-		t.Fatalf("keys: %v %#v", err, keys)
-	}
-	fingerprint := RecoveryFingerprint(keys[0])
-	if !strings.HasPrefix(fingerprint, "v1:blake2b-512:") {
-		t.Fatalf("bad fingerprint %q", fingerprint)
-	}
-	for _, bad := range []string{keyA, keyA + "\n" + keyA + "\n", keyB + "\n" + keyA + "\n", strings.ToUpper("a"+keyA[1:]) + "\n", "\n"} {
-		if _, err := ParsePublicKeys(strings.NewReader(bad), DefaultLimits()); err == nil {
-			t.Fatalf("accepted invalid keys %q", bad)
 		}
 	}
 }

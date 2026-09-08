@@ -11,7 +11,6 @@ import (
 	"testing"
 
 	backupapp "backup/internal/backup"
-	"backup/internal/format"
 )
 
 func TestHelpSucceeds(t *testing.T) {
@@ -46,23 +45,15 @@ func TestSubcommandHelpSucceeds(t *testing.T) {
 	}
 }
 
-func TestInitPublicKeyFileIsBoundedBeforeParsing(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "publickeys")
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0o600)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := file.Truncate(format.MaximumPublicKeysBytes + 1); err != nil {
-		_ = file.Close()
-		t.Fatal(err)
-	}
-	if err := file.Close(); err != nil {
-		t.Fatal(err)
-	}
+func TestInitStartsWithEmptyRecipients(t *testing.T) {
+	root := t.TempDir()
 	var stdout, stderr bytes.Buffer
-	err = runInit(context.Background(), []string{"--recovery-public-key", strings.Repeat("a", 64), "--public-keys", path}, &stdout, &stderr)
-	if err == nil {
-		t.Fatal("oversized public-key list was accepted")
+	if err := runInit(context.Background(), []string{"--root", root}, &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	keys, err := os.ReadFile(filepath.Join(root, ".backup", ".publickeys"))
+	if err != nil || len(keys) != 0 {
+		t.Fatalf("initial recipients: %v", err)
 	}
 }
 
@@ -100,8 +91,8 @@ func TestUnknownCommandAndMissingArgumentsAreErrors(t *testing.T) {
 		contains  string
 	}{
 		{[]string{"unknown"}, "unknown command"},
-		{[]string{"init"}, "requires --recovery-public-key"},
-		{[]string{"init", "--recovery-public-key", "ABC"}, "lowercase hexadecimal"},
+		{[]string{"init", "extra"}, "accepts no positional"},
+		{[]string{"init", "--recovery-public-key", "ABC"}, "flag provided but not defined"},
 		{[]string{"add", "extra"}, "accepts no positional"},
 		{[]string{"diff", "extra"}, "accepts no positional"},
 		{[]string{"commit", "extra"}, "accepts no positional"},
@@ -139,7 +130,7 @@ func TestRecoverResultEscapesDestination(t *testing.T) {
 	}
 }
 
-func TestSnapshotResultAndPublicKeyEncoding(t *testing.T) {
+func TestSnapshotResult(t *testing.T) {
 	var output bytes.Buffer
 	if err := printSnapshotResult(&output, backupapp.SnapshotResult{CommitID: strings.Repeat("a", 64), CompleteMirrors: []string{"a"}, LaggingMirrors: []string{"b"}}); err != nil {
 		t.Fatal(err)
@@ -147,16 +138,6 @@ func TestSnapshotResultAndPublicKeyEncoding(t *testing.T) {
 	for _, want := range []string{"commit\t" + strings.Repeat("a", 64), "complete-mirror\ta", "lagging-mirror\tb"} {
 		if !strings.Contains(output.String(), want+"\n") {
 			t.Fatalf("snapshot output %q lacks %q", output.String(), want)
-		}
-	}
-	key := strings.Repeat("a", 64)
-	decoded, err := decodePublicKey(key)
-	if err != nil || len(decoded) != 32 {
-		t.Fatalf("decode valid public key: len=%d err=%v", len(decoded), err)
-	}
-	for _, invalid := range []string{strings.Repeat("a", 63), strings.Repeat("A", 64), strings.Repeat("z", 64)} {
-		if _, err := decodePublicKey(invalid); err == nil {
-			t.Fatalf("invalid public key %q accepted", invalid)
 		}
 	}
 }

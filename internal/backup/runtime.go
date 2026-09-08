@@ -19,6 +19,9 @@ import (
 	"backup/internal/objectstore"
 	"backup/internal/repository"
 	"backup/internal/securefs"
+
+	"github.com/nathants/go-libsodium"
+	"github.com/nathants/go-libsodium/keysource"
 	"golang.org/x/sys/unix"
 )
 
@@ -729,41 +732,9 @@ func (run *runtime) mirror(name string) (localconfig.Mirror, bool) {
 	return localconfig.Mirror{}, false
 }
 
-func (run *runtime) secretKey() ([]byte, error) {
-	if value := os.Getenv("BACKUP_SECRET_KEY"); value != "" {
-		key, err := decodeSecretKey(strings.TrimSpace(value))
-		if err != nil {
-			return nil, fmt.Errorf("BACKUP_SECRET_KEY: %w", err)
-		}
-		return key, nil
-	}
-	filename := os.Getenv("BACKUP_SECRET_KEY_FILE")
-	if filename == "" {
-		return nil, fmt.Errorf("BACKUP_SECRET_KEY or BACKUP_SECRET_KEY_FILE is required")
-	}
-	fd, err := unix.Open(filename, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
-	if err != nil {
-		return nil, fmt.Errorf("open secret-key file: %w", err)
-	}
-	file := os.NewFile(uintptr(fd), filename)
-	defer func() { _ = file.Close() }()
-	info, err := file.Stat()
-	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0o077 != 0 || info.Size() < 1 || info.Size() > maximumSecretKeyFileSize {
-		return nil, fmt.Errorf("secret-key file must be a small regular file with mode 0600 or stricter")
-	}
-	data, err := io.ReadAll(io.LimitReader(file, maximumSecretKeyFileSize+1))
-	if err != nil {
-		return nil, err
-	}
-	return decodeSecretKey(strings.TrimSpace(string(data)))
-}
-
-func decodeSecretKey(value string) ([]byte, error) {
-	decoded, err := hex.DecodeString(value)
-	if err != nil || len(decoded) != 32 || strings.ToLower(value) != value {
-		return nil, fmt.Errorf("secret key must be exactly 64 lowercase hexadecimal characters")
-	}
-	return decoded, nil
+func (run *runtime) secretKey(ctx context.Context) (*libsodium.Keyring, error) {
+	libsodium.Init()
+	return keysource.Load(ctx, run.config.GitRemote)
 }
 
 func equalHashes(left, right map[string]string) bool {

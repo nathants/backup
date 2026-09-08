@@ -21,7 +21,7 @@ func incidentHarness(t *testing.T) (*integrationHarness, format.PackEntry, strin
 	h := newIntegrationHarness(t)
 	h.options.PartSize, h.options.MetadataPartSize = 1<<20, 1<<20
 	ctx := context.Background()
-	if _, err := initializePublished(ctx, h.options, InitRequest{RecoveryPublicKey: h.publicKey}); err != nil {
+	if _, err := initializePublished(ctx, h.options, h.publicKey); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(h.root, "old"), []byte("old data"), 0600); err != nil {
@@ -232,7 +232,7 @@ func TestVerifiedPendingRevisionFinalizesWithoutForgingStagedAcknowledgements(t 
 				t.Fatal("not interrupted")
 			}
 			if alternative {
-				t.Setenv("BACKUP_SECRET_KEY", fmt.Sprintf("%x", h.secretKey))
+				t.Setenv("GIT_REMOTE_AWS_SECRETKEY", fmt.Sprintf("%x", h.secretKey))
 				if _, err := RepairMetadataEdge(ctx, h.options, "local", "HEAD"); err != nil {
 					t.Fatal(err)
 				}
@@ -271,7 +271,7 @@ func TestIntegrityIncidentHealthyMirrorCanResumeWhileDamagedMirrorStaysExcluded(
 		return localFactory(ctx, pin)
 	}
 	ctx := context.Background()
-	if _, err := initializePublished(ctx, h.options, InitRequest{RecoveryPublicKey: h.publicKey}); err != nil {
+	if _, err := initializePublished(ctx, h.options, h.publicKey); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(h.root, "old"), []byte("old data"), 0600); err != nil {
@@ -432,7 +432,7 @@ func TestIntegrityIncidentLedgerRebuildAndTransientFailures(t *testing.T) {
 func TestIntegrityIncidentRestoreObservationsIgnoreSupersededHistoricalMappings(t *testing.T) {
 	h, part, snapshot := incidentHarness(t)
 	ctx := context.Background()
-	t.Setenv("BACKUP_SECRET_KEY", fmt.Sprintf("%x", h.secretKey))
+	t.Setenv("GIT_REMOTE_AWS_SECRETKEY", fmt.Sprintf("%x", h.secretKey))
 	path := filepath.Join(h.serverRoot, "objects", part.PartHash, part.ObjectID)
 	healthy, err := os.ReadFile(path)
 	if err != nil {
@@ -493,7 +493,7 @@ func TestIntegrityIncidentMetadataRepairRestoresEligibilityWithoutRemovingBadAlt
 		t.Run(map[bool]string{false: "bundle part", true: "manifest"}[manifest], func(t *testing.T) {
 			h, _, snapshot := incidentHarness(t)
 			ctx := context.Background()
-			t.Setenv("BACKUP_SECRET_KEY", fmt.Sprintf("%x", h.secretKey))
+			t.Setenv("GIT_REMOTE_AWS_SECRETKEY", fmt.Sprintf("%x", h.secretKey))
 			history, err := (repository.Validator{Repo: filepath.Join(h.root, ".backup"), Limits: format.DefaultLimits()}).ValidateHistory(snapshot)
 			if err != nil {
 				t.Fatal(err)
@@ -548,7 +548,7 @@ func TestIntegrityIncidentForwardRepairRestartsAtDurableBoundaries(t *testing.T)
 		t.Run(point, func(t *testing.T) {
 			h, part, _ := incidentHarness(t)
 			ctx := context.Background()
-			t.Setenv("BACKUP_SECRET_KEY", fmt.Sprintf("%x", h.secretKey))
+			t.Setenv("GIT_REMOTE_AWS_SECRETKEY", fmt.Sprintf("%x", h.secretKey))
 			if err := os.WriteFile(filepath.Join(h.root, "new"), []byte("new data"), 0600); err != nil {
 				t.Fatal(err)
 			}
@@ -647,7 +647,7 @@ func TestIntegrityIncidentPendingGenesisCannotReuseDamagedMetadata(t *testing.T)
 	h := newIntegrationHarness(t)
 	h.options.MetadataPartSize = 1 << 20
 	ctx := context.Background()
-	t.Setenv("BACKUP_SECRET_KEY", fmt.Sprintf("%x", h.secretKey))
+	t.Setenv("GIT_REMOTE_AWS_SECRETKEY", fmt.Sprintf("%x", h.secretKey))
 	interrupted := h.options
 	interrupted.failurePoint = func(point string) error {
 		if point == "metadata-manifest-created-before-ack" {
@@ -655,7 +655,7 @@ func TestIntegrityIncidentPendingGenesisCannotReuseDamagedMetadata(t *testing.T)
 		}
 		return nil
 	}
-	if _, err := initializePublished(ctx, interrupted, InitRequest{RecoveryPublicKey: h.publicKey}); err == nil {
+	if _, err := initializePublished(ctx, interrupted, h.publicKey); err == nil {
 		t.Fatal("genesis not interrupted")
 	}
 	run, err := openRuntime(h.options, true)

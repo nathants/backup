@@ -16,6 +16,8 @@ import (
 	"backup/internal/localconfig"
 	"backup/internal/objectstore"
 	"backup/internal/repository"
+
+	"github.com/nathants/go-libsodium"
 )
 
 const (
@@ -114,7 +116,7 @@ func Recover(ctx context.Context, options Options, request RecoverRequest) (Reco
 	if len(candidates) == 0 {
 		return result, fmt.Errorf("mirror contains no valid metadata completion manifests")
 	}
-	secretKey, err := run.secretKey()
+	secretKey, err := run.secretKey(ctx)
 	if err != nil {
 		return result, err
 	}
@@ -359,7 +361,7 @@ func recoveryLogicalEdgeLess(left, right *recoveryLogicalEdge) bool {
 	return leftKey < rightKey
 }
 
-func verifyRecoveryCandidates(ctx context.Context, client *objectstore.Client, candidates []recoveryCandidate, exactTip string, secretKey []byte, workspace string, reserveBytes uint64, retainRepository bool) ([]verifiedRecovery, []string, error) {
+func verifyRecoveryCandidates(ctx context.Context, client *objectstore.Client, candidates []recoveryCandidate, exactTip string, secretKey *libsodium.Keyring, workspace string, reserveBytes uint64, retainRepository bool) ([]verifiedRecovery, []string, error) {
 	candidateTips := make(map[string]bool)
 	for _, candidate := range candidates {
 		candidateTips[candidate.TipCommit] = true
@@ -582,7 +584,7 @@ func walkRecoveryCommitIDs(path string, visit func(string) error) error {
 	return scanner.Err()
 }
 
-func materializeAndValidateRecoveryPath(ctx context.Context, client *objectstore.Client, path recoveryPath, secretKey []byte, root, expectedTip string) (string, *repository.History, error) {
+func materializeAndValidateRecoveryPath(ctx context.Context, client *objectstore.Client, path recoveryPath, secretKey *libsodium.Keyring, root, expectedTip string) (string, *repository.History, error) {
 	bundleStage := filepath.Join(root, "bundles")
 	if err := os.Mkdir(bundleStage, 0o700); err != nil {
 		return "", nil, err

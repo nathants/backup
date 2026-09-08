@@ -73,9 +73,10 @@ func ensureDockerImages(t *testing.T, repoRoot string) {
 			}
 			return
 		}
+		context := "go-libsodium=" + filepath.Join(repoRoot, "..", "go-libsodium")
 		for _, arguments := range [][]string{
-			{"build", "--progress=plain", "-t", dockerImage, repoRoot},
-			{"build", "--progress=plain", "--target", "integration-client", "-t", dockerClientImage, repoRoot},
+			{"build", "--progress=plain", "--build-context", context, "-t", dockerImage, repoRoot},
+			{"build", "--progress=plain", "--build-context", context, "--target", "integration-client", "-t", dockerClientImage, repoRoot},
 		} {
 			command := exec.Command("docker", arguments...)
 			var output bytes.Buffer
@@ -280,7 +281,7 @@ func TestDockerRealClientTwoMirrorBackupSyncRestoreAndRecover(t *testing.T) {
 		"AWS_SHARED_CREDENTIALS_FILE": credentials,
 		"AWS_CONFIG_FILE":             awsConfig,
 		"AWS_EC2_METADATA_DISABLED":   "true",
-		"BACKUP_SECRET_KEY":           hex.EncodeToString(secretKey),
+		"GIT_REMOTE_AWS_SECRETKEY":    hex.EncodeToString(secretKey),
 	})
 	backupCommand := func(arguments ...string) string {
 		t.Helper()
@@ -295,13 +296,14 @@ func TestDockerRealClientTwoMirrorBackupSyncRestoreAndRecover(t *testing.T) {
 		return runEnvFailure(t, "", clientEnvironment, binary, arguments...)
 	}
 
-	initOutput := backupCommand("init", "--recovery-public-key", hex.EncodeToString(publicKey))
+	initOutput := backupCommand("init")
 	if outputField(t, initOutput, "publication") != "local-only" || strings.Contains(initOutput, "complete-mirror\t") || strings.Contains(initOutput, "commit\t") {
 		t.Fatalf("init claimed remote publication:\n%s", initOutput)
 	}
 	if refs := strings.TrimSpace(run(t, "", "git", "--git-dir", remote, "for-each-ref", "--format=%(objectname)")); refs != "" {
 		t.Fatalf("init created remote history: %s", refs)
 	}
+	writeFile(t, filepath.Join(source, ".backup", ".publickeys"), []byte(hex.EncodeToString(publicKey)+"\n"), 0644)
 	writeFile(t, filepath.Join(source, ".backup", "ignore"), []byte("^\\./\\.backup-config$\n"), 0o644)
 	if err := os.Mkdir(filepath.Join(source, "dir"), 0o700); err != nil {
 		t.Fatal(err)
@@ -563,7 +565,7 @@ func TestDockerWholeRootClientContainerAgainstSeparateServer(t *testing.T) {
 			"-e", "AWS_SHARED_CREDENTIALS_FILE=/test-config/credentials",
 			"-e", "AWS_CONFIG_FILE=/test-config/aws-config",
 			"-e", "AWS_EC2_METADATA_DISABLED=true",
-			"-e", "BACKUP_SECRET_KEY=" + hex.EncodeToString(secretKey),
+			"-e", "GIT_REMOTE_AWS_SECRETKEY=" + hex.EncodeToString(secretKey),
 			"--entrypoint", "/usr/local/bin/backup", dockerClientImage,
 		}
 		dockerArguments = append(dockerArguments, arguments...)
@@ -576,10 +578,11 @@ func TestDockerWholeRootClientContainerAgainstSeparateServer(t *testing.T) {
 		return append(result, arguments...)
 	}
 
-	initOutput := runClient(withCommon("init", "--recovery-public-key", hex.EncodeToString(publicKey))...)
+	initOutput := runClient(withCommon("init")...)
 	if outputField(t, initOutput, "publication") != "local-only" || strings.Contains(initOutput, "commit\t") {
 		t.Fatalf("unexpected whole-root init output:\n%s", initOutput)
 	}
+	run(t, "", "docker", "run", "--rm", "--label", dockerRunLabel, "-v", stateVolume+":/.backup", "--entrypoint", "/bin/sh", dockerClientImage, "-c", "printf '%s\\n' "+hex.EncodeToString(publicKey)+" > /.backup/.publickeys && chmod 0644 /.backup/.publickeys")
 	ignore := `printf '%s\n' '^\./(\.dockerenv|etc|go|metadata\.git|out|restore|src|test-config|usr|var)(/|$)' > /.backup/ignore && chmod 0644 /.backup/ignore`
 	run(t, "", "docker", "run", "--rm", "--label", dockerRunLabel, "-v", stateVolume+":/.backup", "--entrypoint", "/bin/sh", dockerClientImage, "-c", ignore)
 	addOutput := runClient(withCommon("add")...)
@@ -934,7 +937,7 @@ func cleanEnvironment(overrides map[string]string) []string {
 	environment := make([]string, 0, len(os.Environ())+len(overrides))
 	for _, entry := range os.Environ() {
 		name, _, _ := strings.Cut(entry, "=")
-		if strings.HasPrefix(name, "AWS_") || strings.HasPrefix(name, "BACKUP_") {
+		if strings.HasPrefix(name, "AWS_") || strings.HasPrefix(name, "BACKUP_") || strings.HasPrefix(name, "GIT_REMOTE_AWS_") {
 			continue
 		}
 		if _, replaced := overrides[name]; replaced {

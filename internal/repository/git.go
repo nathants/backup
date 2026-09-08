@@ -93,7 +93,7 @@ func (validator Validator) validateCommit(commitID string) (ValidatedCommit, err
 		gitBlobs[name] = gitBlob{objectID: entry.objectID, size: declared}
 		blobIDs[name] = entry.objectID
 	}
-	state, err := parseStreamState(gitStateSource{validator: validator, blobs: gitBlobs}, validator.effectiveLimits())
+	state, err := parseStreamState(gitStateSource{validator: validator, blobs: gitBlobs}, validator.effectiveLimits(), false)
 	if err != nil {
 		return ValidatedCommit{}, err
 	}
@@ -421,7 +421,7 @@ func sanitizedGitEnvironment() []string {
 		"AWS_ACCESS_KEY_ID": true, "AWS_SECRET_ACCESS_KEY": true, "AWS_SESSION_TOKEN": true,
 		"AWS_PROFILE": true, "AWS_DEFAULT_PROFILE": true, "AWS_SHARED_CREDENTIALS_FILE": true, "AWS_CONFIG_FILE": true,
 		"AWS_CA_BUNDLE": true, "SSL_CERT_FILE": true, "SSL_CERT_DIR": true,
-		"GIT_REMOTE_AWS_PUBLICKEY": true, "GIT_REMOTE_AWS_SECRETKEY": true, "GIT_REMOTE_AWS_SECRETKEY_CMD": true,
+		"GIT_REMOTE_AWS_PUBLICKEY": true, "GIT_REMOTE_AWS_SECRETKEY": true, "GIT_REMOTE_AWS_SECRETKEY_FILE": true, "GIT_REMOTE_AWS_SECRETKEY_CMD": true,
 	}
 	result := []string{"LC_ALL=C", "LANG=C", "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null", "GIT_TERMINAL_PROMPT=0", "GIT_OPTIONAL_LOCKS=0"}
 	for _, item := range os.Environ() {

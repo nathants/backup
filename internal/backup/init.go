@@ -4,15 +4,15 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"sort"
 
 	"backup/internal/format"
 	"backup/internal/objectstore"
 	"backup/internal/repository"
+
 	"golang.org/x/sys/unix"
 )
 
-func Init(ctx context.Context, options Options, request InitRequest) (InitResult, error) {
+func Init(ctx context.Context, options Options) (InitResult, error) {
 	normalized, err := options.normalized()
 	if err != nil {
 		return InitResult{}, err
@@ -25,29 +25,11 @@ func Init(ctx context.Context, options Options, request InitRequest) (InitResult
 	if err := ctx.Err(); err != nil {
 		return InitResult{}, err
 	}
-	if len(request.RecoveryPublicKey) != 32 {
-		return InitResult{}, fmt.Errorf("a 32-byte permanent recovery public key is required")
-	}
-	keys := cloneKeys(request.PublicKeys)
-	found := false
-	for _, key := range keys {
-		if string(key) == string(request.RecoveryPublicKey) {
-			found = true
-		}
-	}
-	if !found {
-		keys = append(keys, append([]byte(nil), request.RecoveryPublicKey...))
-	}
-	sort.Slice(keys, func(left, right int) bool { return string(keys[left]) < string(keys[right]) })
-	publicKeyBytes, err := format.MarshalPublicKeys(keys)
-	if err != nil {
-		return InitResult{}, err
-	}
 	uuid, err := randomUUID()
 	if err != nil {
 		return InitResult{}, err
 	}
-	repositoryFormat := format.NewRepositoryFormat(uuid, format.RecoveryFingerprint(request.RecoveryPublicKey))
+	repositoryFormat := format.NewRepositoryFormat(uuid)
 	formatBytes, err := repositoryFormat.MarshalText()
 	if err != nil {
 		return InitResult{}, err
@@ -58,7 +40,7 @@ func Init(ctx context.Context, options Options, request InitRequest) (InitResult
 		"objects.tsv": {},
 		"packs.tsv":   {},
 		"ignore":      {},
-		".publickeys": publicKeyBytes,
+		".publickeys": {},
 		"mirrors.tsv": {},
 	}
 	// InitializeLocal requires an absent or empty real directory. On failure,
@@ -99,12 +81,4 @@ func acquireInitializationLock(root string) (*os.File, error) {
 		return nil, fmt.Errorf("another backup initialization is in progress: %w", err)
 	}
 	return file, nil
-}
-
-func cloneKeys(keys [][]byte) [][]byte {
-	result := make([][]byte, len(keys))
-	for index, key := range keys {
-		result[index] = append([]byte(nil), key...)
-	}
-	return result
 }

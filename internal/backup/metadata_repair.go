@@ -13,6 +13,8 @@ import (
 	"backup/internal/metadatachain"
 	"backup/internal/objectstore"
 	"backup/internal/repository"
+
+	"github.com/nathants/go-libsodium"
 )
 
 func RepairMetadataEdge(ctx context.Context, options Options, destinationMirror, revision string) (MetadataRepairResult, error) {
@@ -67,7 +69,7 @@ func RepairMetadataEdge(ctx context.Context, options Options, destinationMirror,
 	if err != nil {
 		return result, err
 	}
-	secretKey, err := run.secretKey()
+	secretKey, err := run.secretKey(ctx)
 	if err != nil {
 		return result, err
 	}
@@ -96,7 +98,9 @@ func RepairMetadataEdge(ctx context.Context, options Options, destinationMirror,
 	if err != nil {
 		return result, err
 	}
-	built, err := metadatachain.Build(run.repo, selected.State.Format.RepositoryUUID, base, selected.CommitID, uint64(selectedIndex), selected.State.PublicKeys, buildDirectory, partSize, ciphertextBudget)
+	// This is new encryption even when the repaired Git edge is historical.
+	// Use today's validated recipient policy, not superseded historical keys.
+	built, err := metadatachain.Build(run.repo, selected.State.Format.RepositoryUUID, base, selected.CommitID, uint64(selectedIndex), head.State.PublicKeys, buildDirectory, partSize, ciphertextBudget)
 	if err != nil {
 		return result, err
 	}
@@ -189,7 +193,7 @@ func (reader *serialFileReader) Close() error {
 	return err
 }
 
-func validateRebuiltMetadataEdge(source *repository.Managed, built metadatachain.Result, repositoryUUID, base, tip string, secretKey []byte, stage string, reserveBytes uint64) error {
+func validateRebuiltMetadataEdge(source *repository.Managed, built metadatachain.Result, repositoryUUID, base, tip string, secretKey *libsodium.Keyring, stage string, reserveBytes uint64) error {
 	if built.Manifest.BundleSize > ^uint64(0)/2 {
 		return fmt.Errorf("metadata-repair workspace requirement overflows")
 	}

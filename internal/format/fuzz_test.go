@@ -9,7 +9,6 @@ import (
 func FuzzCanonicalMetadataParsers(f *testing.F) {
 	validFormat, err := NewRepositoryFormat(
 		"123e4567-e89b-42d3-a456-426614174000",
-		"v1:blake2b-512:"+strings.Repeat("0", 128),
 	).MarshalText()
 	if err != nil {
 		f.Fatal(err)
@@ -24,8 +23,7 @@ func FuzzCanonicalMetadataParsers(f *testing.F) {
 		{3, nil},
 		{4, []byte("local\tbackup-server\ts3://bucket/prefix\thttps://backup.example\tus-east-1\n")},
 		{5, nil},
-		{6, []byte(strings.Repeat("0", 64) + "\n")},
-		{7, []byte("^\\./proc(?:/|$)\n")},
+		{6, []byte("^\\./proc(?:/|$)\n")},
 	}
 	for _, seed := range seeds {
 		f.Add(seed.kind, seed.data)
@@ -37,7 +35,7 @@ func FuzzCanonicalMetadataParsers(f *testing.F) {
 		limits := DefaultLimits()
 		var canonical []byte
 		var err error
-		switch kind % 8 {
+		switch kind % 7 {
 		case 0:
 			var value RepositoryFormat
 			value, err = ParseRepositoryFormat(bytes.NewReader(data), limits)
@@ -75,12 +73,6 @@ func FuzzCanonicalMetadataParsers(f *testing.F) {
 				canonical, err = value.MarshalText()
 			}
 		case 6:
-			var value [][]byte
-			value, err = ParsePublicKeys(bytes.NewReader(data), limits)
-			if err == nil {
-				canonical, err = MarshalPublicKeys(value)
-			}
-		case 7:
 			var value Ignore
 			value, err = ParseIgnore(bytes.NewReader(data), limits)
 			if err == nil {

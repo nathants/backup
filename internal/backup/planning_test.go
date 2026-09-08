@@ -13,13 +13,14 @@ import (
 	"backup/internal/localconfig"
 	"backup/internal/objectstore"
 	"backup/internal/repository"
+
 	"golang.org/x/crypto/blake2b"
 )
 
 func TestAddReplacesPlanAndCommitCapturesOnlyPlannedPathsAtCommitTime(t *testing.T) {
 	harness := newIntegrationHarness(t)
 	ctx := context.Background()
-	if _, err := initializePublished(ctx, harness.options, InitRequest{RecoveryPublicKey: harness.publicKey}); err != nil {
+	if _, err := initializePublished(ctx, harness.options, harness.publicKey); err != nil {
 		t.Fatal(err)
 	}
 	alpha := filepath.Join(harness.root, "alpha")
@@ -116,7 +117,7 @@ func TestCommitHandlesAllPlannedPathsDisappearingAndRejectsConfigDrift(t *testin
 	t.Run("all paths disappearing requires add allow-empty", func(t *testing.T) {
 		harness := newIntegrationHarness(t)
 		ctx := context.Background()
-		genesis, err := initializePublished(ctx, harness.options, InitRequest{RecoveryPublicKey: harness.publicKey})
+		genesis, err := initializePublished(ctx, harness.options, harness.publicKey)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -171,7 +172,7 @@ func TestCommitHandlesAllPlannedPathsDisappearingAndRejectsConfigDrift(t *testin
 	t.Run("tracked configuration changed after add is refused", func(t *testing.T) {
 		harness := newIntegrationHarness(t)
 		ctx := context.Background()
-		if _, err := initializePublished(ctx, harness.options, InitRequest{RecoveryPublicKey: harness.publicKey}); err != nil {
+		if _, err := initializePublished(ctx, harness.options, harness.publicKey); err != nil {
 			t.Fatal(err)
 		}
 		if err := os.WriteFile(filepath.Join(harness.root, "file"), []byte("payload"), 0o600); err != nil {
@@ -193,7 +194,7 @@ func TestCaptureWorkspaceCapacityAndExternalSpool(t *testing.T) {
 	t.Run("insufficient capacity fails before capture and is resumable", func(t *testing.T) {
 		harness := newIntegrationHarness(t)
 		ctx := context.Background()
-		if _, err := initializePublished(ctx, harness.options, InitRequest{RecoveryPublicKey: harness.publicKey}); err != nil {
+		if _, err := initializePublished(ctx, harness.options, harness.publicKey); err != nil {
 			t.Fatal(err)
 		}
 		if err := os.WriteFile(filepath.Join(harness.root, "file"), []byte("payload"), 0o600); err != nil {
@@ -217,7 +218,7 @@ func TestCaptureWorkspaceCapacityAndExternalSpool(t *testing.T) {
 	t.Run("external spool uses and removes repository child", func(t *testing.T) {
 		harness := newIntegrationHarness(t)
 		ctx := context.Background()
-		if _, err := initializePublished(ctx, harness.options, InitRequest{RecoveryPublicKey: harness.publicKey}); err != nil {
+		if _, err := initializePublished(ctx, harness.options, harness.publicKey); err != nil {
 			t.Fatal(err)
 		}
 		if err := os.WriteFile(filepath.Join(harness.root, "file"), []byte("external spool payload"), 0o600); err != nil {
@@ -241,7 +242,7 @@ func TestCaptureWorkspaceCapacityAndExternalSpool(t *testing.T) {
 	t.Run("external spool inside included source is rejected", func(t *testing.T) {
 		harness := newIntegrationHarness(t)
 		ctx := context.Background()
-		if _, err := initializePublished(ctx, harness.options, InitRequest{RecoveryPublicKey: harness.publicKey}); err != nil {
+		if _, err := initializePublished(ctx, harness.options, harness.publicKey); err != nil {
 			t.Fatal(err)
 		}
 		if err := os.WriteFile(filepath.Join(harness.root, "file"), []byte("payload"), 0o600); err != nil {
@@ -267,7 +268,7 @@ func TestCompletedPackResumeSkipsCapturedPathsAndIncompletePackRestarts(t *testi
 		harness.options.PackTarget = 1
 		harness.options.PartSize = 1 << 20
 		ctx := context.Background()
-		if _, err := initializePublished(ctx, harness.options, InitRequest{RecoveryPublicKey: harness.publicKey}); err != nil {
+		if _, err := initializePublished(ctx, harness.options, harness.publicKey); err != nil {
 			t.Fatal(err)
 		}
 		for _, item := range []struct{ name, data string }{{"alpha", "alpha-original"}, {"beta", "beta-original"}} {
@@ -299,7 +300,7 @@ func TestCompletedPackResumeSkipsCapturedPathsAndIncompletePackRestarts(t *testi
 		if err != nil {
 			t.Fatalf("resume reread an already completed pack: %v", err)
 		}
-		t.Setenv("BACKUP_SECRET_KEY", fmt.Sprintf("%x", harness.secretKey))
+		t.Setenv("GIT_REMOTE_AWS_SECRETKEY", fmt.Sprintf("%x", harness.secretKey))
 		target := t.TempDir()
 		if _, err := Restore(ctx, harness.options, RestoreRequest{Pattern: `^\./alpha$`, Revision: result.CommitID, TargetRoot: target}); err != nil {
 			t.Fatal(err)
@@ -312,7 +313,7 @@ func TestCompletedPackResumeSkipsCapturedPathsAndIncompletePackRestarts(t *testi
 	t.Run("incomplete pack restarts from current source", func(t *testing.T) {
 		harness := newIntegrationHarness(t)
 		ctx := context.Background()
-		if _, err := initializePublished(ctx, harness.options, InitRequest{RecoveryPublicKey: harness.publicKey}); err != nil {
+		if _, err := initializePublished(ctx, harness.options, harness.publicKey); err != nil {
 			t.Fatal(err)
 		}
 		path := filepath.Join(harness.root, "file")
@@ -336,7 +337,7 @@ func TestCompletedPackResumeSkipsCapturedPathsAndIncompletePackRestarts(t *testi
 		if err != nil {
 			t.Fatal(err)
 		}
-		t.Setenv("BACKUP_SECRET_KEY", fmt.Sprintf("%x", harness.secretKey))
+		t.Setenv("GIT_REMOTE_AWS_SECRETKEY", fmt.Sprintf("%x", harness.secretKey))
 		target := t.TempDir()
 		if _, err := Restore(ctx, harness.options, RestoreRequest{Pattern: `^\./file$`, Revision: result.CommitID, TargetRoot: target}); err != nil {
 			t.Fatal(err)
@@ -352,7 +353,7 @@ func TestTransactionControlDoesNotEmbedPlanOrCatalogRows(t *testing.T) {
 	harness.options.PackTarget = 1 << 20
 	harness.options.PartSize = 1 << 20
 	ctx := context.Background()
-	if _, err := initializePublished(ctx, harness.options, InitRequest{RecoveryPublicKey: harness.publicKey}); err != nil {
+	if _, err := initializePublished(ctx, harness.options, harness.publicKey); err != nil {
 		t.Fatal(err)
 	}
 	for index := 0; index < 100; index++ {
@@ -387,7 +388,7 @@ func TestCaptureWarningsRemainBoundedAndSummarizedAcrossResume(t *testing.T) {
 	harness.options.PackTarget = 1 << 20
 	harness.options.PartSize = 1 << 20
 	ctx := context.Background()
-	if _, err := initializePublished(ctx, harness.options, InitRequest{RecoveryPublicKey: harness.publicKey}); err != nil {
+	if _, err := initializePublished(ctx, harness.options, harness.publicKey); err != nil {
 		t.Fatal(err)
 	}
 	for index := 0; index < 105; index++ {

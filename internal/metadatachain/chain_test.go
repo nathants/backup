@@ -11,6 +11,8 @@ import (
 
 	"backup/internal/format"
 	"backup/internal/repository"
+	"backup/internal/testkeys"
+
 	"github.com/nathants/go-libsodium"
 )
 
@@ -23,7 +25,7 @@ func TestBuildManifestPartsAndDecryptBundle(t *testing.T) {
 	repoPath := initBundleRepo(t)
 	tip := strings.TrimSpace(run(t, repoPath, "rev-parse", "HEAD"))
 	repo := &repository.Managed{Directory: repoPath, Branch: "main"}
-	result, err := Build(repo, "123e4567-e89b-42d3-a456-426614174000", "", tip, 0, [][]byte{publicKey}, filepath.Join(t.TempDir(), "stage"), 128, ^uint64(0))
+	result, err := Build(repo, "123e4567-e89b-42d3-a456-426614174000", "", tip, 0, testkeys.Chains(publicKey), filepath.Join(t.TempDir(), "stage"), 128, ^uint64(0))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,7 +49,7 @@ func TestBuildManifestPartsAndDecryptBundle(t *testing.T) {
 		encrypted.Write(data)
 	}
 	var bundle bytes.Buffer
-	if err := Decrypt(bytes.NewReader(encrypted.Bytes()), result.Manifest.BundleHash, result.Manifest.BundleSize, secretKey, &bundle); err != nil {
+	if err := Decrypt(bytes.NewReader(encrypted.Bytes()), result.Manifest.BundleHash, result.Manifest.BundleSize, testkeys.Ring(secretKey), &bundle); err != nil {
 		t.Fatal(err)
 	}
 	originalPath := filepath.Join(t.TempDir(), "original.bundle")
@@ -80,7 +82,7 @@ func TestIncrementalManifest(t *testing.T) {
 	run(t, repoPath, "add", "file")
 	run(t, repoPath, "-c", "user.name=x", "-c", "user.email=x@x", "commit", "-m", "two")
 	tip := strings.TrimSpace(run(t, repoPath, "rev-parse", "HEAD"))
-	result, err := Build(&repository.Managed{Directory: repoPath, Branch: "main"}, "123e4567-e89b-42d3-a456-426614174000", base, tip, 1, [][]byte{publicKey}, filepath.Join(t.TempDir(), "stage"), 1<<20, ^uint64(0))
+	result, err := Build(&repository.Managed{Directory: repoPath, Branch: "main"}, "123e4567-e89b-42d3-a456-426614174000", base, tip, 1, testkeys.Chains(publicKey), filepath.Join(t.TempDir(), "stage"), 1<<20, ^uint64(0))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,7 +100,7 @@ func TestBuildEnforcesCiphertextBudgetAndCleansParts(t *testing.T) {
 	repoPath := initBundleRepo(t)
 	tip := strings.TrimSpace(run(t, repoPath, "rev-parse", "HEAD"))
 	stage := filepath.Join(t.TempDir(), "stage")
-	_, err = Build(&repository.Managed{Directory: repoPath, Branch: "main"}, "123e4567-e89b-42d3-a456-426614174000", "", tip, 0, [][]byte{publicKey}, stage, 128, 1)
+	_, err = Build(&repository.Managed{Directory: repoPath, Branch: "main"}, "123e4567-e89b-42d3-a456-426614174000", "", tip, 0, testkeys.Chains(publicKey), stage, 128, 1)
 	if err == nil || !strings.Contains(err.Error(), "staging budget") {
 		t.Fatalf("tiny ciphertext budget was accepted: %v", err)
 	}
@@ -120,16 +122,16 @@ func TestDecryptRejectsTrailingOrWrongHash(t *testing.T) {
 		t.Fatal(err)
 	}
 	var encrypted bytes.Buffer
-	if err := encrypt(bytes.NewReader([]byte("bundle")), [][]byte{publicKey}, &encrypted); err != nil {
+	if err := encrypt(bytes.NewReader([]byte("bundle")), testkeys.Chains(publicKey), &encrypted); err != nil {
 		t.Fatal(err)
 	}
 	object := hashBytes(encrypted.Bytes())
 	trailing := append(append([]byte(nil), encrypted.Bytes()...), 0)
 	trailingObject := hashBytes(trailing)
-	if err := Decrypt(bytes.NewReader(trailing), trailingObject.BLAKE2b, trailingObject.Size, secretKey, io.Discard); err == nil {
+	if err := Decrypt(bytes.NewReader(trailing), trailingObject.BLAKE2b, trailingObject.Size, testkeys.Ring(secretKey), io.Discard); err == nil {
 		t.Fatal("trailing ciphertext accepted")
 	}
-	if err := Decrypt(bytes.NewReader(encrypted.Bytes()), strings.Repeat("0", 128), object.Size, secretKey, io.Discard); err == nil {
+	if err := Decrypt(bytes.NewReader(encrypted.Bytes()), strings.Repeat("0", 128), object.Size, testkeys.Ring(secretKey), io.Discard); err == nil {
 		t.Fatal("wrong hash accepted")
 	}
 }

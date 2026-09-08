@@ -7,6 +7,8 @@ import (
 	"io"
 	"testing"
 
+	"backup/internal/testkeys"
+
 	"github.com/klauspost/compress/zstd"
 	"golang.org/x/crypto/blake2b"
 )
@@ -41,7 +43,7 @@ func readFuzzPack(tb testing.TB, data, secret []byte) error {
 	memberHash := hex.EncodeToString(memberDigest[:])
 	var plaintext bytes.Buffer
 	seen := 0
-	err := DecryptAndRead(bytes.NewReader(data), hex.EncodeToString(digest[:]), uint64(len(data)), secret,
+	err := DecryptAndRead(bytes.NewReader(data), hex.EncodeToString(digest[:]), uint64(len(data)), testkeys.Ring(secret),
 		map[string]uint64{memberHash: uint64(len(fuzzPackPayload))},
 		func(hash string, size uint64, reader io.Reader) error {
 			if hash != memberHash || size != uint64(len(fuzzPackPayload)) {
@@ -60,7 +62,7 @@ func readFuzzPack(tb testing.TB, data, secret []byte) error {
 func FuzzEncryptedPackReader(f *testing.F) {
 	key := fuzzPackKey(f)
 	var valid bytes.Buffer
-	if err := encryptTestArchive(bytes.NewReader(fuzzPackArchive(f)), [][]byte{key.PublicKey().Bytes()}, &valid); err != nil {
+	if err := encryptTestArchive(bytes.NewReader(fuzzPackArchive(f)), testkeys.Chains(key.PublicKey().Bytes()), &valid); err != nil {
 		f.Fatal(err)
 	}
 	if err := readFuzzPack(f, valid.Bytes(), key.Bytes()); err != nil {
@@ -96,9 +98,9 @@ func FuzzAuthenticatedPackReader(f *testing.F) {
 		var encrypted bytes.Buffer
 		var err error
 		if isCompressed {
-			err = encryptRecipients([][]byte{key.PublicKey().Bytes()}, bytes.NewReader(data), &encrypted)
+			err = encryptRecipients(testkeys.Chains(key.PublicKey().Bytes()), bytes.NewReader(data), &encrypted)
 		} else {
-			err = encryptTestArchive(bytes.NewReader(data), [][]byte{key.PublicKey().Bytes()}, &encrypted)
+			err = encryptTestArchive(bytes.NewReader(data), testkeys.Chains(key.PublicKey().Bytes()), &encrypted)
 		}
 		if err != nil {
 			tb.Fatal(err)

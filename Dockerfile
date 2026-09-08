@@ -1,6 +1,10 @@
-FROM golang:1.25.6-bookworm AS build
+FROM golang:1.27.1-bookworm AS build
 RUN apt-get update && apt-get install --yes --no-install-recommends libsodium-dev pkg-config && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
+# Supply the sibling checkout with --build-context go-libsodium=../go-libsodium.
+# Copy only build inputs, not Git history or unrelated local files.
+COPY --from=go-libsodium go.mod go.sum *.go /go-libsodium/
+COPY --from=go-libsodium keysource/*.go /go-libsodium/keysource/
 COPY go.mod go.sum ./
 RUN go mod download
 COPY cmd ./cmd

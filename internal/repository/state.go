@@ -4,6 +4,8 @@ import (
 	"fmt"
 
 	"backup/internal/format"
+
+	"github.com/nathants/go-libsodium"
 )
 
 var RequiredBlobNames = []string{".publickeys", "FORMAT", "ignore", "index.tsv", "mirrors.tsv", "objects.tsv", "packs.tsv"}
@@ -11,7 +13,7 @@ var RequiredBlobNames = []string{".publickeys", "FORMAT", "ignore", "index.tsv",
 type State struct {
 	Format     format.RepositoryFormat
 	Ignore     format.Ignore
-	PublicKeys [][]byte
+	PublicKeys libsodium.KeyChains
 	Mirrors    []format.Mirror
 
 	source      stateSource
@@ -26,6 +28,20 @@ type State struct {
 // seven blobs in memory. Validation itself uses the same streaming parser as
 // Git-backed and file-backed states.
 func ParseState(blobs map[string][]byte, limits format.Limits) (State, error) {
+	return parseMemoryState(blobs, limits, false)
+}
+
+// ParsePreparationState permits an empty recipient file only in local, unborn preparation.
+func ParsePreparationState(blobs map[string][]byte, limits format.Limits) (State, error) {
+	for _, name := range []string{"index.tsv", "objects.tsv", "packs.tsv"} {
+		if len(blobs[name]) != 0 {
+			return State{}, fmt.Errorf("preparation catalogs must be empty")
+		}
+	}
+	return parseMemoryState(blobs, limits, true)
+}
+
+func parseMemoryState(blobs map[string][]byte, limits format.Limits, preparation bool) (State, error) {
 	if len(blobs) != len(RequiredBlobNames) {
 		return State{}, fmt.Errorf("metadata tree contains %d blobs, expected exactly %d", len(blobs), len(RequiredBlobNames))
 	}
@@ -42,14 +58,14 @@ func ParseState(blobs map[string][]byte, limits format.Limits) (State, error) {
 			return State{}, fmt.Errorf("metadata tree contains unexpected blob %q", name)
 		}
 	}
-	return parseStreamState(copied, limits)
+	return parseStreamState(copied, limits, preparation)
 }
 
 func (state State) Validate() error {
 	if state.source == nil || len(state.BlobHashes) != len(RequiredBlobNames) || len(state.BlobSizes) != len(RequiredBlobNames) {
 		return fmt.Errorf("metadata state is incomplete")
 	}
-	if err := format.RequireRecoveryRecipient(state.PublicKeys, state.Format.RecoveryRecipientFingerprint); err != nil {
+	if _, err := state.PublicKeys.Latest(); err != nil {
 		return err
 	}
 	return nil

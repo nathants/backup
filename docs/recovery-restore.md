@@ -12,7 +12,7 @@ identity rather than recover the old one.
    old checkout, operational ledger, pending transactions, source files, and
    configuration separately; do not reset, clean, delete, or overwrite them.
    Neither the original source tree nor the original primary is needed below.
-2. Keep the permanent recovery secret (or another eligible historical recipient),
+2. Keep an eligible historical private key chain,
    ordinary mirror credentials, trusted mirror topology, and CA roots available.
    `TRUSTED_CONFIG` below is your independently trusted local configuration, **not**
    routing information copied from recovered `mirrors.tsv`. It must contain the
@@ -38,8 +38,33 @@ identity rather than recover the old one.
      separate from the preserved data, config, and recovered bare repository.
    - `BACKUP_BIN`: optional path to the reviewed binary; defaults to `backup` on PATH.
 
-   Export `BACKUP_SECRET_KEY` and configure the ordinary AWS credential profiles
-   as for normal restore. No provider administrator credential is needed.
+   Configure one shared [secret source](key-management.md#load-secrets-on-demand)
+   and the ordinary AWS credential profiles. No provider administrator credential
+   is needed. **Check the secret lookup identity before repinning:** recovery uses
+   the original trusted `git-remote` argument, but the restore below passes the
+   exact local `$RECOVERED` path to a command loader. A URL-pinned loader must not
+   silently select a different secret or treat that path as another repository.
+
+   For an on-demand source, prepare a private rescue executable that accepts only
+   this exact `$RECOVERED` path and invokes your original loader with the original
+   trusted remote URL. For example, with those two literal values substituted:
+
+   ```sh
+   #!/bin/sh
+   [ "$#" = 1 ] && [ "$1" = '/safe/recovered.git' ] || exit 2
+   exec /private/original-loader 'aws://original-bucket+table/repository'
+   ```
+
+   Make it executable only by you. Before the rescue block, unset
+   `GIT_REMOTE_AWS_SECRETKEY` and `GIT_REMOTE_AWS_SECRETKEY_FILE`, then set
+   `GIT_REMOTE_AWS_SECRETKEY_CMD` to that rescue executable. Keep the original source
+   for any further `recover` invocation using the original config. This is an
+   explicit local operator mapping, never routing inferred from recovered metadata.
+
+   Alternatively, select an already retained eligible private-chain file with
+   `GIT_REMOTE_AWS_SECRETKEY_FILE`, clearing both other sources. No new plaintext
+   secret file is required when using the on-demand mapping. Apply the same source
+   selection to subsequent selected/historical restores from this rescue checkout.
 
 ## Manual promotion, local repinning, and restore
 

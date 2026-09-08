@@ -18,6 +18,8 @@ import (
 	"backup/internal/objectstore"
 	"backup/internal/pack"
 	"backup/internal/repository"
+
+	"github.com/nathants/go-libsodium"
 	"golang.org/x/crypto/blake2b"
 	"golang.org/x/sys/unix"
 )
@@ -370,7 +372,7 @@ type restorePackStager struct {
 	ctx       context.Context
 	run       *runtime
 	catalog   repository.State
-	secretKey []byte
+	secretKey *libsodium.Keyring
 	selection restoreSelection
 	all       *restoreRows
 	selected  *restoreRows
@@ -387,7 +389,7 @@ type restorePackStager struct {
 	wanted         map[string]uint64
 }
 
-func stageSelectedContentStream(ctx context.Context, run *runtime, catalog repository.State, secretKey []byte, selection restoreSelection) (returnErr error) {
+func stageSelectedContentStream(ctx context.Context, run *runtime, catalog repository.State, secretKey *libsodium.Keyring, selection restoreSelection) (returnErr error) {
 	all, err := openRestoreRows(selection.allObjectsByPack, 3)
 	if err != nil {
 		return err

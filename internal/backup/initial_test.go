@@ -30,7 +30,7 @@ func TestInitialLocalWorkflowWithoutRemotes(t *testing.T) {
 		return nil, fmt.Errorf("unexpected network client during local preparation")
 	}
 	ctx := context.Background()
-	result, err := Init(ctx, options, InitRequest{RecoveryPublicKey: h.publicKey})
+	result, err := initWithKeys(ctx, options, h.publicKey)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +88,7 @@ func TestInitialLocalWorkflowWithoutRemotes(t *testing.T) {
 	if len(paths) != 1 || paths[0] != "./keep" {
 		t.Fatalf("first snapshot path set: %v", paths)
 	}
-	t.Setenv("BACKUP_SECRET_KEY", fmt.Sprintf("%x", h.secretKey))
+	t.Setenv("GIT_REMOTE_AWS_SECRETKEY", fmt.Sprintf("%x", h.secretKey))
 	target := t.TempDir()
 	if _, err := Restore(ctx, h.options, RestoreRequest{Pattern: ".*", Revision: committed.CommitID, TargetRoot: target}); err != nil {
 		t.Fatal(err)
@@ -107,8 +107,8 @@ func TestInitialLocalWorkflowWithoutRemotes(t *testing.T) {
 
 // Unrelated history/repair tests need a completed empty base. Exercise the real
 // public lifecycle with an explicit empty plan, not the old init publication.
-func initializePublished(ctx context.Context, options Options, request InitRequest) (result SnapshotResult, returnErr error) {
-	if _, err := Init(ctx, options, request); err != nil {
+func initializePublished(ctx context.Context, options Options, publicKey []byte) (result SnapshotResult, returnErr error) {
+	if _, err := initWithKeys(ctx, options, publicKey); err != nil {
 		return SnapshotResult{}, err
 	}
 	// This fixture starts with only a trusted config in its source root. Keep
@@ -139,7 +139,7 @@ func TestInitialPublicationRestartBoundaries(t *testing.T) {
 			h.options.PartSize = 1 << 20
 			h.options.MetadataPartSize = 1 << 20
 			ctx := context.Background()
-			if _, err := Init(ctx, h.options, InitRequest{RecoveryPublicKey: h.publicKey}); err != nil {
+			if _, err := initWithKeys(ctx, h.options, h.publicKey); err != nil {
 				t.Fatal(err)
 			}
 			if err := os.WriteFile(filepath.Join(h.root, "payload"), []byte("captured first data"), 0600); err != nil {
@@ -204,7 +204,7 @@ func TestInitialResetPreservesPreparation(t *testing.T) {
 			h := newIntegrationHarness(t)
 			h.options.MetadataPartSize = 1 << 20
 			ctx := context.Background()
-			if _, err := Init(ctx, h.options, InitRequest{RecoveryPublicKey: h.publicKey}); err != nil {
+			if _, err := initWithKeys(ctx, h.options, h.publicKey); err != nil {
 				t.Fatal(err)
 			}
 			formatPath := filepath.Join(h.root, ".backup", "FORMAT")
@@ -232,7 +232,7 @@ func TestInitialResetPreservesPreparation(t *testing.T) {
 			if err != nil || !bytes.Equal(identity, after) {
 				t.Fatalf("reset lost identity: %v", err)
 			}
-			if _, err := Init(ctx, h.options, InitRequest{RecoveryPublicKey: h.publicKey}); err == nil {
+			if _, err := initWithKeys(ctx, h.options, h.publicKey); err == nil {
 				t.Fatal("reinit overwrote preparation")
 			}
 			if _, err := Add(ctx, h.options, false); err != nil {
@@ -248,7 +248,7 @@ func TestInitialResetPreservesPreparation(t *testing.T) {
 func TestInitialPublicationNeverAdoptsExistingRemote(t *testing.T) {
 	ctx := context.Background()
 	owner := newIntegrationHarness(t)
-	published, err := initializePublished(ctx, owner.options, InitRequest{RecoveryPublicKey: owner.publicKey})
+	published, err := initializePublished(ctx, owner.options, owner.publicKey)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -261,7 +261,7 @@ func TestInitialPublicationNeverAdoptsExistingRemote(t *testing.T) {
 	if err := os.WriteFile(h.configPath, config, 0600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Init(ctx, h.options, InitRequest{RecoveryPublicKey: h.publicKey}); err != nil {
+	if _, err := initWithKeys(ctx, h.options, h.publicKey); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := Add(ctx, h.options, false); err != nil {
@@ -290,7 +290,7 @@ func TestInitialConfigurationAndIdentityChecks(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			h := newIntegrationHarness(t)
 			ctx := context.Background()
-			if _, err := Init(ctx, h.options, InitRequest{RecoveryPublicKey: h.publicKey}); err != nil {
+			if _, err := initWithKeys(ctx, h.options, h.publicKey); err != nil {
 				t.Fatal(err)
 			}
 			if _, err := Add(ctx, h.options, false); err != nil {
@@ -324,7 +324,7 @@ func TestInitialEmptyAndDisappearedPlans(t *testing.T) {
 		t.Run(fmt.Sprintf("allow-empty-%t", allowEmpty), func(t *testing.T) {
 			h := newIntegrationHarness(t)
 			ctx := context.Background()
-			if _, err := Init(ctx, h.options, InitRequest{RecoveryPublicKey: h.publicKey}); err != nil {
+			if _, err := initWithKeys(ctx, h.options, h.publicKey); err != nil {
 				t.Fatal(err)
 			}
 			if err := os.WriteFile(filepath.Join(h.root, ".backup", "ignore"), []byte("^\\./\\.backup-config$\n"), 0644); err != nil {
@@ -366,7 +366,7 @@ func TestInitialRemoteBindingIsPinnedAcrossRestart(t *testing.T) {
 	if err := os.WriteFile(h.configPath, configured, 0600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Init(ctx, h.options, InitRequest{RecoveryPublicKey: h.publicKey}); err != nil {
+	if _, err := initWithKeys(ctx, h.options, h.publicKey); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := Add(ctx, h.options, false); err != nil {
@@ -398,4 +398,12 @@ func TestInitialRemoteBindingIsPinnedAcrossRestart(t *testing.T) {
 	if got := strings.TrimSpace(runGit(t, "--git-dir", h.bare, "rev-parse", "refs/heads/archive/home")); got != result.CommitID {
 		t.Fatalf("configured branch tip: %s", got)
 	}
+}
+
+func initWithKeys(ctx context.Context, options Options, publicKey []byte) (InitResult, error) {
+	result, err := Init(ctx, options)
+	if err != nil {
+		return result, err
+	}
+	return result, os.WriteFile(filepath.Join(options.Root, ".backup", ".publickeys"), []byte(fmt.Sprintf("%x\n", publicKey)), 0644)
 }

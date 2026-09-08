@@ -17,6 +17,8 @@ import (
 	"backup/internal/format"
 	"backup/internal/objectstore"
 	"backup/internal/repository"
+	"backup/internal/testkeys"
+
 	"github.com/nathants/go-libsodium"
 )
 
@@ -54,7 +56,7 @@ func recoveryTestChain(t *testing.T, length int) (*integrationHarness, [][]manif
 	// Small multipart fixtures exercise part accounting without hundreds of PUTs.
 	harness.options.MetadataPartSize = 1024
 	ctx := context.Background()
-	genesis, err := initializePublished(ctx, harness.options, InitRequest{RecoveryPublicKey: harness.publicKey})
+	genesis, err := initializePublished(ctx, harness.options, harness.publicKey)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,7 +93,7 @@ func TestRecoverPublishesVerifiedRepositoryWithoutReread(t *testing.T) {
 		t.Run(fmt.Sprint(anchored), func(t *testing.T) {
 			harness, chain := recoveryTestChain(t, 3)
 			probe := observeRecoveryRequests(harness)
-			t.Setenv("BACKUP_SECRET_KEY", fmt.Sprintf("%x", harness.secretKey))
+			t.Setenv("GIT_REMOTE_AWS_SECRETKEY", fmt.Sprintf("%x", harness.secretKey))
 			if err := os.Rename(harness.bare, harness.bare+"-offline"); err != nil {
 				t.Fatal(err)
 			}
@@ -183,7 +185,7 @@ func TestMetadataRecoveryUsesOneRepositoryForHealthyChain(t *testing.T) {
 	}
 	reader := testMirrorClient(t, context.Background(), harness)
 	quarantine := filepath.Join(root, "recovered.git")
-	chosen, err := materializeMetadataChain(context.Background(), reader, chain, harness.secretKey, quarantine, stage)
+	chosen, err := materializeMetadataChain(context.Background(), reader, chain, testkeys.Ring(harness.secretKey), quarantine, stage)
 	if err != nil || len(chosen) != len(chain) {
 		t.Fatalf("healthy materialization: chosen=%d err=%v", len(chosen), err)
 	}
@@ -290,7 +292,7 @@ func TestMetadataRecoveryReplaysAfterImportedObjectFailure(t *testing.T) {
 	}
 	reader := testMirrorClient(t, context.Background(), harness)
 	quarantine := filepath.Join(root, "recovered.git")
-	chosen, err := materializeMetadataChain(context.Background(), reader, chain, harness.secretKey, quarantine, stage)
+	chosen, err := materializeMetadataChain(context.Background(), reader, chain, testkeys.Ring(harness.secretKey), quarantine, stage)
 	if err != nil || len(chosen) != 3 || chosen[1].Key == bad.Key {
 		t.Fatalf("healthy alternate was not selected: chosen=%d err=%v", len(chosen), err)
 	}
@@ -321,7 +323,7 @@ func TestMetadataRecoveryReplaysAfterImportedObjectFailure(t *testing.T) {
 
 func TestRecoverDoesNotReplaceDestinationCreatedDuringReporting(t *testing.T) {
 	harness, chain := recoveryTestChain(t, 1)
-	t.Setenv("BACKUP_SECRET_KEY", fmt.Sprintf("%x", harness.secretKey))
+	t.Setenv("GIT_REMOTE_AWS_SECRETKEY", fmt.Sprintf("%x", harness.secretKey))
 	parent := t.TempDir()
 	destination := filepath.Join(parent, "late.git")
 	var created os.FileInfo
@@ -349,7 +351,7 @@ func TestRecoverDoesNotReplaceDestinationCreatedDuringReporting(t *testing.T) {
 
 func TestRecoverCleansRetainedRepositoryOnReportFailureAndCancellation(t *testing.T) {
 	harness, chain := recoveryTestChain(t, 1)
-	t.Setenv("BACKUP_SECRET_KEY", fmt.Sprintf("%x", harness.secretKey))
+	t.Setenv("GIT_REMOTE_AWS_SECRETKEY", fmt.Sprintf("%x", harness.secretKey))
 	for _, cancelRequest := range []bool{false, true} {
 		t.Run(fmt.Sprint(cancelRequest), func(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
@@ -486,7 +488,7 @@ func TestMetadataRecoveryFinalCheckRejectsPreviouslyStoredBlobCorruption(t *test
 	}
 	reader := testMirrorClient(t, context.Background(), harness)
 	quarantine := filepath.Join(root, "recovered.git")
-	_, err = materializeMetadataChain(context.Background(), reader, chain, harness.secretKey, quarantine, stage)
+	_, err = materializeMetadataChain(context.Background(), reader, chain, testkeys.Ring(harness.secretKey), quarantine, stage)
 	if !mutated || err == nil || !strings.Contains(err.Error(), "validate bundle object graph") || strings.Contains(err.Error(), "no usable physical representation") {
 		t.Fatalf("final content check did not reject stored corruption: mutated=%t err=%v", mutated, err)
 	}
@@ -509,7 +511,7 @@ func assertValidRecoveryBundleHeader(t *testing.T, path string, manifest format.
 
 func TestRecoverListingRetainsOnlyCommitIDs(t *testing.T) {
 	harness, chain := recoveryTestChain(t, 2)
-	t.Setenv("BACKUP_SECRET_KEY", fmt.Sprintf("%x", harness.secretKey))
+	t.Setenv("GIT_REMOTE_AWS_SECRETKEY", fmt.Sprintf("%x", harness.secretKey))
 	workspace := t.TempDir()
 	t.Setenv("TMPDIR", workspace)
 	reports := 0
