@@ -13,8 +13,8 @@ type s3Error struct {
 	Resource  string   `xml:"Resource"`
 }
 
-func writeError(writer http.ResponseWriter, status int, code, message, requestID, resource string) {
+func writeError(writer http.ResponseWriter, status int, code, message, requestID, resource string) error {
 	writer.Header().Set("Content-Type", "application/xml")
 	writer.WriteHeader(status)
-	_ = xml.NewEncoder(writer).Encode(s3Error{Code: code, Message: message, RequestID: requestID, Resource: resource})
+	return xml.NewEncoder(writer).Encode(s3Error{Code: code, Message: message, RequestID: requestID, Resource: resource})
 }

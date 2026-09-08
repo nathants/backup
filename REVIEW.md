@@ -244,7 +244,7 @@ Encrypted fuzzing now includes a valid seed and fixed public test-only recipient
 
 **Validation:** strengthening assertions before correcting fixtures reproduced all four failures in `shell/993cc1e28f9a4cce61ac7dae9deca622/stdout` beneath the evidence directory above. Corrected targeted tests and all three affected packages pass; explicit encrypted/authenticated seed replays pass in `shell/10f2c28dbf21ade1482de06660492053/stdout`. Full `make check` passed on 2026-09-06, including mandatory linters, vet, coverage, and race tests. All ten `make fuzz` mutation campaigns passed with four workers. Final logs are `scratch/finding12-check.log` and `scratch/finding12-fuzz.log` beneath the evidence directory. Production code, runtime formats, dependencies, and security checks are unchanged; no new cloud deployment run was needed or claimed.
 
-### 13. Server logs discard internal causes and report successful HTTP status as zero
+### 13. [done] Server logs discard internal causes and report successful HTTP status as zero
 
 **Location:** `internal/s3server/server.go:234-267,329-382`.
 
@@ -254,7 +254,9 @@ Successful handlers return status zero as an internal sentinel, and that zero is
 
 **Reproduced:** `TestReviewServerLogsInternalCause` injects an invalid temp descriptor; the HTTP 500 log contains only `internal server error`, with no EBADF or `create upload temp` context. `TestReviewServerLogsActualStatus` observes an actual HTTP 200 PUT logged as `"status":0`.
 
-**Direction:** retain the underlying error until structured logging, sanitize sensitive data, and separately map it to the public response. Track the actual response status, including already-started responses and implicit 200s.
+**Resolution (2026-09-06):** `handle` returns its underlying error to `ServeHTTP`, which independently maps the public response and emits one structured request log afterward. The response tracker retains the first final HTTP status, including implicit 200s and informational-header handling. Internal failures retain their cause at error level; public internal errors remain generic. Failures after a committed GET 200 keep that actual status, never append XML or rewrite the response, and no longer disappear from the operator log. Request-ID-generation and error-response-write failures use the same logging path. Free-text fields redact literal known credentials and received Authorization/security-token values plus their standard URL-path-escaped forms; structured encoding escapes controls. No protocol, credential, or storage format changed.
+
+**Validation:** actual-handler regressions in `internal/s3server/logging_test.go` first reproduced the successful-PUT status zero, discarded EBADF cause, and committed-GET status/cause errors (`shell/cc4336961716f6b3f4065b43c1381a9e/stdout` beneath the evidence directory above). Fixed tests cover PUT/GET/HEAD/LIST, 403/404 responses, internal causes versus generic wire errors, partial-response and error-response write failures, randomness failure, known-value redaction/control escaping, and implicit/interim/first-final statuses. Full `make check`, all ten fuzz campaigns, and real Docker integration tests normally and under the race detector passed (`scratch/finding13-check.log`, `finding13-fuzz.log`, and `finding13-docker.log`). Docker coverage includes restart/immutability, two-mirror backup/sync/verify/restore/recovery, whole-root client operation, lost responses, malformed requests, backend symlinks, process kill, and disk-full failure. Independent inventory confirmed no run-owned containers, volumes, or image tags remained (`scratch/finding13-docker-cleanup.json`). No AWS/R2 requests or settings changes were needed for this server-logging fix; finding 11 retains that separate cloud acceptance evidence.
 
 ### 14. The durable store's pathname writes contradict its descriptor-confined reads
 

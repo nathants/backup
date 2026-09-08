@@ -13,6 +13,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"path"
 	"sort"
@@ -213,19 +214,21 @@ func (server *Server) Close() error {
 
 type trackedResponseWriter struct {
 	http.ResponseWriter
-	committed bool
+	status int
 }
 
 func (writer *trackedResponseWriter) WriteHeader(status int) {
-	if writer.committed {
+	if writer.status != 0 {
 		return
 	}
-	writer.committed = true
+	if status >= 200 {
+		writer.status = status
+	}
 	writer.ResponseWriter.WriteHeader(status)
 }
 
 func (writer *trackedResponseWriter) Write(data []byte) (int, error) {
-	if !writer.committed {
+	if writer.status == 0 {
 		writer.WriteHeader(http.StatusOK)
 	}
 	return writer.ResponseWriter.Write(data)
@@ -237,106 +240,123 @@ func (server *Server) ServeHTTP(writer http.ResponseWriter, request *http.Reques
 	tracked := &trackedResponseWriter{ResponseWriter: writer}
 	requestID, err := randomHex(16)
 	if err != nil {
-		server.config.Logger.Error("request ID generation failed", "error", err)
-		writeError(tracked, http.StatusInternalServerError, "InternalError", "internal server error", "unavailable", request.URL.EscapedPath())
-		return
-	}
-	tracked.Header().Set("x-amz-request-id", requestID)
-	status, code, message := server.handle(tracked, request)
-	if status >= http.StatusInternalServerError {
-		server.config.Logger.Error("request failed", "request_id", requestID, "method", request.Method, "path", request.URL.EscapedPath(), "status", status, "code", code, "message", message)
+		requestID = "unavailable"
+		err = fmt.Errorf("generate request ID: %w", err)
 	} else {
-		server.config.Logger.Info("request", "request_id", requestID, "method", request.Method, "path", request.URL.EscapedPath(), "status", status, "code", code)
+		tracked.Header().Set("x-amz-request-id", requestID)
+		err = server.handle(tracked, request)
 	}
-	if status != 0 && !tracked.committed {
-		writeError(tracked, status, code, message, requestID, request.URL.EscapedPath())
+	status, code, message := statusForError(err)
+	var responseErr error
+	if err != nil && tracked.status == 0 {
+		responseErr = writeError(tracked, status, code, message, requestID, request.URL.EscapedPath())
+		err = errors.Join(err, responseErr)
+	}
+	if tracked.status == 0 {
+		tracked.WriteHeader(http.StatusOK)
+	}
+	redact := server.logRedactor(request)
+	attributes := []any{"request_id", requestID, "method", redact.Replace(request.Method), "path", redact.Replace(request.URL.EscapedPath()), "status", tracked.status, "code", code}
+	if status >= http.StatusInternalServerError || responseErr != nil {
+		attributes = append(attributes, "message", redact.Replace(message), "error", redact.Replace(err.Error()))
+		server.config.Logger.Error("request failed", attributes...)
+	} else {
+		server.config.Logger.Info("request", attributes...)
 	}
 }
 
-func (server *Server) handle(writer http.ResponseWriter, request *http.Request) (int, string, string) {
+func (server *Server) logRedactor(request *http.Request) *strings.Replacer {
+	values := []string{server.config.Credential.AccessKey, server.config.Credential.SecretKey, server.config.Credential.SessionToken, request.Header.Get("Authorization"), request.Header.Get("x-amz-security-token")}
+	patterns := make([]string, 0, 2*len(values))
+	for _, value := range values {
+		if value != "" {
+			patterns = append(patterns, value, url.PathEscape(value))
+		}
+	}
+	// Whole headers/longer values must be removed before substrings within
+	// them. Structured logging handles control characters after redaction.
+	sort.Slice(patterns, func(i, j int) bool { return len(patterns[i]) > len(patterns[j]) })
+	pairs := make([]string, 0, 2*len(patterns))
+	for _, pattern := range patterns {
+		pairs = append(pairs, pattern, "[redacted]")
+	}
+	return strings.NewReplacer(pairs...)
+}
+
+func (server *Server) handle(writer http.ResponseWriter, request *http.Request) error {
 	if request.URL.Scheme != "" || request.URL.Host != "" {
-		return http.StatusBadRequest, "InvalidRequest", "absolute request targets are unsupported"
+		return requestFailure(http.StatusBadRequest, "InvalidRequest", "absolute request targets are unsupported")
 	}
 	if request.Header.Get("x-amz-content-sha256") == "" {
-		return http.StatusBadRequest, "InvalidRequest", "x-amz-content-sha256 is required"
+		return requestFailure(http.StatusBadRequest, "InvalidRequest", "x-amz-content-sha256 is required")
 	}
 	if !isLowerHex(request.Header.Get("x-amz-content-sha256"), sha256.Size*2) {
-		return http.StatusForbidden, "AccessDenied", "only fixed signed SHA-256 payloads are accepted"
+		return requestFailure(http.StatusForbidden, "AccessDenied", "only fixed signed SHA-256 payloads are accepted")
 	}
 	authorization, err := parseAuthorization(request.Header.Get("Authorization"))
 	if err != nil {
-		return http.StatusForbidden, "AccessDenied", err.Error()
+		return requestFailure(http.StatusForbidden, "AccessDenied", err.Error())
 	}
 	credential := server.config.Credential
 	if authorization.Scope.AccessKey != credential.AccessKey {
-		return http.StatusForbidden, "InvalidAccessKeyId", "unknown access key"
+		return requestFailure(http.StatusForbidden, "InvalidAccessKeyId", "unknown access key")
 	}
 	if authorization.Scope.Region != server.config.Region || authorization.Scope.Service != "s3" {
-		return http.StatusForbidden, "AuthorizationHeaderMalformed", "credential scope has the wrong region or service"
+		return requestFailure(http.StatusForbidden, "AuthorizationHeaderMalformed", "credential scope has the wrong region or service")
 	}
 	if err := validateRequestDate(request, authorization, server.config.Now().UTC(), server.config.MaximumClockSkew); err != nil {
-		return http.StatusForbidden, "RequestTimeTooSkewed", err.Error()
+		return requestFailure(http.StatusForbidden, "RequestTimeTooSkewed", err.Error())
 	}
 	if err := requireSecurityHeadersSigned(request, authorization); err != nil {
-		return http.StatusForbidden, "AccessDenied", err.Error()
+		return requestFailure(http.StatusForbidden, "AccessDenied", err.Error())
 	}
 	if credential.SessionToken != "" {
 		if request.Header.Get("x-amz-security-token") != credential.SessionToken {
-			return http.StatusForbidden, "InvalidToken", "session token is missing or invalid"
+			return requestFailure(http.StatusForbidden, "InvalidToken", "session token is missing or invalid")
 		}
 	} else if request.Header.Get("x-amz-security-token") != "" {
-		return http.StatusForbidden, "InvalidToken", "this credential does not use a session token"
+		return requestFailure(http.StatusForbidden, "InvalidToken", "this credential does not use a session token")
 	}
 	if err := rejectUnknownAWSHeaders(request); err != nil {
-		return http.StatusBadRequest, "InvalidRequest", err.Error()
+		return requestFailure(http.StatusBadRequest, "InvalidRequest", err.Error())
 	}
 	if err := verifySignature(request, authorization, credential.SecretKey); err != nil {
-		return http.StatusForbidden, "SignatureDoesNotMatch", err.Error()
+		return requestFailure(http.StatusForbidden, "SignatureDoesNotMatch", err.Error())
 	}
 	if len(request.TransferEncoding) != 0 || request.Header.Get("Content-Encoding") != "" {
-		return http.StatusBadRequest, "InvalidRequest", "transfer and content encodings are unsupported"
+		return requestFailure(http.StatusBadRequest, "InvalidRequest", "transfer and content encodings are unsupported")
 	}
 	if request.Method != http.MethodPut && (request.ContentLength != 0 || request.Header.Get("x-amz-content-sha256") != emptySHA256) {
-		return http.StatusBadRequest, "InvalidRequest", "non-PUT requests require an empty fixed payload"
+		return requestFailure(http.StatusBadRequest, "InvalidRequest", "non-PUT requests require an empty fixed payload")
 	}
 
 	bucket, key, list, err := parseRequestTarget(request)
 	if err != nil {
-		return http.StatusBadRequest, "InvalidURI", err.Error()
+		return requestFailure(http.StatusBadRequest, "InvalidURI", err.Error())
 	}
 	if bucket != server.config.Bucket {
-		return http.StatusNotFound, "NoSuchBucket", "bucket does not exist"
+		return requestFailure(http.StatusNotFound, "NoSuchBucket", "bucket does not exist")
 	}
 	if list {
-		if err := server.listObjects(writer, request); err != nil {
-			return statusForError(err)
-		}
-		return 0, "", ""
+		return server.listObjects(writer, request)
 	}
 	key, err = server.logicalKey(key)
 	if err != nil {
-		return http.StatusBadRequest, "InvalidURI", err.Error()
+		return requestFailure(http.StatusBadRequest, "InvalidURI", err.Error())
 	}
 
 	switch request.Method {
 	case http.MethodPut:
-		if err := server.putObject(request.Context(), writer, request, key); err != nil {
-			return statusForError(err)
-		}
+		return server.putObject(request.Context(), writer, request, key)
 	case http.MethodGet:
-		if err := server.getObject(request.Context(), writer, key); err != nil {
-			return statusForError(err)
-		}
+		return server.getObject(request.Context(), writer, key)
 	case http.MethodHead:
-		if err := server.headObject(request.Context(), writer, request, key); err != nil {
-			return statusForError(err)
-		}
+		return server.headObject(request.Context(), writer, request, key)
 	case http.MethodDelete:
-		return http.StatusForbidden, "AccessDenied", "delete is not allowed"
+		return requestFailure(http.StatusForbidden, "AccessDenied", "delete is not allowed")
 	default:
-		return http.StatusMethodNotAllowed, "MethodNotAllowed", "unsupported method"
+		return requestFailure(http.StatusMethodNotAllowed, "MethodNotAllowed", "unsupported method")
 	}
-	return 0, "", ""
 }
 
 type requestError struct {
@@ -348,6 +368,9 @@ type requestError struct {
 func (err *requestError) Error() string { return err.message }
 
 func statusForError(err error) (int, string, string) {
+	if err == nil {
+		return http.StatusOK, "", ""
+	}
 	var requestErr *requestError
 	if errors.As(err, &requestErr) {
 		return requestErr.status, requestErr.code, requestErr.message
