@@ -116,7 +116,7 @@ Manifest sizes and encrypted/plaintext bundle bytes are bounded, but the decrypt
 
 **Evidence:** read-only call-path review and Git/Linux source/documentation cross-checks; no resource-exhaustion payload or containment acceptance test was executed. This resolution changes governing documentation and review status only.
 
-### 6. The R2 lock contract checks the probe prefix, not the backup namespace
+### 6. [done] The R2 lock contract checks the probe prefix, not the backup namespace
 
 **Location:** `integration/cloud_contract_test.go:142-175,357-391`.
 
@@ -126,7 +126,9 @@ For example, a rule covering `repository/contract-` passes this check for a conf
 
 **Evidence:** static argument/prefix trace, not a new live R2 result. This is a false-acceptance hole in the release gate; it does not establish that any particular deployed bucket currently has this configuration.
 
-**Direction:** check coverage of the exact configured backup namespace independently of the random probe location. Handle an empty configured prefix as the entire bucket namespace, not `/`. Add a regression case where only `repository/contract-` is locked and acceptance must fail.
+**Approved resolution:** the live R2 contract now passes the original configuration to `validateR2LockCoverage`, with no probe-prefix parameter in the lock-audit path. A nonempty configured prefix is checked as its object-key namespace with a trailing slash; an empty prefix remains empty and requires bucket-wide coverage. Enabled indefinite rules covering that namespace or a broader literal prefix remain valid. Random probe placement, existing negative control-plane checks, and runtime formats are unchanged; no automatic R2 configuration changes are added.
+
+**Validation:** after extracting the existing coverage check without changing its decision, `TestR2LockCoverageUsesBackupNamespace` reproduced false acceptance of probe-stem, exact-probe, and bucket-probe-only locks (`shell/d6ab3e609f59fa69553ecdcd7889fe85/stdout` beneath the evidence directory above). The fixed check passes those rejections plus namespace/parent/bucket-wide positive controls, disabled/finite/sibling/data-only rejection, and the empty-prefix-versus-`/` boundary. `TestR2LockCoverageStillValidatesEveryRule` preserves malformed/missing-rule rejection even after a covering rule. Full `make check` passed on 2026-09-05, including mandatory lint/vet and the regressions under coverage and race (`shell/53db4ecf9c4a2107f13559a0e5894df8/stdout`). These cloud-free tests exercise the same helper as the live contract; no live R2 requests/settings changes were made and no real-account acceptance is claimed.
 
 ## Medium severity
 

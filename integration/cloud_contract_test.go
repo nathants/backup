@@ -172,7 +172,7 @@ func runCloudContract(t *testing.T, config cloudContractConfig) {
 	}
 	t.Logf("immutable probe: s3://%s/%s", config.bucket, wireKey)
 	if config.kind == format.MirrorCloudflareR2 {
-		runR2LockProtectionContract(t, ctx, config, reader, logicalKey, expected, contractPrefix)
+		runR2LockProtectionContract(t, ctx, config, reader, logicalKey, expected)
 	}
 	if recorder.count(http.MethodGet) != 0 || recorder.count(http.MethodHead) == 0 {
 		t.Fatalf("cloud audit methods: HEAD=%d GET=%d", recorder.count(http.MethodHead), recorder.count(http.MethodGet))
@@ -354,7 +354,7 @@ type r2LockRule struct {
 	} `json:"condition"`
 }
 
-func runR2LockProtectionContract(t *testing.T, ctx context.Context, config cloudContractConfig, reader *objectstore.Client, probeKey string, expected objectstore.Object, contractPrefix string) {
+func runR2LockProtectionContract(t *testing.T, ctx context.Context, config cloudContractConfig, reader *objectstore.Client, probeKey string, expected objectstore.Object) {
 	t.Helper()
 	accountID := os.Getenv("BACKUP_R2_CONTRACT_ACCOUNT_ID")
 	auditToken := os.Getenv("BACKUP_R2_CONTRACT_LOCK_AUDIT_TOKEN")
@@ -373,22 +373,8 @@ func runR2LockProtectionContract(t *testing.T, ctx context.Context, config cloud
 	endpoint := "https://api.cloudflare.com/client/v4/accounts/" + accountID + "/r2/buckets/" + url.PathEscape(config.bucket) + "/lock"
 	jurisdiction := os.Getenv("BACKUP_R2_CONTRACT_JURISDICTION")
 	before := getR2LockRules(t, ctx, endpoint, auditToken, jurisdiction)
-	covered := false
-	wirePrefix := strings.TrimPrefix(contractPrefix, "/") + "/"
-	for _, raw := range before.Result.Rules {
-		var rule r2LockRule
-		if err := json.Unmarshal(raw, &rule); err != nil {
-			t.Fatalf("decode R2 lock rule: %v", err)
-		}
-		if rule.ID == "" || rule.Condition.Type == "" {
-			t.Fatal("R2 lock audit returned a malformed rule")
-		}
-		if rule.Enabled && rule.Condition.Type == "Indefinite" && (rule.Prefix == "" || strings.HasPrefix(wirePrefix, rule.Prefix)) {
-			covered = true
-		}
-	}
-	if !covered {
-		t.Fatalf("no enabled indefinite R2 lock rule covers prefix %q", wirePrefix)
+	if err := validateR2LockCoverage(config, before.Result.Rules); err != nil {
+		t.Fatal(err)
 	}
 	mutationBody, err := json.Marshal(struct {
 		Rules []json.RawMessage `json:"rules"`
@@ -412,6 +398,32 @@ func runR2LockProtectionContract(t *testing.T, ctx context.Context, config cloud
 	if !bytes.Equal(beforeRules, afterRules) {
 		t.Fatal("R2 lock rules changed during ordinary-credential mutation tests")
 	}
+}
+
+func validateR2LockCoverage(config cloudContractConfig, rules []json.RawMessage) error {
+	// Match the actual object-key namespace, never the narrower probe prefix.
+	// An empty configured prefix means the entire bucket, not keys under "/".
+	wirePrefix := config.prefix
+	if wirePrefix != "" {
+		wirePrefix += "/"
+	}
+	covered := false
+	for _, raw := range rules {
+		var rule r2LockRule
+		if err := json.Unmarshal(raw, &rule); err != nil {
+			return fmt.Errorf("decode R2 lock rule: %w", err)
+		}
+		if rule.ID == "" || rule.Condition.Type == "" {
+			return fmt.Errorf("R2 lock audit returned a malformed rule")
+		}
+		if rule.Enabled && rule.Condition.Type == "Indefinite" && strings.HasPrefix(wirePrefix, rule.Prefix) {
+			covered = true
+		}
+	}
+	if !covered {
+		return fmt.Errorf("no enabled indefinite R2 lock rule covers backup namespace %q", wirePrefix)
+	}
+	return nil
 }
 
 func getR2LockRules(t *testing.T, ctx context.Context, endpoint, token, jurisdiction string) r2LockEnvelope {

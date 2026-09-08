@@ -550,7 +550,7 @@ R2 joins only when explicitly enabled after an indefinite Bucket Lock rule prote
 BACKUP_R2_CONTRACT=1 make integration
 ```
 
-R2 uses distinct ordinary credentials and retains its successful immutable probes because libaws does not provision that control plane.
+R2 uses distinct ordinary credentials and retains its successful immutable probes because libaws does not provision that control plane. Its lock audit checks the configured backup namespace independently of random probe placement; an empty configured prefix requires bucket-wide protection. Cloud-free regressions exercise that same coverage check, including rejection of probe-only locks; they do not substitute for the live deployment contract.
 
 Additional required coverage:
 
