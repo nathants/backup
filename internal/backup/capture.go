@@ -54,11 +54,20 @@ func (run *runtime) capturePlan(ctx context.Context, txn *transaction, base repo
 	if err := run.config.RequireCanonicalMirrors(mirrors); err != nil {
 		return false, err
 	}
-	if txn.Capture == nil {
-		ledger, err := run.loadLedger(base.Format.RepositoryUUID)
-		if err != nil {
+	ledger, err := run.loadLedger(base.Format.RepositoryUUID)
+	if err != nil {
+		return false, err
+	}
+	if err := run.requireBackupEligibility(txn, ledger); err != nil {
+		return false, err
+	}
+	if txn.Capture != nil {
+		if err := run.revalidateCapture(ctx, txn, ledger); err != nil {
 			return false, err
 		}
+	}
+	if txn.Capture == nil {
+		txn.Incident = ledger.Incident
 		eligible := make(map[string]bool)
 		for _, mirror := range run.config.Mirrors {
 			if ledger.Mirrors[mirror.Canonical.Name] == txn.BaseCommit {

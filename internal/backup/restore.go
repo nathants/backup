@@ -64,12 +64,11 @@ func Restore(ctx context.Context, options Options, request RestoreRequest) (Rest
 		return result, err
 	}
 	defer func() { _ = run.close() }()
-	if txn, err := run.loadTransaction(); err != nil {
+	txn, err := run.loadTransaction()
+	if err != nil {
 		return result, err
-	} else if txn != nil && txn.PushAttempted {
-		return result, fmt.Errorf("a published transaction requires commit finalization before restore")
 	}
-	head, history, err := run.validatedHead(true)
+	head, history, err := run.validatedHead(txn == nil || !txn.LocalAccepted)
 	if err != nil {
 		return result, err
 	}

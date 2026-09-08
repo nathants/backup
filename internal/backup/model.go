@@ -18,7 +18,7 @@ import (
 type ClientFactory func(context.Context, localconfig.Mirror, objectstore.Role) (*objectstore.Client, error)
 
 const (
-	stateVersion             = 2
+	stateVersion             = 3
 	transactionFilename      = "transaction.json"
 	ledgerFilename           = "completion-ledger.json"
 	validatedAncestorFile    = "validated-ancestor.json"
@@ -279,6 +279,7 @@ type captureProgress struct {
 
 type transaction struct {
 	Version         int                        `json:"version"`
+	Incident        uint64                     `json:"incident"`
 	Kind            string                     `json:"kind"`
 	BaseCommit      string                     `json:"base_commit"`
 	Plan            *stagedPlan                `json:"plan,omitempty"`
@@ -320,10 +321,13 @@ type completionLedger struct {
 	Version        int               `json:"version"`
 	RepositoryUUID string            `json:"repository_uuid"`
 	Mirrors        map[string]string `json:"mirrors"`
+	Incident       uint64            `json:"incident"`
+	Quarantined    map[string]bool   `json:"quarantined"`
+	ForwardRepair  string            `json:"forward_repair"`
 }
 
 func newCompletionLedger(repositoryUUID string) completionLedger {
-	return completionLedger{Version: stateVersion, RepositoryUUID: repositoryUUID, Mirrors: make(map[string]string)}
+	return completionLedger{Version: stateVersion, RepositoryUUID: repositoryUUID, Mirrors: make(map[string]string), Quarantined: make(map[string]bool)}
 }
 
 func ensurePrivateDirectory(path string) error {

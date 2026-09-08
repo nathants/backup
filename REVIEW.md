@@ -64,7 +64,7 @@ This is more than an editor inconvenience: a locally added exclusion can disappe
 
 **Validation:** regressions in `internal/backup/fetch_test.go` first reproduced the overwrite and now pass for each mutable configuration file, a catalog edit, missing/type/mode changes, and an unrelated untracked file. Actual `Add` coverage preserves an existing plan and exclusion after refusal; actual `Find` coverage rejects dirty state and accepts a clean retry against a differing remote tree. Full `make check` passed on 2026-09-05, including the new tests under the race detector; evidence is `shell/ae56881c609b2ffa1170bd53316d40fc/stdout` beneath the evidence directory above.
 
-### 3. A mirror proven corrupt remains eligible for later successful backups
+### 3. [done] A mirror proven corrupt remains eligible for later successful backups
 
 **Location:** `internal/backup/verify.go:48-69`; `internal/backup/capture.go:62-71`; `internal/backup/commit.go:369-370,654`.
 
@@ -75,6 +75,14 @@ Verification reports corruption but never invalidates the completion ledger. Lat
 The issue is **known negative evidence being ignored**, not a demand to download/audit every historical object on every writer-only backup.
 
 **Direction:** durably revoke affected completeness eligibility after a conclusive failed integrity audit, and reconcile any staged candidate-complete state that depends on it. Restore eligibility only through an appropriate successful audit/sync/repair. Distinguish corruption/missing objects from transient unavailability rather than treating every network error as established data loss.
+
+**Approved resolution:** each repository/prefix now has one authoritative writer checkout/ledger by operational convention, without leases or hostname enforcement. Confirmed current-object damage durably quarantines a mirror and atomically invalidates pre-incident completeness records. A fresh full current audit can restore eligibility to healthy mirrors; writer-only backups then continue with prominent degraded-redundancy reporting. Typed missing/corrupt outcomes distinguish real negative evidence from unavailable credentials, transport failures, or unsupported checksums. The server exposes conclusive checksum-HEAD corruption through a dedicated response header; superseded historical mappings and healthy alternate metadata representations do not cause spurious quarantine. Capture/candidate progress is re-audited after incidents, including acknowledged data lost during pending publication.
+
+Verification, restore, sync, and metadata repair remain usable during pending publication. Explicit forward data repair preserves the pending published commit and its verified recovery-bundle chain before retiring its transaction, leaves a durable ordinary-backup block across restart gaps, and reports success only for a complete repair descendant. Several necessary relocations can accumulate in one unpublished repair candidate. Full candidate-data/base-metadata audits avoid demanding a falsely healthy corrupt base. Git publication and reset/CAS protections remain mandatory. A fresh full audit may complete a pending tip through an alternate bundle representation without inventing staged acknowledgements. Operational state is a hard cutover to version 3; canonical backup formats are unchanged.
+
+**Validation:** actual-system regressions in `internal/backup/incident_test.go` first reproduced corrupt/missing-mirror acceptance and pending-publication acceptance, then passed after the fixes. Coverage includes fresh-audit restart, stale candidate acknowledgements, missing acknowledged pending parts, writer-only degraded operation, single-mirror ledger rebuild, multi-part repair, historical restore with explicit relocation, alternate metadata repair, pending genesis, refusal without unintended publication, and five forward-repair restart boundaries. Each restart case also decrypts/reconstructs the preserved chain with primary Git offline; restore checks confirm exact content and no publication on corrupt input. Objectstore tests distinguish conclusive failures from unavailable checksum capabilities and generic HTTP failures.
+
+Full `make check` passed on 2026-09-05, including the final application code under coverage and the race detector (`shell/dcd90c0905d2a71f08575d2b77127ea9/stdout`). `make integration` passed Docker and scratch-account AWS contracts normally and under race, including the real two-mirror client and isolated whole-root client (`shell/60da116d0e272c37c2a0492d60950b25/stdout`). R2 was not enabled. Independent AWS/Docker checks confirmed cleanup of the run's bucket, users, containers, volumes, and image tags (`shell/414ed58849e9372309c587f4ea377d2d/stdout`, `shell/b0cc52d85a60bbff28e72e003f066311/stdout`). These paths are beneath the evidence directory above; no production deployment acceptance or storage power-loss test is claimed.
 
 ### 4. The durable state machine relies on Git writes that are not durably configured
 
@@ -116,7 +124,7 @@ For example, a rule covering `repository/contract-` passes this check for a conf
 
 ## Medium severity
 
-### 7. There is no completion-ledger rebuild path for a single mirror
+### 7. [done] There is no completion-ledger rebuild path for a single mirror
 
 **Location:** `internal/backup/sync.go:14-17,150-160`; `internal/backup/verify.go:48-69`; `internal/backup/capture.go:62-69`.
 
@@ -125,6 +133,8 @@ After the local ledger is lost, writer-only commit correctly refuses to guess. H
 **Reproduced:** `TestReviewSingleMirrorLedgerRebuild`: delete only `completion-ledger.json`; verification passes with one complete mirror; self-sync is rejected; a subsequent real changed-file commit fails for lack of a known-complete mirror.
 
 **Direction:** provide an explicit audited rebuild path, or let self-sync perform that audit without copying. Record the exact validated commit, preserve non-regression rules, and never infer completion from existence or `412`.
+
+**Resolution and validation:** resolved as part of finding 3's approved fresh-audit policy. Successful current-tip `Verify` records exact per-mirror completeness even when the ledger was lost; successful `Sync` records both fully audited endpoints and retains its non-regression checks. Historical verification cannot clear a current quarantine. `TestIntegrityIncidentLedgerRebuildAndTransientFailures/single_mirror_rebuild` deletes the ledger, runs actual verification, and completes a changed-file backup. Full cloud-free and Docker/AWS gates passed as recorded under finding 3.
 
 ### 8. Initialization is not resumable across its earliest Git-creation window
 

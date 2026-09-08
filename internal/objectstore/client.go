@@ -251,23 +251,32 @@ func (client *Client) Audit(ctx context.Context, logicalKey string, expected Obj
 	}
 	output, err := client.client.HeadObject(ctx, &s3.HeadObjectInput{Bucket: &client.bucket, Key: &key, ChecksumMode: types.ChecksumModeEnabled})
 	if err != nil {
-		return err
+		return client.classifyReadError(err)
 	}
 	if client.mirror.Kind == format.MirrorAWSS3 && output.ServerSideEncryption != types.ServerSideEncryptionAes256 {
 		return fmt.Errorf("mirror %s object %s does not report SSE-S3 AES256", client.mirror.Name, logicalKey)
 	}
-	if output.ContentLength == nil || *output.ContentLength < 0 || uint64(*output.ContentLength) != expected.Size {
-		return fmt.Errorf("mirror %s object %s has wrong size", client.mirror.Name, logicalKey)
+	if output.ContentLength == nil || *output.ContentLength < 0 {
+		return fmt.Errorf("mirror %s object %s lacks a valid size", client.mirror.Name, logicalKey)
+	}
+	if uint64(*output.ContentLength) != expected.Size {
+		return fmt.Errorf("%w: mirror %s object %s has wrong size", ErrCorrupt, client.mirror.Name, logicalKey)
 	}
 	expectedSHA, err := digestBase64(expected.SHA256, sha256.Size)
 	if err != nil {
 		return err
 	}
-	if output.ChecksumSHA256 == nil || *output.ChecksumSHA256 != expectedSHA {
-		return fmt.Errorf("mirror %s object %s lacks the expected full-object SHA-256", client.mirror.Name, logicalKey)
-	}
 	if output.ChecksumType != "" && output.ChecksumType != types.ChecksumTypeFullObject {
 		return fmt.Errorf("mirror %s object %s returned checksum type %q", client.mirror.Name, logicalKey, output.ChecksumType)
+	}
+	if output.ChecksumSHA256 == nil || *output.ChecksumSHA256 == "" {
+		return fmt.Errorf("mirror %s object %s lacks a full-object SHA-256", client.mirror.Name, logicalKey)
+	}
+	if digest, err := base64.StdEncoding.DecodeString(*output.ChecksumSHA256); err != nil || len(digest) != sha256.Size {
+		return fmt.Errorf("mirror %s object %s returned a malformed SHA-256", client.mirror.Name, logicalKey)
+	}
+	if *output.ChecksumSHA256 != expectedSHA {
+		return fmt.Errorf("%w: mirror %s object %s has wrong full-object SHA-256", ErrCorrupt, client.mirror.Name, logicalKey)
 	}
 	return nil
 }
@@ -288,7 +297,7 @@ func (client *Client) GetVerified(ctx context.Context, logicalKey string, expect
 	}
 	response, err := client.client.GetObject(ctx, &s3.GetObjectInput{Bucket: &client.bucket, Key: &key})
 	if err != nil {
-		return err
+		return client.classifyReadError(err)
 	}
 	defer func() { _ = response.Body.Close() }()
 	blakeHash, _ := blake2b.New512(nil)
@@ -300,10 +309,10 @@ func (client *Client) GetVerified(ctx context.Context, logicalKey string, expect
 		return err
 	}
 	if uint64(count) != expected.Size || limited.N != 1 {
-		return fmt.Errorf("downloaded object size mismatch")
+		return fmt.Errorf("%w: downloaded object size mismatch", ErrCorrupt)
 	}
 	if hex.EncodeToString(blakeHash.Sum(nil)) != expected.BLAKE2b || hex.EncodeToString(shaHash.Sum(nil)) != expected.SHA256 || hex.EncodeToString(md5Hash.Sum(nil)) != expected.MD5 {
-		return fmt.Errorf("downloaded object checksum mismatch")
+		return fmt.Errorf("%w: downloaded object checksum mismatch", ErrCorrupt)
 	}
 	return nil
 }
@@ -318,7 +327,7 @@ func (client *Client) GetManifest(ctx context.Context, logicalKey, expectedBLAKE
 	}
 	response, err := client.client.GetObject(ctx, &s3.GetObjectInput{Bucket: &client.bucket, Key: &key})
 	if err != nil {
-		return nil, err
+		return nil, client.classifyReadError(err)
 	}
 	defer func() { _ = response.Body.Close() }()
 	if response.ContentLength != nil && (*response.ContentLength < 0 || *response.ContentLength > maximumManifestBytes) {
@@ -334,7 +343,7 @@ func (client *Client) GetManifest(ctx context.Context, logicalKey, expectedBLAKE
 	}
 	digest := blake2b.Sum512(data)
 	if hex.EncodeToString(digest[:]) != expectedBLAKE2b {
-		return nil, fmt.Errorf("metadata manifest BLAKE2b mismatch")
+		return nil, fmt.Errorf("%w: metadata manifest BLAKE2b mismatch", ErrCorrupt)
 	}
 	return data, nil
 }

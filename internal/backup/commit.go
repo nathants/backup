@@ -30,6 +30,13 @@ func Commit(ctx context.Context, options Options) (SnapshotResult, error) {
 			return SnapshotResult{}, err
 		}
 		defer func() { _ = history.Close() }()
+		ledger, err := run.loadLedger(head.State.Format.RepositoryUUID)
+		if err != nil {
+			return SnapshotResult{}, err
+		}
+		if ledger.ForwardRepair != "" {
+			return SnapshotResult{}, fmt.Errorf("published revision %s still requires forward repair", ledger.ForwardRepair)
+		}
 		return SnapshotResult{CommitID: head.CommitID, NoChanges: true}, nil
 	}
 	if txn.Plan != nil && len(txn.CandidateFiles) == 0 {
@@ -125,9 +132,32 @@ func (run *runtime) commitTransaction(ctx context.Context, txn *transaction) (Sn
 	if err != nil {
 		return SnapshotResult{}, err
 	}
+	if err := run.requireBackupEligibility(txn, ledger); err != nil {
+		return SnapshotResult{}, err
+	}
+	// A full audit may complete a pending tip through an alternate metadata
+	// representation. Finalize from that ledger evidence, without inventing
+	// acknowledgements for this transaction's different staged representation.
+	if txn.LocalCommit != "" {
+		for _, mirror := range run.config.Mirrors {
+			if ledger.eligible(mirror.Canonical.Name, txn.LocalCommit) {
+				if !txn.PushConfirmed {
+					if err := run.confirmOrPush(ctx, txn); err != nil {
+						return SnapshotResult{}, err
+					}
+				}
+				return run.finishSnapshot(txn, ledger)
+			}
+		}
+	}
 	for _, mirror := range run.config.Mirrors {
 		progress := txn.progress(mirror.Canonical.Name)
-		eligible := txn.BaseCommit == "" || ledger.Mirrors[mirror.Canonical.Name] == txn.BaseCommit
+		progress.RevisionComplete = false
+		if txn.Incident != ledger.Incident {
+			progress.MetadataPartCursor = 0
+			progress.MetadataManifest = false
+		}
+		eligible := txn.BaseCommit == "" && !ledger.Quarantined[mirror.Canonical.Name] || ledger.eligible(mirror.Canonical.Name, txn.BaseCommit)
 		if !eligible {
 			progress.DataComplete = false
 			progress.RevisionComplete = false
@@ -148,6 +178,13 @@ func (run *runtime) commitTransaction(ctx context.Context, txn *transaction) (Sn
 		if rotated {
 			return SnapshotResult{}, fmt.Errorf("an ambiguous data upload was assigned a fresh immutable key; retry commit")
 		}
+	}
+	if txn.Kind == "repair" || txn.Incident != ledger.Incident {
+		if err := run.revalidateCandidate(ctx, txn, candidate, ledger); err != nil {
+			return SnapshotResult{}, err
+		}
+	}
+	if txn.LocalCommit == "" {
 		if !hasDataComplete(txn) {
 			return SnapshotResult{}, fmt.Errorf("no individual mirror has the complete candidate data revision")
 		}
@@ -240,14 +277,7 @@ func (run *runtime) commitTransaction(ctx context.Context, txn *transaction) (Sn
 			return SnapshotResult{}, err
 		}
 	}
-	for name, commit := range ledger.Mirrors {
-		if commit == txn.LocalCommit {
-			progress := txn.progress(name)
-			progress.DataComplete = true
-			progress.RevisionComplete = true
-		}
-	}
-	metadataUploadErr := run.uploadMetadata(ctx, txn, &ledger)
+	metadataUploadErr := run.uploadMetadata(ctx, txn, &ledger, false)
 	var unavailable *metadataUploadUnavailable
 	if metadataUploadErr != nil && !errors.As(metadataUploadErr, &unavailable) {
 		return SnapshotResult{}, metadataUploadErr
@@ -265,16 +295,44 @@ func (run *runtime) commitTransaction(ctx context.Context, txn *transaction) (Sn
 		}
 		return SnapshotResult{}, fmt.Errorf("no individual mirror has a complete metadata chain through revision %s", txn.LocalCommit)
 	}
+	return run.finishSnapshot(txn, ledger)
+}
+
+func (run *runtime) finishSnapshot(txn *transaction, ledger completionLedger) (SnapshotResult, error) {
 	complete := make(map[string]bool)
 	lagging := make(map[string]bool)
 	for _, mirror := range run.config.Mirrors {
-		if txn.progress(mirror.Canonical.Name).RevisionComplete {
+		if ledger.eligible(mirror.Canonical.Name, txn.LocalCommit) {
 			complete[mirror.Canonical.Name] = true
 		} else {
 			lagging[mirror.Canonical.Name] = true
 		}
 	}
+	if len(complete) == 0 || !txn.PushConfirmed {
+		return SnapshotResult{}, fmt.Errorf("cannot finalize a revision without confirmed primary publication and a complete mirror")
+	}
 	result := SnapshotResult{CommitID: txn.LocalCommit, CompleteMirrors: sortedMirrorNames(complete), LaggingMirrors: sortedMirrorNames(lagging)}
+	if txn.Kind == "repair" && ledger.ForwardRepair != "" {
+		history, err := run.historyValidator().ValidateHistory(txn.LocalCommit)
+		if err != nil {
+			return SnapshotResult{}, err
+		}
+		_, found, findErr := history.IndexOf(ledger.ForwardRepair)
+		_ = history.Close()
+		if findErr != nil {
+			return SnapshotResult{}, findErr
+		}
+		if !found {
+			return SnapshotResult{}, fmt.Errorf("repair does not descend from the pending forward-repair anchor")
+		}
+		ledger.ForwardRepair = ""
+		if err := run.saveLedger(ledger); err != nil {
+			return SnapshotResult{}, err
+		}
+		if err := run.checkpoint("forward-repair-completed"); err != nil {
+			return SnapshotResult{}, err
+		}
+	}
 	if err := run.clearTransactionFiles(); err != nil {
 		return SnapshotResult{}, err
 	}
@@ -366,7 +424,7 @@ func hasRevisionComplete(txn *transaction) bool {
 func (run *runtime) uploadDataParts(ctx context.Context, txn *transaction, ledger completionLedger) (bool, error) {
 	if len(txn.DataParts) == 0 {
 		for _, mirror := range run.config.Mirrors {
-			eligible := txn.BaseCommit == "" || ledger.Mirrors[mirror.Canonical.Name] == txn.BaseCommit
+			eligible := txn.BaseCommit == "" && !ledger.Quarantined[mirror.Canonical.Name] || ledger.eligible(mirror.Canonical.Name, txn.BaseCommit)
 			complete := eligible
 			if txn.Capture != nil {
 				complete = complete && txn.Capture.Mirrors[mirror.Canonical.Name]
@@ -437,7 +495,7 @@ func (run *runtime) uploadDataParts(ctx context.Context, txn *transaction, ledge
 	}
 	for _, mirror := range run.config.Mirrors {
 		progress := txn.progress(mirror.Canonical.Name)
-		eligible := txn.BaseCommit == "" || ledger.Mirrors[mirror.Canonical.Name] == txn.BaseCommit
+		eligible := txn.BaseCommit == "" && !ledger.Quarantined[mirror.Canonical.Name] || ledger.eligible(mirror.Canonical.Name, txn.BaseCommit)
 		complete := eligible && progress.DataPartCursor == uint64(len(txn.DataParts))
 		progress.DataComplete = complete
 	}
@@ -562,16 +620,13 @@ func (run *runtime) remoteTip() (string, error) {
 	return tip, err
 }
 
-func (run *runtime) uploadMetadata(ctx context.Context, txn *transaction, ledger *completionLedger) error {
+func (run *runtime) uploadMetadata(ctx context.Context, txn *transaction, ledger *completionLedger, metadataOnly bool) error {
 	metadata := txn.Metadata
 	var lastErr error
 	uncertainKeys := make(map[string]bool)
 	for _, mirror := range run.config.Mirrors {
 		progress := txn.progress(mirror.Canonical.Name)
-		if progress.RevisionComplete || !progress.DataComplete {
-			continue
-		}
-		if txn.BaseCommit != "" && ledger.Mirrors[mirror.Canonical.Name] != txn.BaseCommit {
+		if !metadataOnly && (progress.RevisionComplete || !progress.DataComplete) {
 			continue
 		}
 		writer, err := run.writer(ctx, mirror)
@@ -650,7 +705,14 @@ func (run *runtime) uploadMetadata(ctx context.Context, txn *transaction, ledger
 				continue
 			}
 		}
+		if metadataOnly {
+			if err := run.saveTransaction(txn); err != nil {
+				return err
+			}
+			continue
+		}
 		progress.RevisionComplete = true
+		delete(ledger.Quarantined, mirror.Canonical.Name)
 		ledger.Mirrors[mirror.Canonical.Name] = txn.LocalCommit
 		if err := run.saveLedger(*ledger); err != nil {
 			return err

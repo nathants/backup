@@ -538,6 +538,9 @@ func (server *Server) headObject(ctx context.Context, writer http.ResponseWriter
 			return fmt.Errorf("verify object: %w", copyErr)
 		}
 		if count != info.Size() || !equalBytes(blakeHash.Sum(nil), expectedHash) {
+			// HEAD has no XML error body. Distinguish proven corruption from
+			// transient I/O/server failures without relying on error prose.
+			writer.Header().Set("X-Backup-Integrity", "corrupt")
 			return requestFailure(http.StatusInternalServerError, "ObjectCorrupt", "stored object failed content verification")
 		}
 		writer.Header().Set("x-amz-checksum-sha256", base64.StdEncoding.EncodeToString(shaHash.Sum(nil)))

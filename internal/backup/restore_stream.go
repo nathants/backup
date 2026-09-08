@@ -632,6 +632,10 @@ func fetchPackPart(ctx context.Context, run *runtime, part format.PackEntry, out
 			fetched = true
 			break
 		}
+		if observationErr := run.observeDataFailure(mirror.Canonical.Name, key, err); observationErr != nil {
+			_ = partFile.Close()
+			return observationErr
+		}
 		failures = append(failures, mirror.Canonical.Name+": "+errorText(err))
 	}
 	if !fetched {

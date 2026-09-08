@@ -4,10 +4,6 @@ import (
 	"context"
 	"fmt"
 	"sort"
-
-	"backup/internal/format"
-	"backup/internal/objectstore"
-	"backup/internal/repository"
 )
 
 func Verify(ctx context.Context, options Options, minimumMirrors int, revision string) (VerifyResult, error) {
@@ -20,12 +16,11 @@ func Verify(ctx context.Context, options Options, minimumMirrors int, revision s
 		return result, err
 	}
 	defer func() { _ = run.close() }()
-	if txn, err := run.loadTransaction(); err != nil {
+	txn, err := run.loadTransaction()
+	if err != nil {
 		return result, err
-	} else if txn != nil && txn.PushAttempted {
-		return result, fmt.Errorf("a published transaction requires commit finalization before verification")
 	}
-	head, history, err := run.validatedHead(true)
+	head, history, err := run.validatedHead(txn == nil || !txn.LocalAccepted)
 	if err != nil {
 		return result, err
 	}
@@ -38,47 +33,50 @@ func Verify(ctx context.Context, options Options, minimumMirrors int, revision s
 		return result, err
 	}
 	result.CommitID = selected.CommitID
-	targetIndex, found, err := history.IndexOf(selected.CommitID)
-	if err != nil {
-		return result, err
-	}
-	if !found {
-		return result, fmt.Errorf("selected metadata revision is outside validated history")
-	}
-	for _, mirror := range run.config.Mirrors {
-		verification := MirrorVerification{Name: mirror.Canonical.Name}
-		client, err := run.reader(ctx, mirror)
-		if err == nil {
-			err = auditManifestChain(ctx, client, history, targetIndex, selected.State.Format.RepositoryUUID, nil)
-		}
-		if err == nil {
-			err = auditDataCatalog(ctx, client, selected.State)
-		}
+	// Restart the audit after new negative evidence, so every reinstated mirror
+	// was checked AFTER the incident, regardless of mirror ordering. Each restart
+	// quarantines a previously unquarantined mirror; the loop is bounded.
+	for attempt := 0; attempt <= len(run.config.Mirrors); attempt++ {
+		before, err := run.loadLedger(head.State.Format.RepositoryUUID)
 		if err != nil {
-			verification.Error = terminalEscape(err.Error())
-		} else {
-			verification.Complete = true
-			result.Passed++
+			return result, err
 		}
-		result.Mirrors = append(result.Mirrors, verification)
-	}
-	sort.Slice(result.Mirrors, func(left, right int) bool { return result.Mirrors[left].Name < result.Mirrors[right].Name })
-	if result.Passed < minimumMirrors {
-		return result, fmt.Errorf("%d mirrors passed verification, fewer than required minimum %d", result.Passed, minimumMirrors)
-	}
-	return result, nil
-}
-
-func auditDataCatalog(ctx context.Context, client *objectstore.Client, state repository.State) error {
-	return state.WalkPacks(format.DefaultLimits(), func(part format.PackEntry) error {
-		key, err := format.ObjectKey(part.PartHash, part.ObjectID)
+		result.Mirrors = nil
+		result.Passed = 0
+		for _, mirror := range run.config.Mirrors {
+			verification := MirrorVerification{Name: mirror.Canonical.Name}
+			if err := run.auditMirror(ctx, mirror, history, selected); err != nil {
+				if isIncidentStateError(err) {
+					return result, err
+				}
+				verification.Error = terminalEscape(err.Error())
+			} else {
+				verification.Complete = true
+				result.Passed++
+			}
+			result.Mirrors = append(result.Mirrors, verification)
+		}
+		after, err := run.loadLedger(head.State.Format.RepositoryUUID)
 		if err != nil {
-			return err
+			return result, err
 		}
-		expected := objectstore.Object{Size: part.PartSize, BLAKE2b: part.PartHash, SHA256: part.PartSHA256, MD5: part.PartMD5}
-		if err := client.Audit(ctx, key, expected); err != nil {
-			return fmt.Errorf("data part %s: %w", key, err)
+		if after.Incident != before.Incident {
+			continue
 		}
-		return nil
-	})
+		if selected.CommitID == head.CommitID {
+			for _, mirror := range result.Mirrors {
+				if mirror.Complete {
+					if err := run.recordVerified(head.State.Format.RepositoryUUID, mirror.Name, selected.CommitID); err != nil {
+						return result, err
+					}
+				}
+			}
+		}
+		sort.Slice(result.Mirrors, func(i, j int) bool { return result.Mirrors[i].Name < result.Mirrors[j].Name })
+		if result.Passed < minimumMirrors {
+			return result, fmt.Errorf("%d mirrors passed verification, fewer than required minimum %d", result.Passed, minimumMirrors)
+		}
+		return result, nil
+	}
+	return result, fmt.Errorf("mirror integrity changed throughout verification; retry")
 }

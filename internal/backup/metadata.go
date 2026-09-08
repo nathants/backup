@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -35,6 +36,8 @@ func listManifestRepresentations(ctx context.Context, client *objectstore.Client
 		return nil, err
 	}
 	var representations []manifestRepresentation
+	unknown := false
+	corrupt := false
 	totalManifestBytes := 0
 	var failures []string
 	failureCount := 0
@@ -52,6 +55,8 @@ func listManifestRepresentations(ctx context.Context, client *objectstore.Client
 		}
 		data, err := client.GetManifest(ctx, key, hash)
 		if err != nil {
+			unknown = unknown || !conclusiveObjectFailure(err)
+			corrupt = corrupt || errors.Is(err, objectstore.ErrCorrupt)
 			recordFailure(err)
 			continue
 		}
@@ -69,14 +74,21 @@ func listManifestRepresentations(ctx context.Context, client *objectstore.Client
 		}
 		representations = append(representations, manifestRepresentation{Key: key, Hash: hash, ObjectID: objectID, Manifest: manifest, Data: data})
 	}
-	if len(representations) == 0 && failureCount != 0 {
+	sort.Slice(representations, func(left, right int) bool { return representations[left].Key < representations[right].Key })
+	if unknown || len(representations) == 0 && failureCount != 0 {
 		detail := strings.Join(failures, "; ")
 		if failureCount > len(failures) {
 			detail += fmt.Sprintf("; %d additional failures omitted", failureCount-len(failures))
 		}
-		return nil, fmt.Errorf("no valid metadata manifest for tip %s (%s)", tip, detail)
+		err := fmt.Errorf("metadata manifest inspection for tip %s (%s)", tip, detail)
+		if len(representations) == 0 && corrupt {
+			err = fmt.Errorf("%w: %w", objectstore.ErrCorrupt, err)
+		} else if !unknown {
+			err = fmt.Errorf("%w: %w", objectstore.ErrMissing, err)
+		}
+		// Retain usable alternatives even if another representation is unavailable.
+		return representations, err
 	}
-	sort.Slice(representations, func(left, right int) bool { return representations[left].Key < representations[right].Key })
 	return representations, nil
 }
 
@@ -118,10 +130,12 @@ func auditManifestChain(ctx context.Context, client *objectstore.Client, history
 			}
 			kind = format.BundleIncremental
 		}
-		representations, err := listManifestRepresentations(ctx, client, tip, repositoryUUID)
-		if err != nil {
-			return err
+		representations, listErr := listManifestRepresentations(ctx, client, tip, repositoryUUID)
+		if listErr != nil && len(representations) == 0 {
+			return listErr
 		}
+		unknown := listErr != nil
+		corrupt := false
 		var failures []string
 		accepted := false
 		for _, representation := range representations {
@@ -137,6 +151,8 @@ func auditManifestChain(ctx context.Context, client *objectstore.Client, history
 				}
 				expected := objectstore.Object{Size: part.Size, BLAKE2b: part.Hash, SHA256: part.SHA256, MD5: part.MD5}
 				if err := client.Audit(ctx, key, expected); err != nil {
+					unknown = unknown || !conclusiveObjectFailure(err)
+					corrupt = corrupt || errors.Is(err, objectstore.ErrCorrupt)
 					failures = appendRecoveryFailure(failures, fmt.Sprintf("%s: %v", key, err))
 					valid = false
 					break
@@ -154,7 +170,14 @@ func auditManifestChain(ctx context.Context, client *objectstore.Client, history
 			break
 		}
 		if !accepted {
-			return fmt.Errorf("no complete metadata representation for sequence %d tip %s (%s)", index, tip, strings.Join(failures, "; "))
+			err := fmt.Errorf("no complete metadata representation for sequence %d tip %s (%s)", index, tip, strings.Join(failures, "; "))
+			if corrupt {
+				return fmt.Errorf("%w: %w", objectstore.ErrCorrupt, err)
+			}
+			if !unknown {
+				return fmt.Errorf("%w: %w", objectstore.ErrMissing, err)
+			}
+			return errors.Join(err, listErr)
 		}
 	}
 	return nil

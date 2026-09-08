@@ -22,12 +22,11 @@ func RepairMetadataEdge(ctx context.Context, options Options, destinationMirror,
 		return result, err
 	}
 	defer func() { _ = run.close() }()
-	if txn, err := run.loadTransaction(); err != nil {
+	txn, err := run.loadTransaction()
+	if err != nil {
 		return result, err
-	} else if txn != nil {
-		return result, fmt.Errorf("finish or reset the staged transaction before metadata repair")
 	}
-	head, history, err := run.validatedHead(true)
+	head, history, err := run.validatedHead(txn == nil || !txn.LocalAccepted)
 	if err != nil {
 		return result, err
 	}
@@ -38,6 +37,20 @@ func RepairMetadataEdge(ctx context.Context, options Options, destinationMirror,
 	selected, err := resolveHistoryRevision(run.repo, history, revision)
 	if err != nil {
 		return result, err
+	}
+	if txn != nil && selected.CommitID == txn.LocalCommit {
+		_, remote, err := run.remoteHistory()
+		if err != nil {
+			return result, err
+		}
+		_, published, findErr := remote.IndexOf(selected.CommitID)
+		_ = remote.Close()
+		if findErr != nil {
+			return result, findErr
+		}
+		if !published {
+			return result, fmt.Errorf("resolve pending Git publication before repairing its metadata edge")
+		}
 	}
 	selectedIndex, found, err := history.IndexOf(selected.CommitID)
 	if err != nil {

@@ -249,7 +249,7 @@ func validateTransaction(txn transaction, candidate *repository.State) error {
 			return fmt.Errorf("captured ordinary transaction has inconsistent durable progress")
 		}
 	}
-	if txn.Kind == "repair" && len(txn.DataParts) != 1 || txn.Kind != "repair" && len(txn.DataParts) != 0 {
+	if txn.Kind == "repair" && len(txn.DataParts) == 0 || txn.Kind != "repair" && len(txn.DataParts) != 0 {
 		return fmt.Errorf("durable transaction has an invalid staged data-part count")
 	}
 	if txn.LocalCommit != "" && !isCommitID(txn.LocalCommit) {
@@ -524,11 +524,19 @@ func (run *runtime) loadLedger(repositoryUUID string) (completionLedger, error) 
 		}
 		return completionLedger{}, err
 	}
-	if ledger.Version != stateVersion || ledger.RepositoryUUID != repositoryUUID || ledger.Mirrors == nil {
+	if ledger.Version != stateVersion || ledger.RepositoryUUID != repositoryUUID || ledger.Mirrors == nil || ledger.Quarantined == nil {
 		return completionLedger{}, fmt.Errorf("completion ledger does not match repository identity")
 	}
+	if ledger.ForwardRepair != "" && !isCommitID(ledger.ForwardRepair) {
+		return completionLedger{}, fmt.Errorf("invalid forward-repair anchor")
+	}
+	for name, quarantined := range ledger.Quarantined {
+		if name == "" || !quarantined || ledger.Incident == 0 {
+			return completionLedger{}, fmt.Errorf("invalid mirror quarantine")
+		}
+	}
 	for name, commit := range ledger.Mirrors {
-		if name == "" || !isCommitID(commit) {
+		if name == "" || !isCommitID(commit) || ledger.Quarantined[name] {
 			return completionLedger{}, fmt.Errorf("completion ledger contains an invalid row")
 		}
 	}
@@ -540,6 +548,7 @@ func (run *runtime) saveLedger(ledger completionLedger) error {
 }
 
 func (run *runtime) clearTransactionFiles() error {
+	run.candidateState = nil
 	// Remove the control record first. After that durable boundary, leftover
 	// private files are unreferenced and the next add/init can clean them. This
 	// ordering prevents a crash from leaving a live transaction whose required

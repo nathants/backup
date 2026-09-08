@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 
 	"backup/internal/format"
+	"backup/internal/localconfig"
 	"backup/internal/objectstore"
 )
 
@@ -21,12 +22,11 @@ func Sync(ctx context.Context, options Options, sourceName, destinationName, rev
 		return result, err
 	}
 	defer func() { _ = run.close() }()
-	if txn, err := run.loadTransaction(); err != nil {
+	txn, err := run.loadTransaction()
+	if err != nil {
 		return result, err
-	} else if txn != nil {
-		return result, fmt.Errorf("finish or reset the staged transaction before mirror sync")
 	}
-	head, history, err := run.validatedHead(true)
+	head, history, err := run.validatedHead(txn == nil || !txn.LocalAccepted)
 	if err != nil {
 		return result, err
 	}
@@ -66,9 +66,15 @@ func Sync(ctx context.Context, options Options, sourceName, destinationName, rev
 	if err != nil {
 		return result, err
 	}
-	if err := auditDataCatalog(ctx, source, selected.State); err != nil {
+	if err := run.auditMirror(ctx, sourcePin, history, selected); err != nil {
 		return result, fmt.Errorf("source data catalog: %w", err)
 	}
+	// Observe destination loss before attempting immutable catch-up. Absence
+	// on an unacknowledged/lagging mirror is not an integrity incident.
+	if err := run.observeSyncDestination(ctx, destinationPin, history, selected); err != nil {
+		return result, err
+	}
+	copying := mirrorCopy{run: run, source: source, reader: destinationReader, writer: destinationWriter, sourceName: sourceName, destinationName: destinationName}
 	stage, err := os.MkdirTemp(run.options.statePath(), ".backup-sync-*")
 	if err != nil {
 		return result, err
@@ -85,7 +91,7 @@ func Sync(ctx context.Context, options Options, sourceName, destinationName, rev
 			return fmt.Errorf("stage sync object %s: %w", key, err)
 		}
 		path := filepath.Join(stage, fmt.Sprintf("data-%08d", dataIndex))
-		copied, copyErr := copyMirrorObject(ctx, source, destinationReader, destinationWriter, key, expected, path)
+		copied, copyErr := copying.copyObject(ctx, key, expected, path)
 		removeErr := os.Remove(path)
 		if os.IsNotExist(removeErr) {
 			removeErr = nil
@@ -109,7 +115,7 @@ func Sync(ctx context.Context, options Options, sourceName, destinationName, rev
 				return fmt.Errorf("stage metadata sync object %s: %w", key, err)
 			}
 			path := filepath.Join(stage, fmt.Sprintf("metadata-%08d-%08d", edgeIndex, partIndex))
-			copied, copyErr := copyMirrorObject(ctx, source, destinationReader, destinationWriter, key, expected, path)
+			copied, copyErr := copying.copyObject(ctx, key, expected, path)
 			removeErr := os.Remove(path)
 			if os.IsNotExist(removeErr) {
 				removeErr = nil
@@ -130,7 +136,7 @@ func Sync(ctx context.Context, options Options, sourceName, destinationName, rev
 		if err := os.WriteFile(manifestPath, representation.Data, 0o600); err != nil {
 			return err
 		}
-		copied, copyErr := ensureDestinationObject(ctx, destinationReader, destinationWriter, manifestKey, manifestExpected, manifestPath)
+		copied, copyErr := copying.ensureObject(ctx, manifestKey, manifestExpected, manifestPath)
 		removeErr := os.Remove(manifestPath)
 		if copyErr != nil || removeErr != nil {
 			return errors.Join(copyErr, removeErr)
@@ -143,18 +149,31 @@ func Sync(ctx context.Context, options Options, sourceName, destinationName, rev
 	if err := auditManifestChain(ctx, source, history, targetIndex, selected.State.Format.RepositoryUUID, copyMetadata); err != nil {
 		return result, fmt.Errorf("source metadata chain: %w", err)
 	}
-	if err := auditManifestChain(ctx, destinationReader, history, targetIndex, selected.State.Format.RepositoryUUID, nil); err != nil {
-		return result, fmt.Errorf("destination metadata verification: %w", err)
+	before, err := run.loadLedger(selected.State.Format.RepositoryUUID)
+	if err != nil {
+		return result, err
 	}
-	if err := auditDataCatalog(ctx, destinationReader, selected.State); err != nil {
-		return result, fmt.Errorf("destination data verification: %w", err)
+	for _, pin := range []localconfig.Mirror{sourcePin, destinationPin} {
+		if err := run.auditMirror(ctx, pin, history, selected); err != nil {
+			return result, err
+		}
 	}
 	ledger, err := run.loadLedger(selected.State.Format.RepositoryUUID)
 	if err != nil {
 		return result, err
 	}
-	if err := updateCompletionLedgerForSync(&ledger, destinationName, selected.CommitID, history); err != nil {
-		return result, err
+	if ledger.Incident != before.Incident {
+		return result, fmt.Errorf("new integrity incident during sync; verify mirrors before resuming backups")
+	}
+	for _, name := range []string{sourceName, destinationName} {
+		if selected.CommitID == head.CommitID {
+			delete(ledger.Quarantined, name)
+		}
+		if !ledger.Quarantined[name] {
+			if err := updateCompletionLedgerForSync(&ledger, name, selected.CommitID, history); err != nil {
+				return result, err
+			}
+		}
 	}
 	if err := run.saveLedger(ledger); err != nil {
 		return result, err
@@ -196,16 +215,35 @@ func updateCompletionLedgerForSync(ledger *completionLedger, mirror, selected st
 	return nil
 }
 
-func copyMirrorObject(ctx context.Context, source, destinationReader, destinationWriter *objectstore.Client, key string, expected objectstore.Object, path string) (bool, error) {
-	if err := destinationReader.Audit(ctx, key, expected); err == nil {
-		return false, nil
+type mirrorCopy struct {
+	run                         *runtime
+	source, reader, writer      *objectstore.Client
+	sourceName, destinationName string
+}
+
+func (copying mirrorCopy) auditDestination(ctx context.Context, key string, expected objectstore.Object) error {
+	err := copying.reader.Audit(ctx, key, expected)
+	if observationErr := copying.run.observeDataFailure(copying.destinationName, key, err); observationErr != nil {
+		return observationErr
 	}
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	return err
+}
+
+func (copying mirrorCopy) copyObject(ctx context.Context, key string, expected objectstore.Object, path string) (bool, error) {
+	if err := copying.auditDestination(ctx, key, expected); err == nil {
+		return false, nil
+	} else if isIncidentStateError(err) {
+		return false, err
+	}
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 	if err != nil {
 		return false, err
 	}
-	if err := source.GetVerified(ctx, key, expected, file); err != nil {
+	if err := copying.source.GetVerified(ctx, key, expected, file); err != nil {
 		_ = file.Close()
+		if observationErr := copying.run.observeDataFailure(copying.sourceName, key, err); observationErr != nil {
+			return false, observationErr
+		}
 		return false, err
 	}
 	if err := file.Sync(); err != nil {
@@ -215,19 +253,25 @@ func copyMirrorObject(ctx context.Context, source, destinationReader, destinatio
 	if err := file.Close(); err != nil {
 		return false, err
 	}
-	return ensureDestinationObject(ctx, destinationReader, destinationWriter, key, expected, path)
+	return copying.ensureObject(ctx, key, expected, path)
 }
 
-func ensureDestinationObject(ctx context.Context, reader, writer *objectstore.Client, key string, expected objectstore.Object, path string) (bool, error) {
-	if err := reader.Audit(ctx, key, expected); err == nil {
+func (copying mirrorCopy) ensureObject(ctx context.Context, key string, expected objectstore.Object, path string) (bool, error) {
+	if err := copying.auditDestination(ctx, key, expected); err == nil {
 		return false, nil
+	} else if isIncidentStateError(err) {
+		return false, err
 	}
-	result := writer.PutFile(ctx, key, path, expected)
+	result := copying.writer.PutFile(ctx, key, path, expected)
 	if result.Disposition == objectstore.CreateAcknowledged {
 		return true, nil
 	}
-	if (result.Disposition == objectstore.CreateConflict || result.Disposition == objectstore.CreateAmbiguous) && reader.Audit(ctx, key, expected) == nil {
-		return false, nil
+	if result.Disposition == objectstore.CreateConflict || result.Disposition == objectstore.CreateAmbiguous {
+		if err := copying.auditDestination(ctx, key, expected); err == nil {
+			return false, nil
+		} else if isIncidentStateError(err) {
+			return false, err
+		}
 	}
 	return false, fmt.Errorf("destination did not accept immutable object %s: %s", key, errorText(result.Err))
 }
