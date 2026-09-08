@@ -18,6 +18,7 @@ type EventKind string
 
 const (
 	EventMountEntered   EventKind = "mount-entered"
+	EventGitIgnored     EventKind = "git-ignored"
 	EventSpecialSkipped EventKind = "special-skipped"
 	EventBrokenSymlink  EventKind = "broken-symlink-skipped"
 	EventOutsideSymlink EventKind = "outside-symlink-skipped"
@@ -51,6 +52,7 @@ type File struct {
 type Result struct {
 	Entries                uint64
 	SkippedSpecial         uint64
+	SkippedGitIgnored      uint64
 	SkippedBrokenSymlinks  uint64
 	SkippedOutsideSymlinks uint64
 	MountsEntered          uint64
@@ -123,14 +125,19 @@ func (root *Root) walk(ignore format.Ignore, reporter Reporter, visit func(*File
 	if root == nil || root.fd < 0 {
 		return Result{}, fmt.Errorf("backup root is closed")
 	}
+	gitIgnore, err := inheritedGitIgnore(root.fd, root.Path)
+	if err != nil {
+		return Result{}, err
+	}
+	defer gitIgnore.close()
 	result := Result{}
-	if err := root.scanDirectory(root.fd, "", 0, ignore, reporter, &result, visit); err != nil {
+	if err := root.scanDirectory(root.fd, "", 0, ignore, gitIgnore, reporter, &result, visit); err != nil {
 		return Result{}, err
 	}
 	return result, nil
 }
 
-func (root *Root) scanDirectory(directoryFD int, relative string, parentMount uint64, ignore format.Ignore, reporter Reporter, result *Result, visit func(*File, format.IndexEntry) error) (returnErr error) {
+func (root *Root) scanDirectory(directoryFD int, relative string, parentMount uint64, ignore format.Ignore, gitRules *gitIgnore, reporter Reporter, result *Result, visit func(*File, format.IndexEntry) error) (returnErr error) {
 	// Mount IDs distinguish same-device bind mounts. Query the opened descriptor,
 	// not a pathname that could now name a different directory. STATX_MNT_ID is
 	// available since Linux 5.8; do not silently fall back to device numbers.
@@ -146,6 +153,20 @@ func (root *Root) scanDirectory(directoryFD int, relative string, parentMount ui
 		report(reporter, Event{Kind: EventMountEntered, Path: displayPath(relative)})
 	}
 	mountID := stat.Mnt_id
+	absolute := filepath.Join(root.Path, relative)
+	if !gitMetadataPath(absolute) {
+		found, err := hasGitMarker(directoryFD, absolute)
+		if err != nil {
+			return err
+		}
+		if found {
+			gitRules, err = startGitIgnore(directoryFD, absolute)
+			if err != nil {
+				return err
+			}
+			defer gitRules.close()
+		}
+	}
 	// Dup shares the directory offset and would exhaust later walks of root.fd.
 	copyFD, err := unix.Openat(directoryFD, ".", unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
 	if err != nil {
@@ -179,13 +200,23 @@ func (root *Root) scanDirectory(directoryFD int, relative string, parentMount ui
 			if err := unix.Fstatat(directoryFD, name, &stat, unix.AT_SYMLINK_NOFOLLOW); err != nil {
 				return fmt.Errorf("stat source %q: %w", indexPath, err)
 			}
+			isDirectory := stat.Mode&unix.S_IFMT == unix.S_IFDIR
+			gitIgnored, err := gitRules.match(filepath.Join(root.Path, childRelative), isDirectory)
+			if err != nil {
+				return err
+			}
+			if gitIgnored {
+				result.SkippedGitIgnored++
+				report(reporter, Event{Kind: EventGitIgnored, Path: indexPath})
+				continue
+			}
 			switch stat.Mode & unix.S_IFMT {
 			case unix.S_IFDIR:
 				childFD, err := unix.Openat(directoryFD, name, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
 				if err != nil {
 					return fmt.Errorf("open source directory %q: %w", indexPath, err)
 				}
-				err = root.scanDirectory(childFD, childRelative, mountID, ignore, reporter, result, visit)
+				err = root.scanDirectory(childFD, childRelative, mountID, ignore, gitRules, reporter, result, visit)
 				_ = unix.Close(childFD)
 				if err != nil {
 					return err

@@ -35,7 +35,7 @@ func TestWalkMountReportingOrdinaryDirectories(t *testing.T) {
 func TestScanMountDescriptorErrorIsFatal(t *testing.T) {
 	root := &Root{fd: -1}
 	var result Result
-	err := root.scanDirectory(-1, "nested", 0, format.Ignore{}, func(event Event) {
+	err := root.scanDirectory(-1, "nested", 0, format.Ignore{}, nil, func(event Event) {
 		t.Errorf("reported event after failed mount lookup: %+v", event)
 	}, &result, func(_ *File, entry format.IndexEntry) error {
 		t.Errorf("visited entry after failed mount lookup: %+v", entry)

@@ -53,5 +53,5 @@ resources, not immutable production mirrors or retained ransomware probes.
 A successful test proves real backup/helper interoperability, committed recipient
 policy, rotation, mixed-generation clone/restore, and old SHA-1/SHA-256 full and
 incremental ciphertext readability. It does not accept a production deployment or
-remove the separate first-backup gates. The helper uses published dependencies;
-backup retains its required local go-libsodium replacement.
+remove the separate first-backup gates. Both programs use published dependencies;
+the sibling helper checkout is needed here to run its tests, not to build backup.

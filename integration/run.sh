@@ -147,8 +147,8 @@ trap cleanup EXIT
 
 built=false
 for attempt in 1 2 3; do
-  if bounded_docker 30m build --progress=plain --build-context "go-libsodium=$repo/../go-libsodium" -t "$docker_server_image" "$repo" &&
-    bounded_docker 30m build --progress=plain --build-context "go-libsodium=$repo/../go-libsodium" --target integration-client -t "$docker_client_image" "$repo"; then
+  if bounded_docker 30m build --progress=plain -t "$docker_server_image" "$repo" &&
+    bounded_docker 30m build --progress=plain --target integration-client -t "$docker_client_image" "$repo"; then
     built=true
     break
   fi

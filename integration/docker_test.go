@@ -73,10 +73,9 @@ func ensureDockerImages(t *testing.T, repoRoot string) {
 			}
 			return
 		}
-		context := "go-libsodium=" + filepath.Join(repoRoot, "..", "go-libsodium")
 		for _, arguments := range [][]string{
-			{"build", "--progress=plain", "--build-context", context, "-t", dockerImage, repoRoot},
-			{"build", "--progress=plain", "--build-context", context, "--target", "integration-client", "-t", dockerClientImage, repoRoot},
+			{"build", "--progress=plain", "-t", dockerImage, repoRoot},
+			{"build", "--progress=plain", "--target", "integration-client", "-t", dockerClientImage, repoRoot},
 		} {
 			command := exec.Command("docker", arguments...)
 			var output bytes.Buffer
