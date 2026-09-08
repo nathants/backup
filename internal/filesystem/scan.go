@@ -135,7 +135,8 @@ func (root *Root) walk(ignore format.Ignore, reporter Reporter, visit func(*File
 }
 
 func (root *Root) scanDirectory(directoryFD int, relative string, parentDevice uint64, ignore format.Ignore, reporter Reporter, result *Result, visit func(*File, format.IndexEntry) error) (returnErr error) {
-	copyFD, err := unix.Dup(directoryFD)
+	// Dup shares the directory offset and would exhaust later walks of root.fd.
+	copyFD, err := unix.Openat(directoryFD, ".", unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
 	if err != nil {
 		return err
 	}

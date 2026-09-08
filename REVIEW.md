@@ -294,7 +294,7 @@ This is **not loss of recovered Git objects**: a knowledgeable operator can prom
 
 ## Low severity / unnecessary complexity
 
-### 16. An unused cleanup API duplicates recursive removal and is already incorrect
+### 16. [done] An unused cleanup API duplicates recursive removal and is already incorrect
 
 **Location:** `internal/durable/store.go:119-208`; production counterpart `internal/securefs/remove.go`.
 
@@ -304,7 +304,9 @@ This is **not loss of recovered Git objects**: a knowledgeable operator can prom
 
 The same shared-offset pattern appears in `filesystem.Root.scanDirectory` (`internal/filesystem/scan.go:137`) and `Spool.removeStaleFiles` (`internal/filesystem/spool.go:175`). Current ordinary scans open a fresh root, so this is not evidence that repeated CLI adds miss files, but the reusable APIs have a latent repeated-enumeration trap.
 
-**Direction:** delete the unused store reset API and duplicate recursive remover instead of extending a dead abstraction. For live repeated enumeration, open a new directory description rather than duping a consumed one; retain bounded entry batches.
+**Resolution (2026-09-06):** removed `Store.Reset`, its duplicate recursive helper, and tests specific to that unused API; retained the independent close-idempotency assertion in the store round-trip test. `backup reset` and its transaction-aware cleanup are unchanged. Scanner and spool enumeration now use `openat(fd, ".", ...)` with no-follow/directory/close-on-exec flags to obtain independent directory offsets. Scanner batches remain 256 entries; spool cleanup now also uses 256-entry batches while preserving filename, regular-file/owner, confinement, error, and fsync checks. No new abstraction, dependency, or format was added.
+
+**Validation:** before the fix, actual-system regressions reproduced a reused root returning zero entries on its second walk, spool final cleanup missing 300 files created after initial preparation, and a new stale symlink reaching only `ENOTEMPTY` instead of the required type check (`shell/c429ab710bdf59102f76e3a12f376b36/stdout` beneath the evidence directory above). Fixed tests cover three walks of one root with creation/deletion between passes, multi-batch spool cleanup, and rejecting a newly introduced symlink without changing its target. Focused normal/race tests and lint passed, followed by full `make check`, all ten fuzz campaigns, and Docker integration normally and under the race detector (`scratch/finding16-check.log`, `scratch/finding16-fuzz.log`, and `scratch/finding16-docker.log`). Real CLI backup/reset/restore/recovery paths, including the recovery-to-restore runbook with primary outage, passed. Independent inventory confirmed no run-owned Docker containers, volumes, or image tags remained (`scratch/finding16-docker-cleanup.json`). No cloud resources were changed.
 
 ### 17. Mount reporting detects device changes, not every mount boundary
 

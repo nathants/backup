@@ -171,37 +171,43 @@ func checkSpoolCapacity(sourceSize, reserveBytes, availableBytes, availableInode
 	return nil
 }
 
-func (spool *Spool) removeStaleFiles() error {
-	copyFD, err := unix.Dup(spool.fd)
+func (spool *Spool) removeStaleFiles() (returnErr error) {
+	// Preparation and final cleanup must each start at the directory beginning.
+	copyFD, err := unix.Openat(spool.fd, ".", unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
 	if err != nil {
-		return fmt.Errorf("duplicate plaintext spool descriptor: %w", err)
+		return fmt.Errorf("open plaintext spool reader: %w", err)
 	}
 	directory := os.NewFile(uintptr(copyFD), spool.path)
-	entries, readErr := directory.ReadDir(-1)
-	closeErr := directory.Close()
-	if readErr != nil {
-		return fmt.Errorf("read plaintext spool: %w", readErr)
+	defer func() {
+		if err := directory.Close(); err != nil && returnErr == nil {
+			returnErr = fmt.Errorf("close plaintext spool reader: %w", err)
+		}
+	}()
+	for {
+		entries, readErr := directory.ReadDir(256)
+		if readErr != nil && !errors.Is(readErr, io.EOF) {
+			return fmt.Errorf("read plaintext spool: %w", readErr)
+		}
+		for _, entry := range entries {
+			name := entry.Name()
+			if !validSpoolFilename(name) {
+				return fmt.Errorf("unexpected entry %q in plaintext spool", name)
+			}
+			var stat unix.Stat_t
+			if err := unix.Fstatat(spool.fd, name, &stat, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+				return fmt.Errorf("inspect stale plaintext spool entry %q: %w", name, err)
+			}
+			if stat.Mode&unix.S_IFMT != unix.S_IFREG || stat.Uid != uint32(os.Geteuid()) {
+				return fmt.Errorf("unexpected type or owner for plaintext spool entry %q", name)
+			}
+			if err := unix.Unlinkat(spool.fd, name, 0); err != nil {
+				return fmt.Errorf("remove stale plaintext spool entry %q: %w", name, err)
+			}
+		}
+		if errors.Is(readErr, io.EOF) {
+			return fsyncFD(spool.fd)
+		}
 	}
-	if closeErr != nil {
-		return fmt.Errorf("close plaintext spool reader: %w", closeErr)
-	}
-	for _, entry := range entries {
-		name := entry.Name()
-		if !validSpoolFilename(name) {
-			return fmt.Errorf("unexpected entry %q in plaintext spool", name)
-		}
-		var stat unix.Stat_t
-		if err := unix.Fstatat(spool.fd, name, &stat, unix.AT_SYMLINK_NOFOLLOW); err != nil {
-			return fmt.Errorf("inspect stale plaintext spool entry %q: %w", name, err)
-		}
-		if stat.Mode&unix.S_IFMT != unix.S_IFREG || stat.Uid != uint32(os.Geteuid()) {
-			return fmt.Errorf("unexpected type or owner for plaintext spool entry %q", name)
-		}
-		if err := unix.Unlinkat(spool.fd, name, 0); err != nil {
-			return fmt.Errorf("remove stale plaintext spool entry %q: %w", name, err)
-		}
-	}
-	return fsyncFD(spool.fd)
 }
 
 func validSpoolFilename(name string) bool {
