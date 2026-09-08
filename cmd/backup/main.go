@@ -41,6 +41,10 @@ commands:
   recover    recover metadata from one object mirror
   server     run the narrow production object server
 
+restore safety:
+  Keep exclusive control of the destination tree and its ancestry throughout
+  restore; concurrent destination writers are unsupported, even as the same user.
+
 common environment:
   BACKUP_ROOT             source root (default: /)
   BACKUP_CONFIG           trusted local config (default: $BACKUP_ROOT/.backup-config)

@@ -1,0 +1,261 @@
+# Top-to-bottom review
+
+Reviewed: 2026-09-04, repository commit `37479480ce0af88c52317db52369408f0dda7337`.
+
+## Scope and evidence
+
+Read all 93 tracked files in full, including production code, tests, dependency metadata, infrastructure, Docker/build scripts, license, and the authoritative design in `NINA.md`. Findings and line references describe that review baseline; `[done]` resolutions record subsequent approved fixes.
+
+At the review baseline, `make check` **passed**: all mandatory linters, vet, coverage tests, and race tests. That result did not cover the defects below. Sixteen additional focused assertions against actual system code failed in the review overlay, establishing behavioral defects, misleading test fixtures, and the recovery-output gap. The overlay does not modify repository sources or the existing test suite.
+
+Evidence directory:
+
+```text
+/home/nathants/.nina/runs/home_nathants_repos_backup_c0e244c3f665a430_20260904T225927Z_rpqMI
+```
+
+- Existing gate: `shell/f22aff85de1f6b5377744a48c879970e/stdout`.
+- Consolidated reproductions: `shell/26aae23337d020a9717d0da90eeb7590/stdout`.
+- Reproduction sources and overlay: `scratch/review_*test.go`, `scratch/review-overlay.json`.
+
+To rerun the focused assertions from this checkout, substitute the evidence directory for `EVIDENCE`:
+
+```sh
+./integration/cloud-free-env.sh go test \
+  -overlay "$EVIDENCE/scratch/review-overlay.json" \
+  ./internal/backup ./internal/filesystem ./internal/pack \
+  ./internal/s3server ./internal/format ./internal/durable \
+  -run '^TestReview' -count=1 -v
+```
+
+These assertions express the missing behavior and exit nonzero on the review baseline; individual assertions may pass after the corresponding fixes. Static findings are labeled separately; no power-loss experiment, hostile Git resource-exhaustion experiment, mutation fuzz campaign, Docker integration, or live cloud destructive contract was run for this review.
+
+## High severity
+
+### 1. [done] Restore can follow a substituted temporary symlink and publish an unverified inode
+
+**Location:** `internal/backup/restore.go:244-307`, especially `289` and `298-301`; analogous name-based symlink publication at `310-354`.
+
+`publishRegular` verifies bytes through an open temporary-file descriptor, but applies the timestamp through `UtimesNanoAt(parentFD, temporary, times, 0)`. That call follows symlinks. It subsequently renames the temporary **name**, not necessarily the inode it verified. Existing destination parents need not be private to the restoring process.
+
+A process with write access to that parent can replace the temporary entry while the original descriptor remains open. Substituting a symlink makes restore change the timestamp of a file outside the target and then publish the symlink as a supposedly verified regular file. Substituting another regular inode also breaks the verified-content publication guarantee. Descriptor-relative parent traversal and `RENAME_NOREPLACE` do not prevent substitution of the source name.
+
+**Reproduced:** `TestReviewRestoreTempSubstitution` swaps the temp during the destination copy. `publishRegular` returns success, the destination is a symlink, and the outside file's mtime becomes `1700000000123456789`. A FIFO only schedules the copy window deterministically; the publication code is unmodified. This requires a concurrent destination-directory writer, not merely malicious archive metadata. It does not apply to an exclusively controlled target tree.
+
+**Original direction:** apply metadata through the verified descriptor; protect the publication source in a private staging directory/inode scheme rather than a writable parent namespace. Explicitly establish the destination-writer trust boundary, including renamed parent directories. A last-second `lstat` alone is another race, not a solution. Add concurrent temp-substitution coverage for both file and symlink publication.
+
+**Approved resolution:** Admin chose straightforward hardening for exclusively controlled restore destinations, not defenses against adversarial concurrent destination writers. Regular-file timestamps now use the verified descriptor with `AT_EMPTY_PATH` (Linux 5.8+), and a no-follow device/inode/type comparison rejects detected temporary-entry substitution before rename. CLI help, the API comment, and `NINA.md` explicitly require exclusive control of the destination namespace and its ancestry throughout restore, for both regular files and symlinks. The inode check is defense in depth, not an atomic race-prevention mechanism; concurrent writers remain outside this agreed boundary.
+
+**Validation:** `TestRestoreRegularPublicationRejectsChangedTemporaryEntry` first reproduced publication of substituted symlinks/regular files and outside timestamp modification. All eight cases now pass, including positive controls and both overwrite modes; ten race-detector repetitions also pass. `TestRestoreHelpStatesExclusiveDestinationRequirement` and the actual `go run ./cmd/backup restore --help` output confirm the visible safety requirement. Full `make check` passed on 2026-09-04; evidence is `shell/befc54689178ebfda051dd54c7284255/stdout` beneath the evidence directory above.
+
+### 2. Fetching a newer revision silently destroys local configuration edits
+
+**Location:** `internal/backup/runtime.go:578-613`; `internal/backup/add.go:41-61`.
+
+`validatedHead(true)` fast-forwards by calling `ApplyCommit` before checking the worktree. `Add` checks status and reads `ignore`, `.publickeys`, and `mirrors.tsv` only afterward. The fetched tree has already replaced those files. The same helper is used by operations such as find, verify, restore, and sync, so even ostensibly observational commands can discard edits.
+
+This is more than an editor inconvenience: a locally added exclusion can disappear, causing `add` to select material the operator specifically intended not to back up. Removed recipients can similarly reappear in the candidate configuration.
+
+**Reproduced:** `TestReviewFetchPreservesIgnore` advances the remote through a valid descendant, locally writes `^\./secret$`, and runs `Add`. It succeeds, replaces the local ignore file with the remote version, and includes `./secret` in `DiffCandidate`.
+
+**Direction:** inspect and preserve/refuse dirty state against the current local revision before materializing fetched metadata. Do not silently merge security-sensitive configuration or restore remote bytes over operator edits. Test remote advancement together with mutable and unrelated dirty files.
+
+### 3. A mirror proven corrupt remains eligible for later successful backups
+
+**Location:** `internal/backup/verify.go:48-69`; `internal/backup/capture.go:62-71`; `internal/backup/commit.go:369-370,654`.
+
+Verification reports corruption but never invalidates the completion ledger. Later capture trusts the same old complete-through-base record and deduplicates against the old catalogs. New uploads and metadata completion can therefore turn a mirror already known to be missing/corrupt into a reported complete mirror without repairing the affected bytes.
+
+**Reproduced:** `TestReviewVerifyRevokesKnownCorruptMirror` creates a revision, corrupts one referenced pack part, observes a failed `Verify`, adds a different file, and commits. Commit reports `CompleteMirrors=[local]`; verifying that exact new revision immediately fails. The old corrupt part remains referenced.
+
+The issue is **known negative evidence being ignored**, not a demand to download/audit every historical object on every writer-only backup.
+
+**Direction:** durably revoke affected completeness eligibility after a conclusive failed integrity audit, and reconcile any staged candidate-complete state that depends on it. Restore eligibility only through an appropriate successful audit/sync/repair. Distinguish corruption/missing objects from transient unavailability rather than treating every network error as established data loss.
+
+### 4. The durable state machine relies on Git writes that are not durably configured
+
+**Location:** `internal/repository/git.go:215-229`; `internal/repository/manage.go:71-90,151-219`; `internal/backup/commit.go:150-185`.
+
+Canonical blobs, trees, and commits are created with Git plumbing, and their commit ID is then saved in fsynced transaction state. Neither the hardened Git invocation nor initialization pins `core.fsync`/`core.fsyncMethod`. There is no corresponding explicit hardening of those newly written Git objects and references before the durable control record depends on them.
+
+The installed Git manual documents the usual default as `committed,-loose-object`; `committed` itself is currently equivalent to `objects`, not `reference`. It explicitly warns that unhardened components can be lost after an unclean shutdown. Atomic worktree file replacement or fsync of a transaction file is not a durability contract for separate Git object/ref files.
+
+**Evidence:** static call-path review plus the installed `git-config(1)` documentation. Process-restart checkpoints passed, but they do not simulate loss of dirty kernel/storage caches. No actual power-loss failure is claimed.
+
+**Impact:** a durable transaction can remember a local commit whose objects or branch update were not durable. Resume may fail before bundling/pushing it, despite the surrounding fsync machinery.
+
+**Direction:** require a supported Git durability configuration covering loose/packed objects and references, with a real fsync method; verify it cannot be silently ignored. Audit directory durability at the corresponding boundaries and add storage-crash acceptance, not just returned-error checkpoints.
+
+### 5. Recovery's resource bounds stop at the Git subprocess boundary
+
+**Location:** `internal/backup/recover.go:51-79,573-585`; `internal/backup/metadata.go:269-298,406-421`; `internal/repository/git.go:215-229`.
+
+Manifest sizes and encrypted/plaintext bundle bytes are bounded, but the decrypted Git pack is passed to `git fetch` and `git fsck` before canonical blob/tree/history validation. The runner uses `exec.Command` without a context deadline or subprocess memory/disk/CPU enforcement. Bounding captured stdout is not a bound on Git's object inflation, delta reconstruction, object counts, or internal allocations.
+
+`recoveryWorkspaceRequirement` also estimates quarantine storage from encrypted bundle sizes and part counts. Those quantities do not conservatively bound the work/inodes needed to unpack and inspect arbitrary compressed Git objects. A public recipient key is enough for a compromised writer to construct decryptable hostile input; authenticated encryption alone does not make the pack trustworthy.
+
+**Evidence:** static boundary analysis; no resource-exhaustion payload was executed. Existing manifest/parser limits remain useful but do not cover this earlier stage.
+
+**Direction:** enforce explicit resource budgets for untrusted Git import/fsck and cancellation of their descendants, including a bounded/quota-controlled quarantine. Validate resource-relevant object properties as early as practical. Add a safely bounded compressed-pack/delta stress fixture proving rejection before resource exhaustion.
+
+### 6. The R2 lock contract checks the probe prefix, not the backup namespace
+
+**Location:** `integration/cloud_contract_test.go:142-175,357-391`.
+
+The caller appends a random `contract-...` namespace to `config.prefix`, then passes that narrower `contractPrefix` into the lock audit. The audit accepts any indefinite rule covering that probe namespace.
+
+For example, a rule covering `repository/contract-` passes this check for a configured `repository` backup prefix while leaving `repository/objects/...` and `repository/metadata/...` outside the protection being established. Destructive attempts against the locked probes cannot reveal that mistake.
+
+**Evidence:** static argument/prefix trace, not a new live R2 result. This is a false-acceptance hole in the release gate; it does not establish that any particular deployed bucket currently has this configuration.
+
+**Direction:** check coverage of the exact configured backup namespace independently of the random probe location. Handle an empty configured prefix as the entire bucket namespace, not `/`. Add a regression case where only `repository/contract-` is locked and acceptance must fail.
+
+## Medium severity
+
+### 7. There is no completion-ledger rebuild path for a single mirror
+
+**Location:** `internal/backup/sync.go:14-17,150-160`; `internal/backup/verify.go:48-69`; `internal/backup/capture.go:62-69`.
+
+After the local ledger is lost, writer-only commit correctly refuses to guess. However, successful verification does not rebuild the ledger, and `Sync` requires distinct source/destination names. A supported one-mirror repository consequently cannot follow the error's instruction to “audit and sync a mirror first.” Sync also records only the destination, not the healthy audited source.
+
+**Reproduced:** `TestReviewSingleMirrorLedgerRebuild`: delete only `completion-ledger.json`; verification passes with one complete mirror; self-sync is rejected; a subsequent real changed-file commit fails for lack of a known-complete mirror.
+
+**Direction:** provide an explicit audited rebuild path, or let self-sync perform that audit without copying. Record the exact validated commit, preserve non-regression rules, and never infer completion from existence or `412`.
+
+### 8. Initialization is not resumable across its earliest Git-creation window
+
+**Location:** `internal/repository/manage.go:71-90,96-112`; existing coverage at `internal/backup/backup_test.go:961`.
+
+Git initialization and origin configuration are separate commands. A crash after `git init` but before `remote add origin` leaves `.git` present. The next `Init` enters the existing-repository path, where `OpenManaged` rejects the missing origin before recovery of an empty pre-genesis repository can proceed.
+
+**Reproduced:** `TestReviewInitAfterGitInitCrash` runs the same SHA-256 `git init` into `.backup`, then invokes actual `Init`: `metadata Git remote does not match its trusted pin`. The existing early-init test calls the entire `repository.Initialize`, so it misses this window.
+
+**Direction:** retain a resumable initialization intent before the first mutation, or stage and atomically publish a fully configured empty repository. Only repair an authenticated/recognizably task-owned partial initialization; do not weaken the remote-pin check for arbitrary existing repositories.
+
+### 9. Symlink race handling both rejects legal filenames and leaks descriptors
+
+**Location:** `internal/filesystem/scan.go:279-303,311-327`.
+
+Two distinct defects:
+
+a. The code treats every `/proc/self/fd` target ending in ` (deleted)` as an unlinked inode. That suffix is also legal in a live Linux filename. A symlink to `file (deleted)` therefore fails an otherwise valid scan. `TestReviewLiveDeletedSuffixSymlink` reproduces this with a stationary regular target.
+
+b. A successful `Openat2` is followed by consistency checks that can return before the `defer Close(fd)` is installed. `TestReviewSymlinkRaceClosesResolvedFD` models replacement between the earlier stat and symlink classification and observes the descriptor count increase from 8 to 9. Repeated races during capture can accumulate leaked descriptors.
+
+There is also a static policy mismatch at `326-327`: a resolved target failing canonical path validation is classified as a broken symlink rather than returning the required invalid-path error.
+
+**Direction:** install cleanup immediately after a successful open; use inode/link-state and consistency checks rather than an ambiguous printable suffix to identify deletion; preserve fatal validation errors for noncanonical paths. Test genuine unlinks separately from literal suffixes.
+
+### 10. Recovery repeatedly copies the entire growing Git graph, then repeats recovery again
+
+**Location:** `internal/backup/metadata.go:388-439`, especially `411`; `internal/backup/recover.go:448-460,206-210`.
+
+Every accepted metadata edge is imported into a new empty quarantine, first fetching the entire previously accepted graph. It then runs fsck over the enlarged graph and deletes the old copy. For a linear history whose graph grows by roughly constant increments, this repeats work over prefixes of sizes 1, 2, ..., N: quadratic cumulative graph processing rather than incremental edge processing.
+
+Candidate verification subsequently discards the successfully reconstructed repository, retains the path description, and reconstructs/downloads the selected chain again for publication. This duplicates both network traffic and the expensive reconstruction. A mirror outage during the second pass can prevent publication after the first pass already recovered valid bytes.
+
+**Evidence:** static algorithm/call-path analysis, not a measured production-scale slowdown.
+
+**Direction:** retain the selected verified repository and publish it. Isolate failed physical alternatives without copying all accepted objects on each edge—for example, a carefully managed candidate object quarantine over a read-only accepted object store. Keep failed-alternative contamination tests and exact-history validation. Periodic full checkpoints are not necessary to address this implementation cost.
+
+### 11. Cloud acceptance still has incomplete destructive/role coverage
+
+**Location:** `integration/cloud_contract_test.go:187-269,292-334,399-407`.
+
+The advertised contract is stronger than these tests establish:
+
+a. R2 native lock mutation attempts use only the writer access-key ID and secret as bearer candidates; the reader credentials are never tested against that control plane, although the design explicitly requires both ordinary credentials to be unable to reach it.
+
+b. AWS control-plane mutation tests exercise the writer only. Reader testing establishes failed object creation, not inability to delete or mutate bucket/IAM authority. Neither backend suite implements the required role-escalation attempts. `DeleteBucketEncryption` is tested for AWS, but `PutBucketEncryption` is not; SSE-C rejection is AWS-only.
+
+c. The copy-overwrite attempt uses the protected probe itself as the source. The same contract establishes that the writer cannot read that source. A failed copy therefore does not distinguish missing source-read permission from destination overwrite protection. There is no positive source-read control.
+
+**Evidence:** static test inventory. These are gaps in proof, not assertions that the checked-in AWS policy currently grants those powers.
+
+**Direction:** map the explicitly required attacks to executable backend-specific cases, with applicable requests and separate ordinary-role coverage. For copy, use a source demonstrably readable by the attacking credential and verify the destination remains unchanged. Keep every mutation confined to the explicitly authorized destructive acceptance environment.
+
+### 12. Several safety tests pass for the wrong reason
+
+**Locations and reproduced problems:**
+
+a. `internal/pack/pack_test.go:205-218`: the “canonical” archive names payload `x` with 128 `a` characters rather than its BLAKE2b. The unmodified baseline already fails plaintext verification. Both the trailing-data and missing-end-marker variants therefore pass their `err != nil` assertions without establishing the intended protection. `TestReviewTrailingTestHasValidBaseline` confirms the baseline hash mismatch. The encrypted trailing-ciphertext test at `269-298` uses the same invalid member identity and lacks a valid positive control.
+
+b. `internal/format/format_test.go:314-318`: `MaxLineBytes=16` is combined with the larger default `MaxFieldBytes`. Parsing rejects the invalid limits configuration, not an overlong input record. `TestReviewLineLimitTestHasValidLimits` reports `maximum field size exceeds maximum line size`.
+
+c. `internal/s3server/s3server_test.go:572-577`: the truncated-body request is passed directly to `ServeHTTP` with the outgoing URL's scheme/host intact. It receives `InvalidRequest: absolute request targets are unsupported` before body validation, satisfying the expected HTTP 400. `TestReviewTruncatedTestReachesBodyValidation` confirms that exact response. The preceding wrong-body case does traverse HTTP and is not the same false positive.
+
+A related fuzzing weakness is static: `internal/pack/fuzz_test.go:14-36` has only empty/garbage ciphertext seeds and a zero secret. Random mutations will not cross the recipient/authentication barrier into authenticated framing and decompression. The separate canonical tar fuzz target is usefully seeded, but does not close this encrypted-reader gap.
+
+**Direction:** require each baseline to succeed, mutate exactly one property, and assert the relevant error/observable boundary. Add valid recipient/ciphertext seeds and a separate structured authenticated-input fuzz path where needed. Do not respond by weakening production checks or merely adding more negative cases that fail earlier.
+
+### 13. Server logs discard internal causes and report successful HTTP status as zero
+
+**Location:** `internal/s3server/server.go:234-267,329-382`.
+
+`handle` converts internal errors to a generic status/code/message tuple. `ServeHTTP` only sees that tuple, so upload write/fsync/permission failures lose their actual cause even in the private structured log. Keeping the wire response generic is correct; discarding the operator-side cause is not.
+
+Successful handlers return status zero as an internal sentinel, and that zero is emitted as the HTTP status. The response tracker records only whether headers were committed, not the actual status.
+
+**Reproduced:** `TestReviewServerLogsInternalCause` injects an invalid temp descriptor; the HTTP 500 log contains only `internal server error`, with no EBADF or `create upload temp` context. `TestReviewServerLogsActualStatus` observes an actual HTTP 200 PUT logged as `"status":0`.
+
+**Direction:** retain the underlying error until structured logging, sanitize sensitive data, and separately map it to the public response. Track the actual response status, including already-started responses and implicit 200s.
+
+### 14. The durable store's pathname writes contradict its descriptor-confined reads
+
+**Location:** `internal/durable/store.go:25-37,50-92`; related separate atomic writers at `internal/repository/git.go:401` and `internal/repository/manage.go:450`.
+
+`Open` runs pathname-based `MkdirAll` and `Chmod` before the no-follow open. `Write` retains a directory descriptor but uses `os.CreateTemp`/`os.Rename` against the original pathname, then fsyncs the retained descriptor. Reads use the descriptor correctly.
+
+**Reproduced at the store API:**
+
+a. `TestReviewOpenRejectsSymlinkWithoutChangingTarget`: opening a state symlink is rejected, but its outside target's permissions have already changed from `0755` to `0700`.
+
+b. `TestReviewWriteUsesRetainedDirectory`: rename the opened state directory and replace the original path with a symlink. `Write` returns success after writing outside the retained directory and fsyncing the wrong directory for that publication.
+
+**Boundary:** normal runtime prechecks and the private `.backup`/state directory make this less exposed than restore into an existing writable target. This is not a demonstrated remote-client exploit or a bypass through the ordinary initialization symlink test. It is a concrete API/contract flaw requiring access to the local parent namespace, and a source of false durability claims under path replacement.
+
+**Direction:** make state creation, chmod, temp creation, rename, cleanup, and directory fsync consistently descriptor-relative. Consolidate genuinely common atomic-publication behavior rather than maintaining byte-writer, stream-writer, and JSON-writer variants with different confinement semantics.
+
+### 15. Disaster recovery stops before a documented, tested usable client repository
+
+**Location:** `internal/backup/metadata.go:262-266,295`; `internal/backup/recover.go:206-219`; `internal/backup/restore.go:69`; `integration/docker_test.go:433-449`; recovery commands in `NINA.md`.
+
+Recovery publishes a bare Git repository with `refs/backup/recovered-tip` and a leftover candidate ref, but no branch under `refs/heads`. HEAD points at an unborn default branch. Ordinary restore still opens the managed checkout and fetches its configured primary. The runbook stops at producing `recovered.git`; it does not explain promotion of the selected validated tip, branch/HEAD setup, trusted remote repinning, or preparation of the checkout from which to restore.
+
+**Reproduced:** `TestReviewRecoveredRepositoryHasUsableBranch` takes the original primary offline, successfully recovers genesis from the object mirror, and finds no branches, `HEAD=refs/heads/master`, and only the two private backup refs.
+
+This is **not loss of recovered Git objects**: a knowledgeable operator can promote the ref manually. The gap is the last-mile disaster-recovery procedure and its acceptance test. Existing Docker coverage proves reconstruction and continued primary outage, not restoration using the reconstructed repository.
+
+**Direction:** document and test the exact manual promotion/setup/restore sequence, or publish a normal branch/HEAD if that is the intended command contract. Keep the mandatory primary concurrency authority for new backups; an offline-write mode is not needed. Finish the test by restoring actual content solely from the recovered metadata and surviving mirror.
+
+## Low severity / unnecessary complexity
+
+### 16. An unused cleanup API duplicates recursive removal and is already incorrect
+
+**Location:** `internal/durable/store.go:119-208`; production counterpart `internal/securefs/remove.go`.
+
+`Store.Reset` and its private recursive helper duplicate filesystem removal code, but repository-wide call-site inspection finds `Store.Reset` used only in its own tests, not by `backup reset`. It reads all directory entries at once and uses `Dup` on the retained descriptor. Duplicated descriptors share the directory offset, so a second reset can silently miss newly created entries.
+
+**Reproduced:** `TestReviewResetTwice` writes a file, resets, writes it again, resets again; the second call returns success with the file still present.
+
+The same shared-offset pattern appears in `filesystem.Root.scanDirectory` (`internal/filesystem/scan.go:137`) and `Spool.removeStaleFiles` (`internal/filesystem/spool.go:175`). Current ordinary scans open a fresh root, so this is not evidence that repeated CLI adds miss files, but the reusable APIs have a latent repeated-enumeration trap.
+
+**Direction:** delete the unused store reset API and duplicate recursive remover instead of extending a dead abstraction. For live repeated enumeration, open a new directory description rather than duping a consumed one; retain bounded entry batches.
+
+### 17. Mount reporting detects device changes, not every mount boundary
+
+**Location:** `internal/filesystem/scan.go:130,175-179`.
+
+The scanner compares `st_dev` with the parent device. A bind mount of another directory on the same filesystem has the same device number, so traversal proceeds without the required `mount-entered` diagnostic. This does not omit content, but it makes whole-root traversal less auditable than the design promises.
+
+**Evidence:** static comparison logic and Linux bind-mount semantics; no mount was created on the host during this review.
+
+**Direction:** use Linux mount identity, such as a suitable `statx` mount ID or a descriptor-consistent mount map, and cover same-device bind mounts in the isolated container test. Do not silently change traversal defaults.
+
+## Design assessment and ordering
+
+The largest problems are at boundaries: verified descriptor versus mutable name; local operator edits versus fetched metadata; positive ledger state versus later negative audit evidence; fsynced control state versus Git durability; and bounded Go parsers versus unbounded external Git work.
+
+The cumulative catalogs, external sorting, one-file spooling, immutable relocation, mirror intersection, and explicit state-machine checkpoints are justified by the agreed format and durability requirements. Replacing them with an in-memory catalog, per-file remote objects, automatic catalog switching, or a new database would trade away settled invariants rather than simplify this implementation safely. Likewise, checksum-only protocol verification and append-only capacity growth are deliberate, not findings.
+
+Prioritize the high-severity correctness/safety gaps, then repair the ledger/init recovery paths and misleading acceptance tests. The clearest simplifications are eliminating the duplicate recovery pass, avoiding repeated full-graph copying, deleting the unused recursive cleanup API, and consolidating safe atomic-file mechanics. Do not add another abstraction layer merely to hide these inconsistencies.

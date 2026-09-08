@@ -62,7 +62,7 @@ Build with:
 go build ./cmd/backup
 ```
 
-Linux, Git with SHA-256 support, and libsodium are required. Production metadata hosting uses `git-remote-aws`.
+Linux 5.8 or newer, Git with SHA-256 support, and libsodium are required. Restore uses `utimensat` with `AT_EMPTY_PATH` to apply nanosecond timestamps through the verified file descriptor, never through a mutable temporary filename. Production metadata hosting uses `git-remote-aws`.
 
 By default the client reads `$BACKUP_ROOT/.backup-config`, where `BACKUP_ROOT` defaults to `/`. The file must be a bounded regular file that is not group/other writable. Its raw tab/LF format is:
 
@@ -368,7 +368,7 @@ The ordinary client has no effective overwrite/delete capability against existin
 
 ## Restore safety
 
-Restore treats all metadata and object bytes as untrusted.
+Restore treats all metadata and object bytes as untrusted. The operator must exclusively control the destination namespace from planning through publication, including ancestor directories that could rename the target or its parents. Concurrent destination writers—including other same-user processes—are unsupported. In particular, do not restore as root into directories an untrusted user can modify. Private file modes and no-follow traversal do not enforce this operational requirement. The regular-file pre-publication inode check detects temporary-entry replacement during copying as defense in depth; it is not an atomic guarantee against a writer racing the subsequent rename. This boundary applies to symlink publication as well.
 
 Required behavior:
 

@@ -24,6 +24,16 @@ func TestHelpSucceeds(t *testing.T) {
 	}
 }
 
+func TestRestoreHelpStatesExclusiveDestinationRequirement(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	if err := run(context.Background(), []string{"restore", "--help"}, &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout.String(), "exclusive control of the destination tree") || !strings.Contains(stdout.String(), "concurrent destination writers are unsupported") {
+		t.Fatalf("restore help omits destination safety boundary: %q", stdout.String())
+	}
+}
+
 func TestSubcommandHelpSucceeds(t *testing.T) {
 	for _, command := range []string{"init", "add", "diff", "commit", "reset", "find", "restore", "verify", "sync", "repair", "recover", "server"} {
 		var stdout, stderr bytes.Buffer

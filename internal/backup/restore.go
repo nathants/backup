@@ -44,6 +44,9 @@ func markPublishedSyncError(err error) error {
 	return &publicationError{err: err}
 }
 
+// Restore requires exclusive control of the destination namespace, including
+// ancestors that could rename its directories, from planning through publication.
+// No-follow checks do not synchronize with concurrent destination writers.
 func Restore(ctx context.Context, options Options, request RestoreRequest) (RestoreResult, error) {
 	result := RestoreResult{}
 	if request.Pattern == "" {
@@ -286,11 +289,24 @@ func publishRegular(rootFD int, source string, entry format.IndexEntry, overwrit
 		return err
 	}
 	times := []unix.Timespec{{Sec: 0, Nsec: unix.UTIME_OMIT}, unix.NsecToTimespec(entry.MtimeNS)}
-	if err := unix.UtimesNanoAt(parentFD, temporary, times, 0); err != nil {
-		return err
+	if err := unix.UtimesNanoAt(fd, "", times, unix.AT_EMPTY_PATH); err != nil {
+		return fmt.Errorf("set destination timestamp through verified descriptor (requires Linux 5.8+): %w", err)
 	}
 	if err := file.Sync(); err != nil {
 		return err
+	}
+	// Detect replacement during the copy without following the temporary name.
+	// This is defense in depth, not synchronization: the caller must exclusively
+	// control the destination namespace through publication, including symlinks.
+	var opened, named unix.Stat_t
+	if err := unix.Fstat(fd, &opened); err != nil {
+		return err
+	}
+	if err := unix.Fstatat(parentFD, temporary, &named, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+		return fmt.Errorf("inspect destination temporary before publication: %w", err)
+	}
+	if named.Dev != opened.Dev || named.Ino != opened.Ino || named.Mode&unix.S_IFMT != unix.S_IFREG {
+		return fmt.Errorf("destination temporary file changed before publication")
 	}
 	if err := file.Close(); err != nil {
 		return err
