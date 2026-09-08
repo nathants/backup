@@ -36,16 +36,8 @@ const (
 	maximumListedKeys    = 1_000_000
 )
 
-type Role string
-
-const (
-	RoleWriter Role = "writer"
-	RoleReader Role = "reader"
-)
-
 type Options struct {
 	Mirror              format.Mirror
-	Role                Role
 	Profile             string
 	CAFile              string
 	CredentialsProvider aws.CredentialsProvider
@@ -56,7 +48,6 @@ type Client struct {
 	mirror format.Mirror
 	bucket string
 	prefix string
-	role   Role
 	client *s3.Client
 }
 
@@ -108,9 +99,6 @@ func rejectAWSSharedConfigEndpoints(sources []interface{}) error {
 }
 
 func New(ctx context.Context, options Options) (*Client, error) {
-	if options.Role != RoleWriter && options.Role != RoleReader {
-		return nil, fmt.Errorf("invalid mirror role %q", options.Role)
-	}
 	mirrorBytes, err := format.MarshalMirrors([]format.Mirror{options.Mirror})
 	if err != nil || len(mirrorBytes) == 0 {
 		return nil, fmt.Errorf("invalid pinned mirror: %w", err)
@@ -162,7 +150,7 @@ func New(ctx context.Context, options Options) (*Client, error) {
 		s3Options.UsePathStyle = options.Mirror.Kind != format.MirrorAWSS3
 		s3Options.APIOptions = append(s3Options.APIOptions, forceSignedPayload)
 	})
-	return &Client{mirror: options.Mirror, bucket: bucket, prefix: prefix, role: options.Role, client: client}, nil
+	return &Client{mirror: options.Mirror, bucket: bucket, prefix: prefix, client: client}, nil
 }
 
 func forceSignedPayload(stack *middleware.Stack) error {
@@ -185,9 +173,6 @@ func (client *Client) PutFile(ctx context.Context, logicalKey, filename string, 
 }
 
 func (client *Client) PutOpenFile(ctx context.Context, logicalKey string, file *os.File, expected Object) CreateResult {
-	if client.role != RoleWriter {
-		return CreateResult{Disposition: CreateFailed, Err: fmt.Errorf("writer client required")}
-	}
 	if file == nil {
 		return CreateResult{Disposition: CreateFailed, Err: fmt.Errorf("staged file is required")}
 	}
@@ -239,9 +224,6 @@ func (client *Client) PutOpenFile(ctx context.Context, logicalKey string, file *
 }
 
 func (client *Client) Audit(ctx context.Context, logicalKey string, expected Object) error {
-	if client.role != RoleReader {
-		return fmt.Errorf("reader client required")
-	}
 	if err := expected.validate(); err != nil {
 		return err
 	}
@@ -282,9 +264,6 @@ func (client *Client) Audit(ctx context.Context, logicalKey string, expected Obj
 }
 
 func (client *Client) GetVerified(ctx context.Context, logicalKey string, expected Object, output io.Writer) error {
-	if client.role != RoleReader {
-		return fmt.Errorf("reader client required")
-	}
 	if output == nil {
 		return fmt.Errorf("output writer is required")
 	}
@@ -318,9 +297,6 @@ func (client *Client) GetVerified(ctx context.Context, logicalKey string, expect
 }
 
 func (client *Client) GetManifest(ctx context.Context, logicalKey, expectedBLAKE2b string) ([]byte, error) {
-	if client.role != RoleReader {
-		return nil, fmt.Errorf("reader client required")
-	}
 	key, err := client.key(logicalKey)
 	if err != nil {
 		return nil, err
@@ -353,9 +329,6 @@ func (client *Client) List(ctx context.Context, logicalPrefix string) ([]string,
 }
 
 func (client *Client) ListLimited(ctx context.Context, logicalPrefix string, maximum int) ([]string, error) {
-	if client.role != RoleReader {
-		return nil, fmt.Errorf("reader client required")
-	}
 	if maximum <= 0 || maximum > maximumListedKeys {
 		return nil, fmt.Errorf("invalid mirror listing limit %d", maximum)
 	}

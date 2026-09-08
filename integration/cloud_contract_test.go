@@ -3,7 +3,6 @@ package integration
 import (
 	"bytes"
 	"context"
-	"crypto/md5"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
@@ -27,6 +26,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"github.com/aws/smithy-go"
 	smithyhttp "github.com/aws/smithy-go/transport/http"
 )
 
@@ -37,8 +37,7 @@ type cloudContractConfig struct {
 	prefix     string
 	endpoint   string
 	region     string
-	writer     aws.Credentials
-	reader     aws.Credentials
+	credential aws.Credentials
 	requireSSE bool
 }
 
@@ -70,27 +69,23 @@ func contractConfigFromEnvironment(t *testing.T, label, kind string) cloudContra
 	}
 	config := cloudContractConfig{
 		name: label, kind: kind, bucket: get("BUCKET"), prefix: strings.Trim(os.Getenv("BACKUP_"+label+"_CONTRACT_PREFIX"), "/"),
-		region: get("REGION"),
-		writer: aws.Credentials{AccessKeyID: get("WRITER_ACCESS_KEY"), SecretAccessKey: get("WRITER_SECRET_KEY"), SessionToken: os.Getenv("BACKUP_" + label + "_CONTRACT_WRITER_SESSION_TOKEN")},
-		reader: aws.Credentials{AccessKeyID: get("READER_ACCESS_KEY"), SecretAccessKey: get("READER_SECRET_KEY"), SessionToken: os.Getenv("BACKUP_" + label + "_CONTRACT_READER_SESSION_TOKEN")},
+		region:     get("REGION"),
+		credential: aws.Credentials{AccessKeyID: get("ACCESS_KEY"), SecretAccessKey: get("SECRET_KEY"), SessionToken: os.Getenv("BACKUP_" + label + "_CONTRACT_SESSION_TOKEN")},
 	}
 	config.endpoint = os.Getenv("BACKUP_" + label + "_CONTRACT_ENDPOINT")
 	if kind == format.MirrorCloudflareR2 && config.endpoint == "" {
 		t.Fatal("R2 contract requires an exact endpoint")
 	}
-	if config.writer.AccessKeyID == config.reader.AccessKeyID {
-		t.Fatal("cloud contract requires distinct writer and reader credentials")
-	}
 	return config
 }
 
-func createAndAuditCloudProbe(ctx context.Context, kind string, writer, reader *objectstore.Client, logicalKey, staged string, expected objectstore.Object) error {
+func createAndAuditCloudProbe(ctx context.Context, kind string, client *objectstore.Client, logicalKey, staged string, expected objectstore.Object) error {
 	if kind != format.MirrorAWSS3 {
-		created := writer.PutFile(ctx, logicalKey, staged, expected)
+		created := client.PutFile(ctx, logicalKey, staged, expected)
 		if created.Disposition != objectstore.CreateAcknowledged {
 			return fmt.Errorf("production client could not create immutable probe: %w", created.Err)
 		}
-		if err := reader.Audit(ctx, logicalKey, expected); err != nil {
+		if err := client.Audit(ctx, logicalKey, expected); err != nil {
 			return fmt.Errorf("checksum HEAD did not validate the probe: %w", err)
 		}
 		return nil
@@ -103,7 +98,7 @@ func createAndAuditCloudProbe(ctx context.Context, kind string, writer, reader *
 	for {
 		auditCandidate := writeConfirmed
 		if !writeConfirmed {
-			created := writer.PutFile(readinessCtx, logicalKey, staged, expected)
+			created := client.PutFile(readinessCtx, logicalKey, staged, expected)
 			switch created.Disposition {
 			case objectstore.CreateAcknowledged, objectstore.CreateConflict:
 				writeConfirmed = true
@@ -116,7 +111,7 @@ func createAndAuditCloudProbe(ctx context.Context, kind string, writer, reader *
 			}
 		}
 		if auditCandidate {
-			if err := reader.Audit(readinessCtx, logicalKey, expected); err == nil {
+			if err := client.Audit(readinessCtx, logicalKey, expected); err == nil {
 				return nil
 			} else {
 				lastErr = err
@@ -129,7 +124,7 @@ func createAndAuditCloudProbe(ctx context.Context, kind string, writer, reader *
 			if lastErr == nil {
 				lastErr = readinessCtx.Err()
 			}
-			return fmt.Errorf("AWS writer/reader policies did not become ready: %w", lastErr)
+			return fmt.Errorf("AWS client policy did not become ready: %w", lastErr)
 		case <-timer.C:
 		}
 	}
@@ -147,17 +142,12 @@ func runCloudContract(t *testing.T, config cloudContractConfig) {
 		endpoint = "-"
 	}
 	mirror := format.Mirror{Name: "contract", Kind: config.kind, S3URL: "s3://" + config.bucket + "/" + contractPrefix, Endpoint: endpoint, Region: config.region}
-	writer, err := objectstore.New(ctx, objectstore.Options{Mirror: mirror, Role: objectstore.RoleWriter, CredentialsProvider: credentials.NewStaticCredentialsProvider(config.writer.AccessKeyID, config.writer.SecretAccessKey, config.writer.SessionToken)})
-	if err != nil {
-		t.Fatal(err)
-	}
 	recorder := &methodRecorder{client: contractHTTPClient()}
-	reader, err := objectstore.New(ctx, objectstore.Options{Mirror: mirror, Role: objectstore.RoleReader, CredentialsProvider: credentials.NewStaticCredentialsProvider(config.reader.AccessKeyID, config.reader.SecretAccessKey, config.reader.SessionToken), HTTPClient: recorder})
+	client, err := objectstore.New(ctx, objectstore.Options{Mirror: mirror, CredentialsProvider: credentials.NewStaticCredentialsProvider(config.credential.AccessKeyID, config.credential.SecretAccessKey, config.credential.SessionToken), HTTPClient: recorder})
 	if err != nil {
 		t.Fatal(err)
 	}
-	writerS3 := directCloudClient(config, config.writer)
-	readerS3 := directCloudClient(config, config.reader)
+	s3Client := directCloudClient(config, config.credential)
 
 	payload := bytes.Repeat([]byte("immutable-backup-contract\n"), 128)
 	expected := objectstore.HashBytes(payload)
@@ -167,109 +157,156 @@ func runCloudContract(t *testing.T, config cloudContractConfig) {
 	if err := os.WriteFile(staged, payload, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := createAndAuditCloudProbe(ctx, config.kind, writer, reader, logicalKey, staged, expected); err != nil {
+	if err := createAndAuditCloudProbe(ctx, config.kind, client, logicalKey, staged, expected); err != nil {
 		t.Fatal(err)
 	}
 	t.Logf("immutable probe: s3://%s/%s", config.bucket, wireKey)
 	if config.kind == format.MirrorCloudflareR2 {
-		runR2LockProtectionContract(t, ctx, config, reader, logicalKey, expected)
+		runR2LockProtectionContract(t, ctx, config, client, logicalKey, expected)
 	}
 	if recorder.count(http.MethodGet) != 0 || recorder.count(http.MethodHead) == 0 {
 		t.Fatalf("cloud audit methods: HEAD=%d GET=%d", recorder.count(http.MethodHead), recorder.count(http.MethodGet))
 	}
-	conflict := writer.PutFile(ctx, logicalKey, staged, expected)
+	conflict := client.PutFile(ctx, logicalKey, staged, expected)
 	if conflict.Disposition != objectstore.CreateConflict {
 		t.Fatalf("conditional retry disposition=%d error=%v", conflict.Disposition, conflict.Err)
 	}
 
-	_, writerHeadErr := writerS3.HeadObject(ctx, &s3.HeadObjectInput{Bucket: &config.bucket, Key: &wireKey})
-	requireCloudHTTPStatus(t, "writer HEAD", writerHeadErr, http.StatusForbidden)
-	_, writerListErr := writerS3.ListObjectsV2(ctx, &s3.ListObjectsV2Input{Bucket: &config.bucket, Prefix: &contractPrefix, MaxKeys: aws.Int32(1)})
-	requireCloudHTTPStatus(t, "writer LIST", writerListErr, http.StatusForbidden)
-	readerWritePayload := []byte("reader must not write")
-	readerWriteObject := objectstore.HashBytes(readerWritePayload)
-	readerWriteKey := contractPrefix + "/objects/" + readerWriteObject.BLAKE2b + "/" + randomContractHex(t, 16)
-	_, readerWriteErr := readerS3.PutObject(ctx, contractPutInput(config, readerWriteKey, readerWritePayload, true))
-	requireCloudHTTPStatus(t, "reader create", readerWriteErr, http.StatusForbidden)
-	assertCloudKeyAbsent(t, ctx, readerS3, config.bucket, readerWriteKey, "reader create")
+	// Read/list are intentional ordinary-client capabilities on every backend.
+	var downloaded bytes.Buffer
+	if err := client.GetVerified(ctx, logicalKey, expected, &downloaded); err != nil || !bytes.Equal(downloaded.Bytes(), payload) {
+		t.Fatalf("ordinary client cannot read its probe: %v", err)
+	}
+	keys, err := client.List(ctx, "objects/")
+	if err != nil || len(keys) != 1 || keys[0] != logicalKey {
+		t.Fatalf("ordinary client cannot list its probe: %v keys=%v", err, keys)
+	}
 
 	wrongChecksumPayload := []byte("wrong checksum must be rejected")
 	wrongChecksumObject := objectstore.HashBytes(wrongChecksumPayload)
 	wrongChecksumKey := contractPrefix + "/objects/" + wrongChecksumObject.BLAKE2b + "/" + randomContractHex(t, 16)
 	wrong := contractPutInput(config, wrongChecksumKey, wrongChecksumPayload, true)
 	wrong.ChecksumSHA256 = aws.String(base64.StdEncoding.EncodeToString(make([]byte, sha256.Size)))
-	_, wrongChecksumErr := writerS3.PutObject(ctx, wrong)
-	requireCloudClientRejection(t, "wrong-checksum create", wrongChecksumErr)
-	assertCloudKeyAbsent(t, ctx, readerS3, config.bucket, wrongChecksumKey, "wrong-checksum create")
+	_, wrongChecksumErr := s3Client.PutObject(ctx, wrong)
+	requireCloudAPIError(t, "wrong-checksum create", wrongChecksumErr, http.StatusBadRequest, "BadDigest")
+	assertCloudKeyAbsent(t, ctx, s3Client, config.bucket, wrongChecksumKey, "wrong-checksum create")
+	if _, err := s3Client.PutObject(ctx, contractPutInput(config, wrongChecksumKey, wrongChecksumPayload, true)); err != nil {
+		t.Fatalf("correct-checksum positive control failed: %v", err)
+	}
 
 	if config.kind == format.MirrorAWSS3 {
-		runAWSCreateProtectionContract(t, ctx, config, writerS3, readerS3)
+		runAWSCreateProtectionContract(t, ctx, config, s3Client)
 		unconditionalPayload := []byte("AWS policy must require If-None-Match")
 		unconditionalObject := objectstore.HashBytes(unconditionalPayload)
 		unconditionalKey := contractPrefix + "/objects/" + unconditionalObject.BLAKE2b + "/" + randomContractHex(t, 16)
-		_, unconditionalErr := writerS3.PutObject(ctx, contractPutInput(config, unconditionalKey, unconditionalPayload, false))
+		_, unconditionalErr := s3Client.PutObject(ctx, contractPutInput(config, unconditionalKey, unconditionalPayload, false))
 		requireCloudHTTPStatus(t, "unconditional create", unconditionalErr, http.StatusForbidden)
-		assertCloudKeyAbsent(t, ctx, readerS3, config.bucket, unconditionalKey, "unconditional create")
+		assertCloudKeyAbsent(t, ctx, s3Client, config.bucket, unconditionalKey, "unconditional create")
 	}
 
 	overwritePayload := []byte("malicious overwrite")
-	_, overwriteErr := writerS3.PutObject(ctx, contractPutInput(config, wireKey, overwritePayload, false))
+	_, overwriteErr := s3Client.PutObject(ctx, contractPutInput(config, wireKey, overwritePayload, false))
 	requireCloudClientRejection(t, "unconditional overwrite", overwriteErr)
-	assertCloudProbe(t, ctx, reader, logicalKey, expected, "unconditional overwrite")
-	_, deleteErr := writerS3.DeleteObject(ctx, &s3.DeleteObjectInput{Bucket: &config.bucket, Key: &wireKey})
+	assertCloudProbe(t, ctx, client, logicalKey, expected, "unconditional overwrite")
+	sseOverwrite := contractPutInput(config, wireKey, overwritePayload, false)
+	sseOverwrite.ServerSideEncryption = ""
+	setContractSSECustomerKey(sseOverwrite)
+	_, sseErr := s3Client.PutObject(ctx, sseOverwrite)
+	requireCloudClientRejection(t, "SSE-C overwrite", sseErr)
+	assertCloudProbe(t, ctx, client, logicalKey, expected, "SSE-C overwrite")
+	_, deleteErr := s3Client.DeleteObject(ctx, &s3.DeleteObjectInput{Bucket: &config.bucket, Key: &wireKey})
 	requireCloudClientRejection(t, "delete", deleteErr)
-	assertCloudProbe(t, ctx, reader, logicalKey, expected, "delete")
-	probeHead, err := readerS3.HeadObject(ctx, &s3.HeadObjectInput{Bucket: &config.bucket, Key: &wireKey, ChecksumMode: types.ChecksumModeEnabled})
+	assertCloudProbe(t, ctx, client, logicalKey, expected, "delete")
+	probeHead, err := s3Client.HeadObject(ctx, &s3.HeadObjectInput{Bucket: &config.bucket, Key: &wireKey, ChecksumMode: types.ChecksumModeEnabled})
 	if err != nil {
-		t.Fatalf("reader could not inspect retained probe version: %v", err)
+		t.Fatalf("client could not inspect retained probe version: %v", err)
 	}
 	probeVersion := aws.ToString(probeHead.VersionId)
 	if config.kind == format.MirrorAWSS3 && probeVersion == "" {
 		t.Fatal("versioned AWS contract probe did not report a VersionId")
 	}
 	if probeVersion != "" {
-		_, versionDeleteErr := writerS3.DeleteObject(ctx, &s3.DeleteObjectInput{Bucket: &config.bucket, Key: &wireKey, VersionId: &probeVersion})
+		_, versionDeleteErr := s3Client.DeleteObject(ctx, &s3.DeleteObjectInput{Bucket: &config.bucket, Key: &wireKey, VersionId: &probeVersion})
 		requireCloudClientRejection(t, "version-specific delete", versionDeleteErr)
-		assertCloudProbe(t, ctx, reader, logicalKey, expected, "version-specific delete")
+		assertCloudProbe(t, ctx, client, logicalKey, expected, "version-specific delete")
 	}
-	batchOutput, batchErr := writerS3.DeleteObjects(ctx, &s3.DeleteObjectsInput{Bucket: &config.bucket, Delete: &types.Delete{Objects: []types.ObjectIdentifier{{Key: &wireKey, VersionId: probeHead.VersionId}}}})
-	if batchErr != nil {
-		requireCloudClientRejection(t, "batch delete", batchErr)
-	} else if batchOutput == nil || len(batchOutput.Errors) == 0 || len(batchOutput.Deleted) != 0 || aws.ToString(batchOutput.Errors[0].Key) != wireKey || aws.ToString(batchOutput.Errors[0].Code) == "" {
-		t.Fatalf("batch delete did not return an explicit per-object rejection: %#v", batchOutput)
+	versions := []*string{nil}
+	if probeVersion != "" {
+		versions = append(versions, &probeVersion)
 	}
-	assertCloudProbe(t, ctx, reader, logicalKey, expected, "batch delete")
-	_, copyErr := writerS3.CopyObject(ctx, &s3.CopyObjectInput{Bucket: &config.bucket, Key: &wireKey, CopySource: aws.String(url.PathEscape(config.bucket + "/" + wireKey))})
+	for _, version := range versions {
+		operation := "batch delete"
+		if version != nil {
+			operation = "version-specific batch delete"
+		}
+		batchOutput, batchErr := s3Client.DeleteObjects(ctx, &s3.DeleteObjectsInput{Bucket: &config.bucket, Delete: &types.Delete{Objects: []types.ObjectIdentifier{{Key: &wireKey, VersionId: version}}}})
+		if batchErr != nil {
+			requireCloudClientRejection(t, operation, batchErr)
+		} else if !cloudBatchRejected(batchOutput, wireKey) {
+			t.Fatalf("%s did not return a protection-related per-object rejection: %#v", operation, batchOutput)
+		} else {
+			t.Logf("denied %s: %s", operation, aws.ToString(batchOutput.Errors[0].Code))
+		}
+		assertCloudProbe(t, ctx, client, logicalKey, expected, operation)
+	}
+	// Use different bytes at a distinct source, and prove this same credential
+	// can read it. Self-copy can fail for reasons unrelated to immutability.
+	sourceObject := objectstore.HashBytes(overwritePayload)
+	sourceLogical := "objects/" + sourceObject.BLAKE2b + "/" + randomContractHex(t, 16)
+	sourceKey := contractPrefix + "/" + sourceLogical
+	if _, err := s3Client.PutObject(ctx, contractPutInput(config, sourceKey, overwritePayload, true)); err != nil {
+		t.Fatalf("copy source creation: %v", err)
+	}
+	var sourceBytes bytes.Buffer
+	if err := client.GetVerified(ctx, sourceLogical, sourceObject, &sourceBytes); err != nil || !bytes.Equal(sourceBytes.Bytes(), overwritePayload) {
+		t.Fatalf("copy source read positive control failed: %v", err)
+	}
+	_, copyErr := s3Client.CopyObject(ctx, &s3.CopyObjectInput{Bucket: &config.bucket, Key: &wireKey, CopySource: aws.String(url.PathEscape(config.bucket + "/" + sourceKey))})
 	requireCloudClientRejection(t, "copy overwrite", copyErr)
-	assertCloudProbe(t, ctx, reader, logicalKey, expected, "copy overwrite")
+	assertCloudProbe(t, ctx, client, logicalKey, expected, "copy overwrite")
 
-	multipart, multipartErr := writerS3.CreateMultipartUpload(ctx, &s3.CreateMultipartUploadInput{Bucket: &config.bucket, Key: &wireKey})
+	multipart, multipartErr := s3Client.CreateMultipartUpload(ctx, &s3.CreateMultipartUploadInput{Bucket: &config.bucket, Key: &wireKey})
 	if multipartErr != nil {
 		requireCloudClientRejection(t, "multipart overwrite initiation", multipartErr)
 	} else {
 		if multipart == nil || multipart.UploadId == nil {
 			t.Fatal("multipart overwrite initiation returned no upload ID")
 		}
+		defer func() {
+			cleanupCtx, cancel := context.WithTimeout(context.Background(), time.Minute)
+			defer cancel()
+			_, err := s3Client.AbortMultipartUpload(cleanupCtx, &s3.AbortMultipartUploadInput{Bucket: &config.bucket, Key: &wireKey, UploadId: multipart.UploadId})
+			if err != nil {
+				// AWS may deny abort permission; R2 locks also block aborts
+				// of attempted overwrites. Retain the tiny unfinished probe,
+				// never unlock a protected bucket merely to clean up a test.
+				requireCloudClientRejection(t, "abort multipart probe", err)
+				t.Logf("retained incomplete multipart probe: s3://%s/%s upload-id=%s", config.bucket, wireKey, aws.ToString(multipart.UploadId))
+			}
+			assertCloudProbe(t, cleanupCtx, client, logicalKey, expected, "abort multipart probe")
+		}()
 		partPayload := []byte("malicious multipart overwrite")
-		part, partErr := writerS3.UploadPart(ctx, &s3.UploadPartInput{Bucket: &config.bucket, Key: &wireKey, UploadId: multipart.UploadId, PartNumber: aws.Int32(1), Body: bytes.NewReader(partPayload)})
+		part, partErr := s3Client.UploadPart(ctx, &s3.UploadPartInput{Bucket: &config.bucket, Key: &wireKey, UploadId: multipart.UploadId, PartNumber: aws.Int32(1), Body: bytes.NewReader(partPayload)})
 		if partErr != nil {
 			requireCloudClientRejection(t, "multipart overwrite part", partErr)
 		} else {
 			if part == nil || part.ETag == nil {
 				t.Fatal("multipart overwrite part returned no ETag")
 			}
-			_, completeErr := writerS3.CompleteMultipartUpload(ctx, &s3.CompleteMultipartUploadInput{Bucket: &config.bucket, Key: &wireKey, UploadId: multipart.UploadId, MultipartUpload: &types.CompletedMultipartUpload{Parts: []types.CompletedPart{{ETag: part.ETag, PartNumber: aws.Int32(1)}}}})
+			_, completeErr := s3Client.CompleteMultipartUpload(ctx, &s3.CompleteMultipartUploadInput{Bucket: &config.bucket, Key: &wireKey, UploadId: multipart.UploadId, MultipartUpload: &types.CompletedMultipartUpload{Parts: []types.CompletedPart{{ETag: part.ETag, PartNumber: aws.Int32(1)}}}})
 			requireCloudClientRejection(t, "multipart overwrite completion", completeErr)
 		}
 	}
-	assertCloudProbe(t, ctx, reader, logicalKey, expected, "multipart overwrite")
+	assertCloudProbe(t, ctx, client, logicalKey, expected, "multipart overwrite")
 
 	if config.kind == format.MirrorAWSS3 {
-		runAWSControlPlaneProtectionContract(t, ctx, config, writerS3, reader, logicalKey, expected)
+		runAWSControlPlaneProtectionContract(t, ctx, config, s3Client, client, logicalKey, expected)
+		runAWSAuthorityProtectionContract(t, ctx, config, client, logicalKey, expected)
 	}
+	t.Run("real CLI round-trip", func(t *testing.T) { runCloudRoundTrip(t, config) })
 }
 
-func runAWSCreateProtectionContract(t *testing.T, ctx context.Context, config cloudContractConfig, writer, reader *s3.Client) {
+func runAWSCreateProtectionContract(t *testing.T, ctx context.Context, config cloudContractConfig, s3Client *s3.Client) {
 	t.Helper()
 	payload := []byte("default SSE-S3 upload")
 	object := objectstore.HashBytes(payload)
@@ -277,10 +314,10 @@ func runAWSCreateProtectionContract(t *testing.T, ctx context.Context, config cl
 	key = strings.TrimPrefix(key, "/")
 	input := contractPutInput(config, key, payload, true)
 	input.ServerSideEncryption = ""
-	if _, err := writer.PutObject(ctx, input); err != nil {
+	if _, err := s3Client.PutObject(ctx, input); err != nil {
 		t.Fatalf("AWS default-encryption create failed: %v", err)
 	}
-	head, err := reader.HeadObject(ctx, &s3.HeadObjectInput{Bucket: &config.bucket, Key: &key})
+	head, err := s3Client.HeadObject(ctx, &s3.HeadObjectInput{Bucket: &config.bucket, Key: &key})
 	if err != nil {
 		t.Fatalf("inspect AWS default-encryption object: %v", err)
 	}
@@ -296,41 +333,43 @@ func runAWSCreateProtectionContract(t *testing.T, ctx context.Context, config cl
 		key = strings.TrimPrefix(key, "/")
 		input := contractPutInput(config, key, payload, true)
 		input.ServerSideEncryption = ""
-		customerKey := bytes.Repeat([]byte{0x42}, 32)
-		digest := md5.Sum(customerKey)
-		input.SSECustomerAlgorithm = aws.String("AES256")
-		input.SSECustomerKey = aws.String(base64.StdEncoding.EncodeToString(customerKey))
-		input.SSECustomerKeyMD5 = aws.String(base64.StdEncoding.EncodeToString(digest[:]))
-		_, err := writer.PutObject(ctx, input)
+		setContractSSECustomerKey(input)
+		_, err := s3Client.PutObject(ctx, input)
 		requireCloudHTTPStatus(t, "SSE-C", err, http.StatusForbidden)
-		assertCloudKeyAbsent(t, ctx, reader, config.bucket, key, "SSE-C")
+		assertCloudKeyAbsent(t, ctx, s3Client, config.bucket, key, "SSE-C")
 	})
 }
 
-func runAWSControlPlaneProtectionContract(t *testing.T, ctx context.Context, config cloudContractConfig, writer *s3.Client, reader *objectstore.Client, probeKey string, expected objectstore.Object) {
+func runAWSControlPlaneProtectionContract(t *testing.T, ctx context.Context, config cloudContractConfig, s3Client *s3.Client, client *objectstore.Client, probeKey string, expected objectstore.Object) {
 	t.Helper()
 	assertDenied := func(operation string, err error) {
 		t.Helper()
 		requireCloudHTTPStatus(t, operation, err, http.StatusForbidden)
-		assertCloudProbe(t, ctx, reader, probeKey, expected, operation)
+		assertCloudProbe(t, ctx, client, probeKey, expected, operation)
 	}
-	_, err := writer.PutBucketVersioning(ctx, &s3.PutBucketVersioningInput{Bucket: &config.bucket, VersioningConfiguration: &types.VersioningConfiguration{Status: types.BucketVersioningStatusSuspended}})
+	_, err := s3Client.PutBucketVersioning(ctx, &s3.PutBucketVersioningInput{Bucket: &config.bucket, VersioningConfiguration: &types.VersioningConfiguration{Status: types.BucketVersioningStatusSuspended}})
 	assertDenied("suspend bucket versioning", err)
-	_, err = writer.PutObjectLockConfiguration(ctx, &s3.PutObjectLockConfigurationInput{Bucket: &config.bucket, ObjectLockConfiguration: &types.ObjectLockConfiguration{ObjectLockEnabled: types.ObjectLockEnabledEnabled}})
+	_, err = s3Client.PutObjectLockConfiguration(ctx, &s3.PutObjectLockConfigurationInput{Bucket: &config.bucket, ObjectLockConfiguration: &types.ObjectLockConfiguration{ObjectLockEnabled: types.ObjectLockEnabledEnabled}})
 	assertDenied("alter object-lock configuration", err)
 	publicAccess := &types.PublicAccessBlockConfiguration{BlockPublicAcls: aws.Bool(false), IgnorePublicAcls: aws.Bool(false), BlockPublicPolicy: aws.Bool(false), RestrictPublicBuckets: aws.Bool(false)}
-	_, err = writer.PutPublicAccessBlock(ctx, &s3.PutPublicAccessBlockInput{Bucket: &config.bucket, PublicAccessBlockConfiguration: publicAccess})
+	_, err = s3Client.PutPublicAccessBlock(ctx, &s3.PutPublicAccessBlockInput{Bucket: &config.bucket, PublicAccessBlockConfiguration: publicAccess})
 	assertDenied("weaken public-access blocking", err)
-	_, err = writer.DeletePublicAccessBlock(ctx, &s3.DeletePublicAccessBlockInput{Bucket: &config.bucket})
+	_, err = s3Client.DeletePublicAccessBlock(ctx, &s3.DeletePublicAccessBlockInput{Bucket: &config.bucket})
 	assertDenied("delete public-access blocking", err)
 	policy := fmt.Sprintf(`{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":"*","Action":"s3:*","Resource":["arn:aws:s3:::%s","arn:aws:s3:::%s/*"]}]}`, config.bucket, config.bucket)
-	_, err = writer.PutBucketPolicy(ctx, &s3.PutBucketPolicyInput{Bucket: &config.bucket, Policy: &policy})
+	_, err = s3Client.PutBucketPolicy(ctx, &s3.PutBucketPolicyInput{Bucket: &config.bucket, Policy: &policy})
 	assertDenied("replace bucket policy", err)
-	_, err = writer.DeleteBucketPolicy(ctx, &s3.DeleteBucketPolicyInput{Bucket: &config.bucket})
+	_, err = s3Client.DeleteBucketPolicy(ctx, &s3.DeleteBucketPolicyInput{Bucket: &config.bucket})
 	assertDenied("delete bucket policy", err)
-	_, err = writer.DeleteBucketEncryption(ctx, &s3.DeleteBucketEncryptionInput{Bucket: &config.bucket})
+	_, err = s3Client.DeleteBucketEncryption(ctx, &s3.DeleteBucketEncryptionInput{Bucket: &config.bucket})
 	assertDenied("delete bucket encryption", err)
-	_, err = writer.PutBucketLifecycleConfiguration(ctx, &s3.PutBucketLifecycleConfigurationInput{Bucket: &config.bucket, LifecycleConfiguration: &types.BucketLifecycleConfiguration{Rules: []types.LifecycleRule{{ID: aws.String("malicious-expiry"), Status: types.ExpirationStatusEnabled, Filter: &types.LifecycleRuleFilter{}, Expiration: &types.LifecycleExpiration{Days: aws.Int32(1)}}}}})
+	_, err = s3Client.PutBucketEncryption(ctx, &s3.PutBucketEncryptionInput{Bucket: &config.bucket, ServerSideEncryptionConfiguration: &types.ServerSideEncryptionConfiguration{Rules: []types.ServerSideEncryptionRule{{ApplyServerSideEncryptionByDefault: &types.ServerSideEncryptionByDefault{SSEAlgorithm: types.ServerSideEncryptionAwsKms}}}}})
+	assertDenied("replace bucket encryption", err)
+	_, err = s3Client.PutBucketAcl(ctx, &s3.PutBucketAclInput{Bucket: &config.bucket, ACL: types.BucketCannedACLPrivate})
+	assertDenied("alter bucket ACL", err)
+	_, err = s3Client.DeleteBucketLifecycle(ctx, &s3.DeleteBucketLifecycleInput{Bucket: &config.bucket})
+	assertDenied("delete bucket lifecycle policy", err)
+	_, err = s3Client.PutBucketLifecycleConfiguration(ctx, &s3.PutBucketLifecycleConfigurationInput{Bucket: &config.bucket, LifecycleConfiguration: &types.BucketLifecycleConfiguration{Rules: []types.LifecycleRule{{ID: aws.String("malicious-expiry"), Status: types.ExpirationStatusEnabled, Filter: &types.LifecycleRuleFilter{}, Expiration: &types.LifecycleExpiration{Days: aws.Int32(1)}}}}})
 	assertDenied("install destructive lifecycle policy", err)
 }
 
@@ -354,7 +393,7 @@ type r2LockRule struct {
 	} `json:"condition"`
 }
 
-func runR2LockProtectionContract(t *testing.T, ctx context.Context, config cloudContractConfig, reader *objectstore.Client, probeKey string, expected objectstore.Object) {
+func runR2LockProtectionContract(t *testing.T, ctx context.Context, config cloudContractConfig, client *objectstore.Client, probeKey string, expected objectstore.Object) {
 	t.Helper()
 	accountID := os.Getenv("BACKUP_R2_CONTRACT_ACCOUNT_ID")
 	auditToken := os.Getenv("BACKUP_R2_CONTRACT_LOCK_AUDIT_TOKEN")
@@ -367,7 +406,7 @@ func runR2LockProtectionContract(t *testing.T, ctx context.Context, config cloud
 	if auditToken == "" {
 		t.Fatal("BACKUP_R2_CONTRACT_LOCK_AUDIT_TOKEN with Workers R2 Storage Read is required")
 	}
-	if auditToken == config.writer.AccessKeyID || auditToken == config.writer.SecretAccessKey || auditToken == config.reader.AccessKeyID || auditToken == config.reader.SecretAccessKey {
+	if auditToken == config.credential.AccessKeyID || auditToken == config.credential.SecretAccessKey {
 		t.Fatal("R2 lock-audit token must be distinct from all S3 credential values")
 	}
 	endpoint := "https://api.cloudflare.com/client/v4/accounts/" + accountID + "/r2/buckets/" + url.PathEscape(config.bucket) + "/lock"
@@ -376,21 +415,43 @@ func runR2LockProtectionContract(t *testing.T, ctx context.Context, config cloud
 	if err := validateR2LockCoverage(config, before.Result.Rules); err != nil {
 		t.Fatal(err)
 	}
-	mutationBody, err := json.Marshal(struct {
-		Rules []json.RawMessage `json:"rules"`
-	}{Rules: before.Result.Rules})
+	accountEndpoint := "https://api.cloudflare.com/client/v4/accounts/" + accountID
+	bucketEndpoint := strings.TrimSuffix(endpoint, "/lock")
+	// Even a valid token-creation request confined to this bucket must fail:
+	// ordinary object credentials must not acquire credential-issuing authority.
+	tokenBody, err := json.Marshal(map[string]interface{}{
+		"name": "backup-testing-contract-token-" + randomContractHex(t, 8),
+		"policies": []interface{}{map[string]interface{}{
+			"effect":            "allow",
+			"resources":         map[string]string{"com.cloudflare.edge.r2.bucket." + accountID + "_" + environmentOrDefault("BACKUP_R2_CONTRACT_JURISDICTION", "default") + "_" + config.bucket: "*"},
+			"permission_groups": []interface{}{map[string]string{"id": "2efd5506f9c8494dacb1fa10a3e7d5b6"}},
+		}},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for label, token := range map[string]string{"access-key ID": config.writer.AccessKeyID, "secret access key": config.writer.SecretAccessKey} {
-		status, _, err := doR2LockRequest(ctx, http.MethodPut, endpoint, token, jurisdiction, mutationBody)
-		if err != nil {
-			t.Fatalf("R2 lock mutation attempt with %s: %v", label, err)
+	for _, credential := range []struct{ label, token string }{
+		{"access-key ID", config.credential.AccessKeyID}, {"secret access key", config.credential.SecretAccessKey},
+	} {
+		for _, attack := range []struct{ name, method, endpoint, body string }{
+			{"read lock configuration", http.MethodGet, endpoint, ""},
+			{"remove bucket locks", http.MethodPut, endpoint, `{"rules":[]}`},
+			{"install destructive lifecycle", http.MethodPut, bucketEndpoint + "/lifecycle", `{"rules":[{"id":"backup-testing-expiry","enabled":true,"conditions":{"prefix":""},"deleteObjectsTransition":{"condition":{"type":"Age","maxAge":86400}}}]}`},
+			{"enable public managed domain", http.MethodPut, bucketEndpoint + "/domains/managed", `{"enabled":true}`},
+			{"delete bucket", http.MethodDelete, bucketEndpoint, ""},
+			{"issue account token", http.MethodPost, accountEndpoint + "/tokens", string(tokenBody)},
+			{"change own token policy", http.MethodPut, accountEndpoint + "/tokens/" + config.credential.AccessKeyID, string(tokenBody)},
+		} {
+			status, body, err := doR2ControlRequest(ctx, attack.method, attack.endpoint, credential.token, jurisdiction, []byte(attack.body))
+			if err != nil {
+				t.Fatalf("R2 %s with %s: %v", attack.name, credential.label, err)
+			}
+			if !r2ControlDenied(status, body) {
+				t.Fatalf("R2 %s with %s did not return a recognized authentication/authorization denial: HTTP %d", attack.name, credential.label, status)
+			}
+			assertCloudProbe(t, ctx, client, probeKey, expected, "R2 "+attack.name)
+			t.Logf("denied R2 %s with %s: HTTP %d; probe unchanged", attack.name, credential.label, status)
 		}
-		if status != http.StatusUnauthorized && status != http.StatusForbidden {
-			t.Fatalf("ordinary R2 %s reached lock control plane: HTTP %d", label, status)
-		}
-		assertCloudProbe(t, ctx, reader, probeKey, expected, "R2 lock mutation with "+label)
 	}
 	after := getR2LockRules(t, ctx, endpoint, auditToken, jurisdiction)
 	beforeRules, _ := json.Marshal(before.Result.Rules)
@@ -428,7 +489,7 @@ func validateR2LockCoverage(config cloudContractConfig, rules []json.RawMessage)
 
 func getR2LockRules(t *testing.T, ctx context.Context, endpoint, token, jurisdiction string) r2LockEnvelope {
 	t.Helper()
-	status, data, err := doR2LockRequest(ctx, http.MethodGet, endpoint, token, jurisdiction, nil)
+	status, data, err := doR2ControlRequest(ctx, http.MethodGet, endpoint, token, jurisdiction, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -445,14 +506,14 @@ func getR2LockRules(t *testing.T, ctx context.Context, endpoint, token, jurisdic
 	return result
 }
 
-func doR2LockRequest(ctx context.Context, method, endpoint, token, jurisdiction string, body []byte) (int, []byte, error) {
+func doR2ControlAttempt(ctx context.Context, method, endpoint, token, jurisdiction string, body []byte) (int, []byte, error) {
 	request, err := http.NewRequestWithContext(ctx, method, endpoint, bytes.NewReader(body))
 	if err != nil {
 		return 0, nil, err
 	}
 	request.Header.Set("Authorization", "Bearer "+token)
 	request.Header.Set("Accept", "application/json")
-	if method == http.MethodPut {
+	if method == http.MethodPut || method == http.MethodPost {
 		request.Header.Set("Content-Type", "application/json")
 	}
 	if jurisdiction != "" {
@@ -533,12 +594,17 @@ func cloudHTTPStatus(err error) (int, bool) {
 
 func cloudClientRejection(err error) (int, bool) {
 	status, ok := cloudHTTPStatus(err)
-	if !ok {
+	var api smithy.APIError
+	if !ok || !errors.As(err, &api) {
 		return status, false
 	}
 	switch status {
-	case http.StatusBadRequest, http.StatusForbidden, http.StatusMethodNotAllowed, http.StatusConflict, http.StatusPreconditionFailed:
-		return status, true
+	case http.StatusForbidden:
+		return status, api.ErrorCode() == "AccessDenied"
+	case http.StatusConflict:
+		return status, api.ErrorCode() == "ObjectLockedByBucketPolicy"
+	case http.StatusPreconditionFailed:
+		return status, api.ErrorCode() == "PreconditionFailed"
 	default:
 		return status, false
 	}
@@ -550,6 +616,7 @@ func requireCloudClientRejection(t *testing.T, operation string, err error) {
 	if !ok {
 		t.Fatalf("%s did not return an accepted provider rejection: status=%d error=%v", operation, status, err)
 	}
+	t.Logf("denied %s: HTTP %d", operation, status)
 }
 
 func requireCloudHTTPStatus(t *testing.T, operation string, err error, allowed ...int) {
@@ -560,6 +627,11 @@ func requireCloudHTTPStatus(t *testing.T, operation string, err error, allowed .
 	}
 	for _, expected := range allowed {
 		if status == expected {
+			if status == http.StatusForbidden {
+				requireCloudClientRejection(t, operation, err)
+			} else {
+				t.Logf("denied %s: HTTP %d", operation, status)
+			}
 			return
 		}
 	}
@@ -572,11 +644,25 @@ func TestCloudContractHTTPRejectionClassification(t *testing.T) {
 	}
 	for _, test := range []struct {
 		status   int
+		code     string
 		accepted bool
-	}{{http.StatusBadRequest, true}, {http.StatusForbidden, true}, {http.StatusPreconditionFailed, true}, {http.StatusTooManyRequests, false}, {http.StatusInternalServerError, false}} {
+	}{
+		{403, "AccessDenied", true},
+		{409, "ObjectLockedByBucketPolicy", true},
+		{412, "PreconditionFailed", true},
+		{400, "InvalidArgument", false},
+		{403, "SignatureDoesNotMatch", false},
+		{403, "InvalidAccessKeyId", false},
+		{405, "MethodNotAllowed", false},
+		{409, "OperationAborted", false},
+		{409, "BucketNotEmpty", false},
+		{412, "UnknownError", false},
+		{429, "SlowDown", false},
+		{500, "InternalError", false},
+	} {
 		err := &smithyhttp.ResponseError{
 			Response: &smithyhttp.Response{Response: &http.Response{StatusCode: test.status}},
-			Err:      errors.New("provider response"),
+			Err:      &smithy.GenericAPIError{Code: test.code, Message: "provider response"},
 		}
 		status, accepted := cloudClientRejection(err)
 		if status != test.status || accepted != test.accepted {
@@ -585,9 +671,9 @@ func TestCloudContractHTTPRejectionClassification(t *testing.T) {
 	}
 }
 
-func assertCloudKeyAbsent(t *testing.T, ctx context.Context, reader *s3.Client, bucket, key, operation string) {
+func assertCloudKeyAbsent(t *testing.T, ctx context.Context, client *s3.Client, bucket, key, operation string) {
 	t.Helper()
-	_, err := reader.HeadObject(ctx, &s3.HeadObjectInput{Bucket: &bucket, Key: &key})
+	_, err := client.HeadObject(ctx, &s3.HeadObjectInput{Bucket: &bucket, Key: &key})
 	if err == nil {
 		t.Fatalf("key created by rejected %s", operation)
 	}
@@ -597,9 +683,9 @@ func assertCloudKeyAbsent(t *testing.T, ctx context.Context, reader *s3.Client, 
 	}
 }
 
-func assertCloudProbe(t *testing.T, ctx context.Context, reader *objectstore.Client, key string, expected objectstore.Object, operation string) {
+func assertCloudProbe(t *testing.T, ctx context.Context, client *objectstore.Client, key string, expected objectstore.Object, operation string) {
 	t.Helper()
-	if err := reader.Audit(ctx, key, expected); err != nil {
+	if err := client.Audit(ctx, key, expected); err != nil {
 		t.Fatalf("probe changed after %s attempt: %v", operation, err)
 	}
 }
@@ -638,4 +724,71 @@ func (recorder *methodRecorder) count(method string) int {
 	recorder.mutex.Lock()
 	defer recorder.mutex.Unlock()
 	return recorder.counts[method]
+}
+
+// Match observed Cloudflare authentication errors, including the token API's
+// nested invalid-Authorization-header code. Generic 400s/invalid bodies are not
+// evidence of a credential boundary; timeouts and server errors also fail.
+func r2ControlDenied(status int, data []byte) bool {
+	var response struct {
+		Success bool `json:"success"`
+		Errors  []struct {
+			Code  int `json:"code"`
+			Chain []struct {
+				Code int `json:"code"`
+			} `json:"error_chain"`
+		} `json:"errors"`
+		Result json.RawMessage `json:"result"`
+	}
+	if json.Unmarshal(data, &response) != nil || response.Success || len(response.Errors) != 1 || string(response.Result) != "null" {
+		return false
+	}
+	failure := response.Errors[0]
+	switch status {
+	case http.StatusBadRequest:
+		return failure.Code == 9106 || failure.Code == 6003 && len(failure.Chain) == 1 && failure.Chain[0].Code == 6111
+	case http.StatusUnauthorized, http.StatusForbidden:
+		return failure.Code == 10000 || failure.Code == 9109
+	default:
+		return false
+	}
+}
+
+func doR2ControlRequest(ctx context.Context, method, endpoint, token, jurisdiction string, body []byte) (int, []byte, error) {
+	// Authentication-negative probes can hit Cloudflare's invalid-token limiter.
+	// Retry only throttling, never count it as denial, and retain a bounded wait.
+	for attempt := 0; ; attempt++ {
+		status, data, err := doR2ControlAttempt(ctx, method, endpoint, token, jurisdiction, body)
+		if err != nil || status != http.StatusTooManyRequests || attempt == 4 {
+			return status, data, err
+		}
+		timer := time.NewTimer(time.Duration(attempt+1) * 15 * time.Second)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return 0, nil, ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
+func cloudBatchRejected(output *s3.DeleteObjectsOutput, key string) bool {
+	if output == nil || len(output.Errors) != 1 || len(output.Deleted) != 0 || aws.ToString(output.Errors[0].Key) != key {
+		return false
+	}
+	code := aws.ToString(output.Errors[0].Code)
+	return code == "AccessDenied" || code == "ObjectLockedByBucketPolicy"
+}
+
+func TestCloudBatchRejectionRequiresProtectionEvidence(t *testing.T) {
+	for _, code := range []string{"AccessDenied", "ObjectLockedByBucketPolicy", "InvalidArgument", "NoSuchKey", "InternalError", ""} {
+		output := &s3.DeleteObjectsOutput{Errors: []types.Error{{Key: aws.String("probe"), Code: &code}}}
+		want := code == "AccessDenied" || code == "ObjectLockedByBucketPolicy"
+		if got := cloudBatchRejected(output, "probe"); got != want {
+			t.Fatalf("batch code %q accepted=%t, want %t", code, got, want)
+		}
+	}
+	if cloudBatchRejected(nil, "probe") || cloudBatchRejected(&s3.DeleteObjectsOutput{}, "probe") {
+		t.Fatal("empty result accepted")
+	}
 }

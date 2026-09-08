@@ -624,7 +624,7 @@ func fetchPackPart(ctx context.Context, run *runtime, part format.PackEntry, out
 			_ = partFile.Close()
 			return err
 		}
-		reader, err := run.reader(ctx, mirror)
+		reader, err := run.client(ctx, mirror)
 		if err == nil {
 			err = reader.GetVerified(ctx, key, expected, partFile)
 		}

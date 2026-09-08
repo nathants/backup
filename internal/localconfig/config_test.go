@@ -9,11 +9,11 @@ import (
 	"backup/internal/format"
 )
 
-func TestLoadPinsCanonicalMirrorsAndRoleProfiles(t *testing.T) {
+func TestLoadPinsCanonicalMirrorsAndProfile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config")
 	data := "git-remote\t/tmp/remote.git\n" +
 		"branch\tmain\n" +
-		"mirror\tlocal\tbackup-server\ts3://backup-test/repo\thttps://localhost:8443\tus-east-1\twriter-local\treader-local\t/tmp/ca.pem\n"
+		"mirror\tlocal\tbackup-server\ts3://backup-test/repo\thttps://localhost:8443\tus-east-1\tbackup-local\t/tmp/ca.pem\n"
 	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -25,7 +25,7 @@ func TestLoadPinsCanonicalMirrorsAndRoleProfiles(t *testing.T) {
 		t.Fatalf("config=%#v", config)
 	}
 	mirror := config.Mirrors[0]
-	if mirror.Canonical.Name != "local" || mirror.WriterProfile != "writer-local" || mirror.ReaderProfile != "reader-local" || mirror.CAFile != "/tmp/ca.pem" {
+	if mirror.Canonical.Name != "local" || mirror.Profile != "backup-local" || mirror.CAFile != "/tmp/ca.pem" {
 		t.Fatalf("mirror=%#v", mirror)
 	}
 	canonical := []format.Mirror{mirror.Canonical}
@@ -39,14 +39,14 @@ func TestLoadPinsCanonicalMirrorsAndRoleProfiles(t *testing.T) {
 }
 
 func TestLoadRejectsMalformedUnsafeOrDuplicateConfig(t *testing.T) {
-	validMirror := "mirror\tlocal\tbackup-server\ts3://backup-test/repo\thttps://localhost:8443\tus-east-1\tw\tr\t-\n"
+	validMirror := "mirror\tlocal\tbackup-server\ts3://backup-test/repo\thttps://localhost:8443\tus-east-1\tbackup\t-\n"
 	tests := map[string]string{
 		"missing LF":    "git-remote\t/tmp/remote.git\nbranch\tmain",
 		"unknown row":   "git-remote\t/tmp/remote.git\nbranch\tmain\nunknown\tx\n" + validMirror,
 		"duplicate":     "git-remote\t/tmp/remote.git\ngit-remote\t/x\nbranch\tmain\n" + validMirror,
 		"bad branch":    "git-remote\t/tmp/remote.git\nbranch\t-main\n" + validMirror,
 		"no mirror":     "git-remote\t/tmp/remote.git\nbranch\tmain\n",
-		"blank profile": "git-remote\t/tmp/remote.git\nbranch\tmain\nmirror\tlocal\tbackup-server\ts3://backup-test/repo\thttps://localhost:8443\tus-east-1\t\tr\t-\n",
+		"blank profile": "git-remote\t/tmp/remote.git\nbranch\tmain\nmirror\tlocal\tbackup-server\ts3://backup-test/repo\thttps://localhost:8443\tus-east-1\t\t-\n",
 	}
 	for name, data := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -64,7 +64,7 @@ func TestLoadRejectsMalformedUnsafeOrDuplicateConfig(t *testing.T) {
 func TestConfigFileCannotBeSymlinkOrWritableByOthers(t *testing.T) {
 	directory := t.TempDir()
 	real := filepath.Join(directory, "real")
-	data := "git-remote\t/tmp/remote.git\nbranch\tmain\nmirror\tlocal\tbackup-server\ts3://backup-test/repo\thttps://localhost:8443\tus-east-1\tw\tr\t-\n"
+	data := "git-remote\t/tmp/remote.git\nbranch\tmain\nmirror\tlocal\tbackup-server\ts3://backup-test/repo\thttps://localhost:8443\tus-east-1\tbackup\t-\n"
 	if err := os.WriteFile(real, []byte(data), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -83,5 +83,15 @@ func TestConfigFileCannotBeSymlinkOrWritableByOthers(t *testing.T) {
 	}
 	if _, err := Load(link); err == nil {
 		t.Fatal("symlink config accepted")
+	}
+}
+
+func TestSingleProfileHardCutover(t *testing.T) {
+	base := "git-remote\t/tmp/remote.git\nbranch\tmain\nmirror\tlocal\tbackup-server\ts3://backup-test/repo\thttps://localhost:8443\tus-east-1\t"
+	if _, err := parse([]byte(base + "backup\t-\n")); err != nil {
+		t.Fatalf("single profile rejected: %v", err)
+	}
+	if _, err := parse([]byte(base + "writer\treader\t-\n")); err == nil {
+		t.Fatal("legacy dual-profile configuration accepted")
 	}
 }

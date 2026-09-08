@@ -543,12 +543,10 @@ func runServer(parent context.Context, arguments []string, stdout, stderr io.Wri
 	if flags.NArg() != 0 || *root == "" || *bucket == "" || *certificate == "" || *privateKey == "" {
 		return fmt.Errorf("server requires --data-root, --bucket, --tls-cert, and --tls-key")
 	}
-	writerAccess := os.Getenv("BACKUP_SERVER_WRITER_ACCESS_KEY")
-	writerSecret := os.Getenv("BACKUP_SERVER_WRITER_SECRET_KEY")
-	readerAccess := os.Getenv("BACKUP_SERVER_READER_ACCESS_KEY")
-	readerSecret := os.Getenv("BACKUP_SERVER_READER_SECRET_KEY")
-	if writerAccess == "" || writerSecret == "" || readerAccess == "" || readerSecret == "" || writerAccess == readerAccess {
-		return fmt.Errorf("distinct writer and reader server credentials are required in BACKUP_SERVER_* environment variables")
+	access := os.Getenv("BACKUP_SERVER_ACCESS_KEY")
+	secret := os.Getenv("BACKUP_SERVER_SECRET_KEY")
+	if access == "" || secret == "" {
+		return fmt.Errorf("BACKUP_SERVER_ACCESS_KEY and BACKUP_SERVER_SECRET_KEY are required")
 	}
 	tlsCertificate, err := loadServerCertificate(*certificate, *privateKey)
 	if err != nil {
@@ -557,10 +555,7 @@ func runServer(parent context.Context, arguments []string, stdout, stderr io.Wri
 	logger := slog.New(slog.NewJSONHandler(stderr, nil))
 	backend, err := s3server.Open(s3server.Config{
 		Root: *root, Bucket: *bucket, Prefix: *prefix, Region: *region, Logger: logger,
-		Credentials: map[string]s3server.Credential{
-			writerAccess: {SecretKey: writerSecret, SessionToken: os.Getenv("BACKUP_SERVER_WRITER_SESSION_TOKEN"), Role: s3server.RoleWriter},
-			readerAccess: {SecretKey: readerSecret, SessionToken: os.Getenv("BACKUP_SERVER_READER_SESSION_TOKEN"), Role: s3server.RoleReader},
-		},
+		Credential: s3server.Credential{AccessKey: access, SecretKey: secret, SessionToken: os.Getenv("BACKUP_SERVER_SESSION_TOKEN")},
 	})
 	if err != nil {
 		return err

@@ -50,7 +50,7 @@ func TestReadFailuresDistinguishCorruptionAbsenceAndUnavailableCapabilities(t *t
 			if kind == "" {
 				kind = format.MirrorBackupServer
 			}
-			client, err := New(context.Background(), Options{Mirror: format.Mirror{Name: "test", Kind: kind, S3URL: "s3://backup-test/repository", Endpoint: "https://objects.example", Region: "us-east-1"}, Role: RoleReader, CredentialsProvider: credentials.NewStaticCredentialsProvider("reader", "reader-secret", ""), HTTPClient: integrityHTTPClient(func(request *http.Request) (*http.Response, error) {
+			client, err := New(context.Background(), Options{Mirror: format.Mirror{Name: "test", Kind: kind, S3URL: "s3://backup-test/repository", Endpoint: "https://objects.example", Region: "us-east-1"}, CredentialsProvider: credentials.NewStaticCredentialsProvider("reader", "reader-secret", ""), HTTPClient: integrityHTTPClient(func(request *http.Request) (*http.Response, error) {
 				if request.Method != http.MethodHead {
 					t.Fatalf("unexpected body request: %s", request.Method)
 				}

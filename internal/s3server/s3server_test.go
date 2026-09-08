@@ -25,12 +25,10 @@ import (
 )
 
 const (
-	testBucket   = "backup-test"
-	testRegion   = "us-east-1"
-	writerKey    = "writer-access"
-	writerSecret = "writer-secret"
-	readerKey    = "reader-access"
-	readerSecret = "reader-secret"
+	testBucket = "backup-test"
+	testRegion = "us-east-1"
+	accessKey  = "backup-access"
+	secretKey  = "backup-secret"
 )
 
 type harness struct {
@@ -53,10 +51,7 @@ func newHarnessAtRoot(t *testing.T, root string) *harness {
 	server, err := Open(Config{
 		Root: root, Bucket: testBucket, Region: testRegion, Now: func() time.Time { return now },
 		MaximumObjectSize: 4 << 20,
-		Credentials: map[string]Credential{
-			writerKey: {SecretKey: writerSecret, Role: RoleWriter},
-			readerKey: {SecretKey: readerSecret, Role: RoleReader},
-		},
+		Credential:        Credential{AccessKey: accessKey, SecretKey: secretKey},
 	})
 	if err != nil {
 		t.Fatalf("open server: %v", err)
@@ -77,7 +72,7 @@ func objectKey(data []byte, objectID byte) string {
 	return "objects/" + hex.EncodeToString(hash[:]) + "/" + strings.Repeat(hex.EncodeToString([]byte{objectID}), 16)
 }
 
-func (h *harness) request(method, key string, body []byte, reader bool) *http.Request {
+func (h *harness) request(method, key string, body []byte) *http.Request {
 	h.t.Helper()
 	request, err := http.NewRequest(method, h.http.URL+"/"+testBucket+"/"+key, bytes.NewReader(body))
 	if err != nil {
@@ -87,11 +82,7 @@ func (h *harness) request(method, key string, body []byte, reader bool) *http.Re
 		request.Body = nil
 		request.ContentLength = 0
 	}
-	access, secret := writerKey, writerSecret
-	if reader {
-		access, secret = readerKey, readerSecret
-	}
-	h.sign(request, access, secret, body)
+	h.sign(request, accessKey, secretKey, body)
 	return request
 }
 
@@ -121,7 +112,7 @@ func (h *harness) putRequest(key string, body []byte) *http.Request {
 		h.t.Fatal(err)
 	}
 	addPutHeaders(request, body)
-	h.sign(request, writerKey, writerSecret, body)
+	h.sign(request, accessKey, secretKey, body)
 	return request
 }
 
@@ -147,7 +138,7 @@ func closeBody(t *testing.T, response *http.Response) []byte {
 }
 
 func TestDefaultObjectLimitMatchesClientPartLimit(t *testing.T) {
-	server, err := Open(Config{Root: t.TempDir(), Bucket: testBucket, Region: testRegion, Credentials: map[string]Credential{writerKey: {SecretKey: writerSecret, Role: RoleWriter}}})
+	server, err := Open(Config{Root: t.TempDir(), Bucket: testBucket, Region: testRegion, Credential: Credential{AccessKey: accessKey, SecretKey: secretKey}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -356,15 +347,15 @@ func TestCreateGetHeadListAndImmutability(t *testing.T) {
 	}
 	closeBody(t, response)
 
-	get := h.request(http.MethodGet, key, nil, true)
+	get := h.request(http.MethodGet, key, nil)
 	response = h.do(get)
 	if response.StatusCode != http.StatusOK || string(closeBody(t, response)) != string(payload) {
 		t.Fatalf("GET failed: status=%d", response.StatusCode)
 	}
 
-	head := h.request(http.MethodHead, key, nil, true)
+	head := h.request(http.MethodHead, key, nil)
 	head.Header.Set("x-amz-checksum-mode", "ENABLED")
-	h.sign(head, readerKey, readerSecret, nil)
+	h.sign(head, accessKey, secretKey, nil)
 	response = h.do(head)
 	if response.StatusCode != http.StatusOK {
 		t.Fatalf("HEAD status %d", response.StatusCode)
@@ -381,7 +372,7 @@ func TestCreateGetHeadListAndImmutability(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h.sign(list, readerKey, readerSecret, nil)
+	h.sign(list, accessKey, secretKey, nil)
 	response = h.do(list)
 	listBody := closeBody(t, response)
 	if response.StatusCode != http.StatusOK || !bytes.Contains(listBody, []byte(key)) {
@@ -389,7 +380,7 @@ func TestCreateGetHeadListAndImmutability(t *testing.T) {
 	}
 }
 
-func TestRolesMethodsAndRequiredSignedHeaders(t *testing.T) {
+func TestAuthenticationMethodsAndRequiredSignedHeaders(t *testing.T) {
 	h := newHarness(t)
 	payload := []byte("permissions")
 	key := objectKey(payload, 2)
@@ -399,36 +390,35 @@ func TestRolesMethodsAndRequiredSignedHeaders(t *testing.T) {
 		request func() *http.Request
 		want    int
 	}{
-		{"reader cannot put", func() *http.Request {
+		{"unknown credential cannot put", func() *http.Request {
 			r := h.putRequest(key, payload)
-			h.sign(r, readerKey, readerSecret, payload)
+			h.sign(r, "unknown", secretKey, payload)
 			return r
 		}, http.StatusForbidden},
-		{"writer cannot get", func() *http.Request { return h.request(http.MethodGet, key, nil, false) }, http.StatusForbidden},
-		{"delete forbidden", func() *http.Request { return h.request(http.MethodDelete, key, nil, true) }, http.StatusForbidden},
-		{"post unsupported", func() *http.Request { return h.request(http.MethodPost, key, nil, true) }, http.StatusMethodNotAllowed},
+		{"delete forbidden", func() *http.Request { return h.request(http.MethodDelete, key, nil) }, http.StatusForbidden},
+		{"post unsupported", func() *http.Request { return h.request(http.MethodPost, key, nil) }, http.StatusMethodNotAllowed},
 		{"unsigned conditional", func() *http.Request {
 			r, _ := http.NewRequest(http.MethodPut, h.http.URL+"/"+testBucket+"/"+key, bytes.NewReader(payload))
 			shaDigest := sha256.Sum256(payload)
 			r.Header.Set("x-amz-content-sha256", hex.EncodeToString(shaDigest[:]))
-			h.sign(r, writerKey, writerSecret, payload)
+			h.sign(r, accessKey, secretKey, payload)
 			addPutHeaders(r, payload)
 			return r
 		}, http.StatusForbidden},
 		{"missing conditional", func() *http.Request {
 			r := h.putRequest(key, payload)
 			r.Header.Del("If-None-Match")
-			h.sign(r, writerKey, writerSecret, payload)
+			h.sign(r, accessKey, secretKey, payload)
 			return r
 		}, http.StatusPreconditionFailed},
 		{"missing md5", func() *http.Request {
 			r := h.putRequest(key, payload)
 			r.Header.Del("Content-MD5")
-			h.sign(r, writerKey, writerSecret, payload)
+			h.sign(r, accessKey, secretKey, payload)
 			return r
 		}, http.StatusBadRequest},
 		{"unsigned checksum mode", func() *http.Request {
-			r := h.request(http.MethodHead, key, nil, true)
+			r := h.request(http.MethodHead, key, nil)
 			r.Header.Set("x-amz-checksum-mode", "ENABLED")
 			return r
 		}, http.StatusForbidden},
@@ -445,7 +435,7 @@ func TestRolesMethodsAndRequiredSignedHeaders(t *testing.T) {
 		{"unknown aws header", func() *http.Request {
 			r := h.putRequest(key, payload)
 			r.Header.Set("x-amz-copy-source", "/backup-test/source")
-			h.sign(r, writerKey, writerSecret, payload)
+			h.sign(r, accessKey, secretKey, payload)
 			return r
 		}, http.StatusBadRequest},
 	}
@@ -469,15 +459,15 @@ func TestNonPutRequestsRequireAnEmptyFixedPayload(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h.sign(withBody, readerKey, readerSecret, payload)
+	h.sign(withBody, accessKey, secretKey, payload)
 	response := h.do(withBody)
 	body := closeBody(t, response)
 	if response.StatusCode != http.StatusBadRequest {
 		t.Fatalf("GET body status=%d body=%s", response.StatusCode, body)
 	}
 
-	wrongDigest := h.request(http.MethodGet, key, nil, true)
-	h.sign(wrongDigest, readerKey, readerSecret, payload)
+	wrongDigest := h.request(http.MethodGet, key, nil)
+	h.sign(wrongDigest, accessKey, secretKey, payload)
 	response = h.do(wrongDigest)
 	body = closeBody(t, response)
 	if response.StatusCode != http.StatusBadRequest {
@@ -527,7 +517,7 @@ func TestCommittedGETWriteFailureDoesNotAppendXMLError(t *testing.T) {
 	closeBody(t, response)
 
 	writer := &failFirstBodyWrite{}
-	request := h.request(http.MethodGet, key, nil, true)
+	request := h.request(http.MethodGet, key, nil)
 	request.URL.Scheme, request.URL.Host = "", ""
 	h.server.ServeHTTP(writer, request)
 	if len(writer.statuses) != 1 || writer.statuses[0] != http.StatusOK {
@@ -544,7 +534,7 @@ func TestRandomFailureReturnsInternalErrorInsteadOfPanicking(t *testing.T) {
 	randomSource = errorReader{}
 	t.Cleanup(func() { randomSource = prior })
 
-	request := h.request(http.MethodGet, objectKey([]byte("missing"), 10), nil, true)
+	request := h.request(http.MethodGet, objectKey([]byte("missing"), 10), nil)
 	recorder := httptest.NewRecorder()
 	h.server.ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusInternalServerError {
@@ -643,9 +633,9 @@ func TestChecksumHeadDetectsBackendCorruptionWithoutBody(t *testing.T) {
 	if err := os.WriteFile(path, []byte("corrupt"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	head := h.request(http.MethodHead, key, nil, true)
+	head := h.request(http.MethodHead, key, nil)
 	head.Header.Set("x-amz-checksum-mode", "ENABLED")
-	h.sign(head, readerKey, readerSecret, nil)
+	h.sign(head, accessKey, secretKey, nil)
 	response = h.do(head)
 	body := closeBody(t, response)
 	if response.StatusCode != http.StatusInternalServerError || len(body) != 0 || response.ContentLength == int64(len(payload)) {
@@ -689,7 +679,7 @@ func TestDataRootSymlinkIsRejected(t *testing.T) {
 	if err := os.Symlink(target, link); err != nil {
 		t.Fatal(err)
 	}
-	server, err := Open(Config{Root: link, Bucket: testBucket, Region: testRegion, Credentials: map[string]Credential{writerKey: {SecretKey: writerSecret, Role: RoleWriter}}})
+	server, err := Open(Config{Root: link, Bucket: testBucket, Region: testRegion, Credential: Credential{AccessKey: accessKey, SecretKey: secretKey}})
 	if server != nil {
 		_ = server.Close()
 	}
@@ -725,7 +715,7 @@ func TestRootLockAndStaleUploadCleanup(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(internal, "stale")); !os.IsNotExist(err) {
 		t.Fatalf("stale upload was not removed: %v", err)
 	}
-	_, err := Open(Config{Root: root, Bucket: testBucket, Region: testRegion, Credentials: map[string]Credential{writerKey: {SecretKey: writerSecret, Role: RoleWriter}}})
+	_, err := Open(Config{Root: root, Bucket: testBucket, Region: testRegion, Credential: Credential{AccessKey: accessKey, SecretKey: secretKey}})
 	if err == nil || !strings.Contains(err.Error(), "already locked") {
 		t.Fatalf("second server lock unexpectedly succeeded: %v", err)
 	}
@@ -741,7 +731,7 @@ func TestRootLockRejectsUnexpectedType(t *testing.T) {
 	if err := unix.Mkfifo(filepath.Join(internal, lockFilename), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	server, err := Open(Config{Root: root, Bucket: testBucket, Region: testRegion, Credentials: map[string]Credential{writerKey: {SecretKey: writerSecret, Role: RoleWriter}}})
+	server, err := Open(Config{Root: root, Bucket: testBucket, Region: testRegion, Credential: Credential{AccessKey: accessKey, SecretKey: secretKey}})
 	if server != nil {
 		_ = server.Close()
 	}
@@ -756,7 +746,7 @@ func TestUnexpectedStaleUploadTypeFailsClosed(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(temp, "unexpected"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	_, err := Open(Config{Root: root, Bucket: testBucket, Region: testRegion, Credentials: map[string]Credential{writerKey: {SecretKey: writerSecret, Role: RoleWriter}}})
+	_, err := Open(Config{Root: root, Bucket: testBucket, Region: testRegion, Credential: Credential{AccessKey: accessKey, SecretKey: secretKey}})
 	if err == nil || !strings.Contains(err.Error(), "non-regular") {
 		t.Fatalf("unexpected stale type was accepted: %v", err)
 	}

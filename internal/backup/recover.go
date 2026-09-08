@@ -103,7 +103,7 @@ func Recover(ctx context.Context, options Options, request RecoverRequest) (Reco
 	if !ok {
 		return result, fmt.Errorf("unknown mirror %q", request.Mirror)
 	}
-	client, err := run.reader(ctx, mirror)
+	client, err := run.client(ctx, mirror)
 	if err != nil {
 		return result, err
 	}

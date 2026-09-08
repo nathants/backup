@@ -15,7 +15,7 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-type ClientFactory func(context.Context, localconfig.Mirror, objectstore.Role) (*objectstore.Client, error)
+type ClientFactory func(context.Context, localconfig.Mirror) (*objectstore.Client, error)
 
 const (
 	stateVersion             = 3

@@ -592,10 +592,7 @@ func TestSyncCopiesCompleteRevisionIdempotentlyAndNeverTrustsConflict(t *testing
 	destinationRoot := t.TempDir()
 	destinationServer, err := s3server.Open(s3server.Config{
 		Root: destinationRoot, Bucket: "backup-destination", Prefix: "repository", Region: "us-east-1",
-		Credentials: map[string]s3server.Credential{
-			"writer": {SecretKey: "writer-secret", Role: s3server.RoleWriter},
-			"reader": {SecretKey: "reader-secret", Role: s3server.RoleReader},
-		},
+		Credential: s3server.Credential{AccessKey: "backup", SecretKey: "backup-secret"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -613,21 +610,18 @@ func TestSyncCopiesCompleteRevisionIdempotentlyAndNeverTrustsConflict(t *testing
 	if err := os.WriteFile(filepath.Join(harness.root, ".backup", "mirrors.tsv"), []byte(destinationRow+localRow), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	config := fmt.Sprintf("git-remote\t%s\nbranch\tmain\nmirror\tdestination\tbackup-server\ts3://backup-destination/repository\t%s\tus-east-1\t-\t-\t-\nmirror\tlocal\tbackup-server\ts3://backup-test/repository\t%s\tus-east-1\t-\t-\t-\n", harness.bare, destinationHTTP.URL, harness.http.URL)
+	config := fmt.Sprintf("git-remote\t%s\nbranch\tmain\nmirror\tdestination\tbackup-server\ts3://backup-destination/repository\t%s\tus-east-1\t-\t-\nmirror\tlocal\tbackup-server\ts3://backup-test/repository\t%s\tus-east-1\t-\t-\n", harness.bare, destinationHTTP.URL, harness.http.URL)
 	if err := os.WriteFile(harness.configPath, []byte(config), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	actualFactory := func(ctx context.Context, mirror localconfig.Mirror, role objectstore.Role) (*objectstore.Client, error) {
+	actualFactory := func(ctx context.Context, mirror localconfig.Mirror) (*objectstore.Client, error) {
 		httpClient := harness.http.Client()
 		if mirror.Canonical.Name == "destination" {
 			httpClient = destinationHTTP.Client()
 		}
-		access, secret := "writer", "writer-secret"
-		if role == objectstore.RoleReader {
-			access, secret = "reader", "reader-secret"
-		}
+		access, secret := "backup", "backup-secret"
 		return objectstore.New(ctx, objectstore.Options{
-			Mirror: mirror.Canonical, Role: role,
+			Mirror:              mirror.Canonical,
 			CredentialsProvider: credentials.NewStaticCredentialsProvider(access, secret, ""),
 			HTTPClient:          httpClient,
 		})
@@ -638,11 +632,11 @@ func TestSyncCopiesCompleteRevisionIdempotentlyAndNeverTrustsConflict(t *testing
 		t.Fatal(err)
 	}
 	offlineOptions := actualOptions
-	offlineOptions.ClientFactory = func(ctx context.Context, mirror localconfig.Mirror, role objectstore.Role) (*objectstore.Client, error) {
+	offlineOptions.ClientFactory = func(ctx context.Context, mirror localconfig.Mirror) (*objectstore.Client, error) {
 		if mirror.Canonical.Name == "destination" {
 			return nil, fmt.Errorf("destination intentionally unavailable")
 		}
-		return actualFactory(ctx, mirror, role)
+		return actualFactory(ctx, mirror)
 	}
 	latest, err := Commit(ctx, offlineOptions)
 	if err != nil || strings.Join(latest.CompleteMirrors, ",") != "local" || strings.Join(latest.LaggingMirrors, ",") != "destination" {
@@ -819,16 +813,16 @@ func TestVerifyReportsEveryMirrorWhenThresholdPasses(t *testing.T) {
 	if err := os.WriteFile(metadataPath, []byte(localRow+offlineRow), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	config := fmt.Sprintf("git-remote\t%s\nbranch\tmain\nmirror\tlocal\tbackup-server\ts3://backup-test/repository\t%s\tus-east-1\t-\t-\t-\nmirror\toffline\tbackup-server\ts3://backup-offline/repository\thttps://127.0.0.1:1\tus-east-1\t-\t-\t-\n", harness.bare, harness.http.URL)
+	config := fmt.Sprintf("git-remote\t%s\nbranch\tmain\nmirror\tlocal\tbackup-server\ts3://backup-test/repository\t%s\tus-east-1\t-\t-\nmirror\toffline\tbackup-server\ts3://backup-offline/repository\thttps://127.0.0.1:1\tus-east-1\t-\t-\n", harness.bare, harness.http.URL)
 	if err := os.WriteFile(harness.configPath, []byte(config), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	originalFactory := harness.options.ClientFactory
-	harness.options.ClientFactory = func(ctx context.Context, mirror localconfig.Mirror, role objectstore.Role) (*objectstore.Client, error) {
+	harness.options.ClientFactory = func(ctx context.Context, mirror localconfig.Mirror) (*objectstore.Client, error) {
 		if mirror.Canonical.Name == "offline" {
 			return nil, fmt.Errorf("offline mirror is unavailable")
 		}
-		return originalFactory(ctx, mirror, role)
+		return originalFactory(ctx, mirror)
 	}
 	if _, err := Add(ctx, harness.options, false); err != nil {
 		t.Fatal(err)
@@ -865,17 +859,14 @@ func TestVerifyGetsOnlyBoundedPlaintextManifests(t *testing.T) {
 
 	observer := &observingTransport{base: harness.http.Client().Transport}
 	options := harness.options
-	options.ClientFactory = func(ctx context.Context, mirror localconfig.Mirror, role objectstore.Role) (*objectstore.Client, error) {
-		access, secret := "writer", "writer-secret"
+	options.ClientFactory = func(ctx context.Context, mirror localconfig.Mirror) (*objectstore.Client, error) {
+		access, secret := "backup", "backup-secret"
 		httpClient := harness.http.Client()
-		if role == objectstore.RoleReader {
-			access, secret = "reader", "reader-secret"
-			clone := *httpClient
-			clone.Transport = observer
-			httpClient = &clone
-		}
+		clone := *httpClient
+		clone.Transport = observer
+		httpClient = &clone
 		return objectstore.New(ctx, objectstore.Options{
-			Mirror: mirror.Canonical, Role: role,
+			Mirror:              mirror.Canonical,
 			CredentialsProvider: credentials.NewStaticCredentialsProvider(access, secret, ""),
 			HTTPClient:          httpClient,
 		})

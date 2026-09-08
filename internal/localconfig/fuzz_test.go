@@ -7,7 +7,7 @@ import (
 )
 
 func FuzzTrustedConfigParser(f *testing.F) {
-	f.Add([]byte("git-remote\t/path/to/metadata.git\nbranch\tmain\nmirror\tlocal\tbackup-server\ts3://bucket/prefix\thttps://backup.example\tus-east-1\twriter\treader\t-\n"))
+	f.Add([]byte("git-remote\t/path/to/metadata.git\nbranch\tmain\nmirror\tlocal\tbackup-server\ts3://bucket/prefix\thttps://backup.example\tus-east-1\tbackup\t-\n"))
 	f.Add([]byte("branch\tmain\n"))
 	f.Fuzz(func(t *testing.T, data []byte) {
 		if len(data) > 1<<20 {

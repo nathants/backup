@@ -66,9 +66,8 @@ func recoveryTestChain(t *testing.T, length int) (*integrationHarness, [][]manif
 	defer func() { _ = history.Close() }()
 	uuid := testHistoryGenesisFormat(t, history).RepositoryUUID
 	blobs := testStateBlobs(t, testHistoryTip(t, history).State)
-	reader := testMirrorClient(t, ctx, harness, objectstore.RoleReader)
-	writer := testMirrorClient(t, ctx, harness, objectstore.RoleWriter)
-	first, err := listManifestRepresentations(ctx, reader, genesis.CommitID, uuid)
+	client := testMirrorClient(t, ctx, harness)
+	first, err := listManifestRepresentations(ctx, client, genesis.CommitID, uuid)
 	if err != nil || len(first) != 1 {
 		t.Fatalf("genesis representations=%d err=%v", len(first), err)
 	}
@@ -80,7 +79,7 @@ func recoveryTestChain(t *testing.T, length int) (*integrationHarness, [][]manif
 		if err != nil {
 			t.Fatal(err)
 		}
-		representation := uploadTestMetadataBundle(t, ctx, writer, repo, uuid, base, tip, uint64(sequence), harness.publicKey, harness.options.MetadataPartSize)
+		representation := uploadTestMetadataBundle(t, ctx, client, repo, uuid, base, tip, uint64(sequence), harness.publicKey, harness.options.MetadataPartSize)
 		chain = append(chain, []manifestRepresentation{representation})
 		base = tip
 	}
@@ -182,7 +181,7 @@ func TestMetadataRecoveryUsesOneRepositoryForHealthyChain(t *testing.T) {
 		}
 		return nil
 	}
-	reader := testMirrorClient(t, context.Background(), harness, objectstore.RoleReader)
+	reader := testMirrorClient(t, context.Background(), harness)
 	quarantine := filepath.Join(root, "recovered.git")
 	chosen, err := materializeMetadataChain(context.Background(), reader, chain, harness.secretKey, quarantine, stage)
 	if err != nil || len(chosen) != len(chain) {
@@ -243,7 +242,7 @@ func uploadRecoveryTestBundle(t *testing.T, harness *integrationHarness, manifes
 	if err := os.WriteFile(partPath, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	writer := testMirrorClient(t, context.Background(), harness, objectstore.RoleWriter)
+	writer := testMirrorClient(t, context.Background(), harness)
 	if result := writer.PutFile(context.Background(), partKey, partPath, identity); result.Disposition != objectstore.CreateAcknowledged {
 		t.Fatalf("upload malformed bundle: %#v", result)
 	}
@@ -289,7 +288,7 @@ func TestMetadataRecoveryReplaysAfterImportedObjectFailure(t *testing.T) {
 	if err := os.Mkdir(stage, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	reader := testMirrorClient(t, context.Background(), harness, objectstore.RoleReader)
+	reader := testMirrorClient(t, context.Background(), harness)
 	quarantine := filepath.Join(root, "recovered.git")
 	chosen, err := materializeMetadataChain(context.Background(), reader, chain, harness.secretKey, quarantine, stage)
 	if err != nil || len(chosen) != 3 || chosen[1].Key == bad.Key {
@@ -485,7 +484,7 @@ func TestMetadataRecoveryFinalCheckRejectsPreviouslyStoredBlobCorruption(t *test
 		}
 		return nil
 	}
-	reader := testMirrorClient(t, context.Background(), harness, objectstore.RoleReader)
+	reader := testMirrorClient(t, context.Background(), harness)
 	quarantine := filepath.Join(root, "recovered.git")
 	_, err = materializeMetadataChain(context.Background(), reader, chain, harness.secretKey, quarantine, stage)
 	if !mutated || err == nil || !strings.Contains(err.Error(), "validate bundle object graph") || strings.Contains(err.Error(), "no usable physical representation") {

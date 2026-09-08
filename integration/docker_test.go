@@ -34,10 +34,8 @@ const (
 	dockerRunLabelKey        = "backup.integration.run"
 	testBucket               = "backup-test"
 	testRegion               = "us-east-1"
-	writerAccess             = "writer-access"
-	writerSecret             = "writer-secret"
-	readerAccess             = "reader-access"
-	readerSecret             = "reader-secret"
+	accessKey                = "backup-access"
+	secretKey                = "backup-secret"
 )
 
 var (
@@ -207,26 +205,26 @@ func TestDockerProductionServerLifecycleAndImmutability(t *testing.T) {
 	closeBody(t, response)
 	unconditional := h.putRequest(key, []byte("different"))
 	unconditional.Header.Del("If-None-Match")
-	h.sign(unconditional, writerAccess, writerSecret, []byte("different"))
+	h.sign(unconditional, accessKey, secretKey, []byte("different"))
 	response = h.do(unconditional)
 	if response.StatusCode == http.StatusOK {
 		t.Fatal("unconditional overwrite succeeded")
 	}
 	closeBody(t, response)
-	response = h.do(h.request(http.MethodDelete, key, nil, true))
+	response = h.do(h.request(http.MethodDelete, key, nil))
 	if response.StatusCode != http.StatusForbidden {
 		t.Fatalf("delete status=%d body=%s", response.StatusCode, closeBody(t, response))
 	}
 	closeBody(t, response)
 
 	h.restart()
-	response = h.do(h.request(http.MethodGet, key, nil, true))
+	response = h.do(h.request(http.MethodGet, key, nil))
 	if response.StatusCode != http.StatusOK || !bytes.Equal(closeBody(t, response), payload) {
 		t.Fatalf("object did not survive container restart: status=%d", response.StatusCode)
 	}
-	head := h.request(http.MethodHead, key, nil, true)
+	head := h.request(http.MethodHead, key, nil)
 	head.Header.Set("x-amz-checksum-mode", "ENABLED")
-	h.sign(head, readerAccess, readerSecret, nil)
+	h.sign(head, accessKey, secretKey, nil)
 	response = h.do(head)
 	if response.StatusCode != http.StatusOK || len(closeBody(t, response)) != 0 {
 		t.Fatalf("checksum HEAD status=%d", response.StatusCode)
@@ -266,11 +264,11 @@ func TestDockerRealClientTwoMirrorBackupSyncRestoreAndRecover(t *testing.T) {
 	remote := filepath.Join(workspace, "metadata.git")
 	run(t, "", "git", "init", "--bare", "--object-format=sha256", "--initial-branch=main", remote)
 	credentials := filepath.Join(workspace, "credentials")
-	writeFile(t, credentials, []byte("[writer]\naws_access_key_id = "+writerAccess+"\naws_secret_access_key = "+writerSecret+"\n[reader]\naws_access_key_id = "+readerAccess+"\naws_secret_access_key = "+readerSecret+"\n"), 0o600)
+	writeFile(t, credentials, []byte("[backup]\naws_access_key_id = "+accessKey+"\naws_secret_access_key = "+secretKey+"\n"), 0o600)
 	awsConfig := filepath.Join(workspace, "aws-config")
 	writeFile(t, awsConfig, []byte(""), 0o600)
 	config := filepath.Join(source, ".backup-config")
-	configText := fmt.Sprintf("git-remote\t%s\nbranch\tmain\nmirror\ta\tbackup-server\ts3://%s\thttps://localhost:%s\t%s\twriter\treader\t%s\nmirror\tb\tbackup-server\ts3://%s\thttps://localhost:%s\t%s\twriter\treader\t%s\n",
+	configText := fmt.Sprintf("git-remote\t%s\nbranch\tmain\nmirror\ta\tbackup-server\ts3://%s\thttps://localhost:%s\t%s\tbackup\t%s\nmirror\tb\tbackup-server\ts3://%s\thttps://localhost:%s\t%s\tbackup\t%s\n",
 		remote, testBucket, firstMirror.port, testRegion, filepath.Join(firstMirror.certDir, "ca.crt"), testBucket, secondMirror.port, testRegion, filepath.Join(secondMirror.certDir, "ca.crt"))
 	writeFile(t, config, []byte(configText), 0o600)
 	libsodium.Init()
@@ -469,7 +467,7 @@ func TestDockerWholeRootClientContainerAgainstSeparateServer(t *testing.T) {
 		t.Fatal(err)
 	}
 	credentials := filepath.Join(configDirectory, "credentials")
-	writeFile(t, credentials, []byte("[writer]\naws_access_key_id = "+writerAccess+"\naws_secret_access_key = "+writerSecret+"\n[reader]\naws_access_key_id = "+readerAccess+"\naws_secret_access_key = "+readerSecret+"\n"), 0o600)
+	writeFile(t, credentials, []byte("[backup]\naws_access_key_id = "+accessKey+"\naws_secret_access_key = "+secretKey+"\n"), 0o600)
 	writeFile(t, filepath.Join(configDirectory, "aws-config"), nil, 0o600)
 	caPath := filepath.Join(configDirectory, "ca.crt")
 	ca, err := os.ReadFile(filepath.Join(server.certDir, "ca.crt"))
@@ -477,7 +475,7 @@ func TestDockerWholeRootClientContainerAgainstSeparateServer(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeFile(t, caPath, ca, 0o644)
-	config := fmt.Sprintf("git-remote\t/metadata.git\nbranch\tmain\nmirror\tlocal\tbackup-server\ts3://%s\thttps://localhost:%s\t%s\twriter\treader\t/test-config/ca.crt\n", testBucket, server.port, testRegion)
+	config := fmt.Sprintf("git-remote\t/metadata.git\nbranch\tmain\nmirror\tlocal\tbackup-server\ts3://%s\thttps://localhost:%s\t%s\tbackup\t/test-config/ca.crt\n", testBucket, server.port, testRegion)
 	writeFile(t, filepath.Join(configDirectory, "backup-config"), []byte(config), 0o600)
 	stateVolume := dockerResourceName("backup-client-state")
 	run(t, "", "docker", "volume", "create", "--label", dockerRunLabel, stateVolume)
@@ -623,10 +621,8 @@ func (h *dockerHarness) start() {
 	}
 	arguments = append(arguments,
 		"-v", h.certDir+":/tls:ro",
-		"-e", "BACKUP_SERVER_WRITER_ACCESS_KEY="+writerAccess,
-		"-e", "BACKUP_SERVER_WRITER_SECRET_KEY="+writerSecret,
-		"-e", "BACKUP_SERVER_READER_ACCESS_KEY="+readerAccess,
-		"-e", "BACKUP_SERVER_READER_SECRET_KEY="+readerSecret,
+		"-e", "BACKUP_SERVER_ACCESS_KEY="+accessKey,
+		"-e", "BACKUP_SERVER_SECRET_KEY="+secretKey,
 		dockerImage,
 		"--listen", ":8443", "--data-root", "/data", "--bucket", testBucket,
 		"--region", testRegion, "--tls-cert", "/tls/server.crt", "--tls-key", "/tls/server.key")
@@ -657,7 +653,7 @@ func (h *dockerHarness) waitReady(action string) {
 	deadline := time.Now().Add(15 * time.Second)
 	var lastErr error
 	for time.Now().Before(deadline) {
-		request := h.request(http.MethodGet, objectKey([]byte("readiness-probe"), 9), nil, true)
+		request := h.request(http.MethodGet, objectKey([]byte("readiness-probe"), 9), nil)
 		response, err := h.client.Do(request)
 		if err == nil {
 			_ = response.Body.Close()
@@ -727,18 +723,18 @@ func objectKey(data []byte, id byte) string {
 }
 
 func (h *dockerHarness) putRequest(key string, body []byte) *http.Request {
-	request := h.request(http.MethodPut, key, body, false)
+	request := h.request(http.MethodPut, key, body)
 	md5sum := md5.Sum(body)
 	sha := sha256.Sum256(body)
 	request.Header.Set("If-None-Match", "*")
 	request.Header.Set("Content-MD5", base64.StdEncoding.EncodeToString(md5sum[:]))
 	request.Header.Set("x-amz-checksum-sha256", base64.StdEncoding.EncodeToString(sha[:]))
 	request.Header.Set("x-amz-sdk-checksum-algorithm", "SHA256")
-	h.sign(request, writerAccess, writerSecret, body)
+	h.sign(request, accessKey, secretKey, body)
 	return request
 }
 
-func (h *dockerHarness) request(method, key string, body []byte, reader bool) *http.Request {
+func (h *dockerHarness) request(method, key string, body []byte) *http.Request {
 	request, err := http.NewRequest(method, "https://localhost:"+h.port+"/"+testBucket+"/"+key, bytes.NewReader(body))
 	if err != nil {
 		h.t.Fatal(err)
@@ -747,11 +743,7 @@ func (h *dockerHarness) request(method, key string, body []byte, reader bool) *h
 		request.Body = nil
 		request.ContentLength = 0
 	}
-	access, secret := writerAccess, writerSecret
-	if reader {
-		access, secret = readerAccess, readerSecret
-	}
-	h.sign(request, access, secret, body)
+	h.sign(request, accessKey, secretKey, body)
 	return request
 }
 

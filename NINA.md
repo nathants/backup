@@ -52,9 +52,9 @@ Two logical stores exist:
    - packs and self-contained metadata deltas are encrypted once and uploaded as identical immutable object bytes to each mirror;
    - mirrors may lag and later be caught up.
 
-The everyday backup path may use create-only object credentials. Reader/auditor credentials are separate and are needed for restore, verify, sync, and repair.
+All three object backends use one ordinary credential per mirror for read, list, and immutable creation. The same profile serves backup, restore, verify, sync, and repair; overwrite, deletion, configuration changes, and credential/permission escalation remain forbidden. Provider/account administration stays separate and off backup clients. A stolen ordinary credential can read historical ciphertext and plaintext completion manifests, but cannot decrypt encrypted content without a recipient secret. Admin accepts this confidentiality tradeoff instead of mandatory upload-only/read-only credential separation. A cloud read-only credential remains an optional deployment restriction for an audit/restore-only machine, not another configured role. The backup server exposes one read/list/create credential, not a role system.
 
-Each repository and its prefixes across all mirrors have **one authoritative writable checkout and operational ledger**. This is an implicit single-writer convention, not multi-machine snapshot aggregation: backup commits, sync, data repair, and metadata repair all run through that owner. Other machines may read/audit, but their observations do not automatically update or pause the owner's local state; authoritative integrity audits must run through the owner. Multiple independent writable checkouts on one hostname are also outside this convention. There is no hostname binding, owner record, lease, distributed election, or runtime ownership enforcement. Keep local locking, role separation, history validation, and Git fast-forward/CAS defenses against accidental overlap.
+Each repository and its prefixes across all mirrors have **one authoritative writable checkout and operational ledger**. This is an implicit single-writer convention, not multi-machine snapshot aggregation: backup commits, sync, data repair, and metadata repair all run through that owner. Other machines may read/audit, but their observations do not automatically update or pause the owner's local state; authoritative integrity audits must run through the owner. Multiple independent writable checkouts on one hostname are also outside this convention. There is no hostname binding, owner record, lease, distributed election, or runtime ownership enforcement. Keep local locking, administrative credential separation, history validation, and Git fast-forward/CAS defenses against accidental overlap.
 
 A replacement machine may take over explicitly: retire/revoke the old writer, recover validated metadata, freshly verify the mirrors and rebuild the operational ledger, then enable the replacement writer. Ownership is not a permanent physical-machine identity.
 
@@ -73,10 +73,10 @@ By default the client reads `$BACKUP_ROOT/.backup-config`, where `BACKUP_ROOT` d
 ```text
 git-remote	aws://metadata-bucket+dynamodb-table/repository
 branch	main
-mirror	local	backup-server	s3://backup-bucket/repository	https://backup.example:8443	us-east-1	writer-profile	reader-profile	/etc/backup/ca.pem
+mirror	local	backup-server	s3://backup-bucket/repository	https://backup.example:8443	us-east-1	backup-profile	/etc/backup/ca.pem
 ```
 
-A mirror row is `mirror name kind s3_url endpoint region writer_profile reader_profile ca_file`, with fields separated by tabs. Use `-` for a provider-default endpoint, an absent role profile, or system trust roots. Configure distinct standard AWS shared-credential profiles for writer and reader/auditor roles. Local CA paths and credentials remain local; canonical `mirrors.tsv` contains only nonsecret topology. Before any network request, trusted configuration must pin and exactly match the selected canonical mirror's name, kind, bucket, prefix, endpoint, and region.
+A mirror row is `mirror name kind s3_url endpoint region profile ca_file`, with fields separated by tabs. Use `-` for a provider-default endpoint, an absent credential profile, or system trust roots. Configure one standard AWS shared-credential profile per mirror. This is a hard cutover: the old nine-field dual-profile rows are rejected; use eight fields. Canonical metadata and encrypted object formats are unchanged. Local CA paths and credentials remain local; canonical `mirrors.tsv` contains only nonsecret topology. Before any network request, trusted configuration must pin and exactly match the selected canonical mirror's name, kind, bucket, prefix, endpoint, and region.
 
 ## Metadata files
 
@@ -308,13 +308,13 @@ Every transition is atomic, fsynced, idempotent, and safe to retry. Required ord
 8. For mirrors that have the complete data revision, catch up any missing earlier metadata-chain edges, then upload the staged bundle parts and immutable completion manifest.
 9. Report success only after at least one individual mirror has every currently referenced pack part and a complete valid metadata-bundle chain through the new commit.
 
-Only an unambiguous successful create response, or a reader/auditor verification of the exact expected size and checksum after an ambiguous response, counts as an upload acknowledgement. A timeout, disconnect, `409`, `412`, or other uncertain result never proves that the existing bytes are ours. Before metadata publication, if no mirror has unambiguously acknowledged a candidate key, atomically persist a fresh `object_id` and retry; once any mirror acknowledges a key, keep it canonical and leave other ambiguous mirrors lagging until audited. After the Git push, apply the same rule by creating a fresh persisted physical representation for ambiguous metadata-bundle parts or manifests; an uncertain completion-manifest result never counts as completion. Never infer object integrity from existence or a conditional-write conflict alone.
+Only an unambiguous successful create response, or a checksum audit of the exact expected size and checksum after an ambiguous response, counts as an upload acknowledgement. A timeout, disconnect, `409`, `412`, or other uncertain result never proves that the existing bytes are ours. Before metadata publication, if no mirror has unambiguously acknowledged a candidate key, atomically persist a fresh `object_id` and retry; once any mirror acknowledges a key, keep it canonical and leave other ambiguous mirrors lagging until audited. After the Git push, apply the same rule by creating a fresh persisted physical representation for ambiguous metadata-bundle parts or manifests; an uncertain completion-manifest result never counts as completion. Never infer object integrity from existence or a conditional-write conflict alone.
 
-Persist a local, fsynced, Git-ignored completion ledger keyed by exact commit and mirror. A writer-only backup may extend a mirror recorded complete through its base commit; it must not guess after the ledger is lost or when every known-complete mirror is unavailable. Successful `verify HEAD` rebuilds this state, including for a single mirror; successful `sync` records both its fully audited source and destination without regressing a newer completion record. A historical audit never clears a current quarantine. The ledger is a resumability aid, never canonical metadata or a substitute for periodic verification.
+Persist a local, fsynced, Git-ignored completion ledger keyed by exact commit and mirror. An ordinary backup may extend a mirror recorded complete through its base commit; it must not guess after the ledger is lost or when every known-complete mirror is unavailable. Successful `verify HEAD` rebuilds this state, including for a single mirror; successful `sync` records both its fully audited source and destination without regressing a newer completion record. A historical audit never clears a current quarantine. The ledger is a resumability aid, never canonical metadata or a substitute for periodic verification.
 
-Confirmed current-object corruption, or loss of previously acknowledged required objects/metadata chains, durably quarantines the affected mirror and invalidates all pre-incident completeness claims in one atomic ledger write. Ordinary backup publication pauses until a fresh audit establishes an individual mirror's complete current data catalog and metadata chain. Audit results used to resume must be newer than the incident, regardless of mirror visitation order. Healthy mirrors may then carry writer-only backups with a prominent degraded-redundancy diagnostic; damaged mirrors stay excluded until a successful full current audit or audited repair/sync. Reobserving an already quarantined mirror does not repeatedly revoke fresh evidence for healthy mirrors. Capture and candidate acknowledgements predating the incident require fresh checksum audits before reuse.
+Confirmed current-object corruption, or loss of previously acknowledged required objects/metadata chains, durably quarantines the affected mirror and invalidates all pre-incident completeness claims in one atomic ledger write. Ordinary backup publication pauses until a fresh audit establishes an individual mirror's complete current data catalog and metadata chain. Audit results used to resume must be newer than the incident, regardless of mirror visitation order. Healthy mirrors may then carry ordinary backups with a prominent degraded-redundancy diagnostic; damaged mirrors stay excluded until a successful full current audit or audited repair/sync. Reobserving an already quarantined mirror does not repeatedly revoke fresh evidence for healthy mirrors. Capture and candidate acknowledgements predating the incident require fresh checksum audits before reuse.
 
-Timeouts, credentials/TLS failures, missing checksum capabilities, and ordinary mirror lag are not proof of corruption. Superseded historical data keys do not quarantine a compatible healthy current mapping, and an unusable metadata representation does not quarantine a mirror when another representation supplies a complete verified chain. Restore, sync, and data-repair reads also record conclusive failures of current data objects. The local incident state contains a counter, mirror quarantine set, and optional forward-repair anchor, not an unbounded per-object incident log. Operational state version 3 rejects older transaction/ledger versions; it does not migrate or discard them. Finish old staged transactions with their original binary before upgrading, retain the old ledger separately, and rebuild the new ledger through reader verification.
+Timeouts, credentials/TLS failures, missing checksum capabilities, and ordinary mirror lag are not proof of corruption. Superseded historical data keys do not quarantine a compatible healthy current mapping, and an unusable metadata representation does not quarantine a mirror when another representation supplies a complete verified chain. Restore, sync, and data-repair reads also record conclusive failures of current data objects. The local incident state contains a counter, mirror quarantine set, and optional forward-repair anchor, not an unbounded per-object incident log. Operational state version 3 rejects older transaction/ledger versions; it does not migrate or discard them. Finish old staged transactions with their original binary before upgrading, retain the old ledger separately, and rebuild the new ledger through verification.
 
 A Git push that succeeds before metadata-mirror completion leaves resumable finalization state; it is not reported as a complete successful backup until the mirror invariant holds. The primary Git fast-forward push is always mandatory: object mirrors are disaster-recovery replicas, not an alternate concurrency authority. If Git is unavailable, retain durable state and resume later rather than accepting an offline/divergent revision. Uploaded but unreferenced immutable objects are harmless and never deleted.
 
@@ -346,15 +346,15 @@ Structural validity does not prove that a compromised client intended a good sna
 
 Do not upload a complete ever-growing Git bundle after every revision. Do not add periodic full checkpoints initially; they can be added later without deleting the delta chain if demonstrated necessary.
 
-`backup sync` catches up a missing/lagging mirror from a healthy mirror by creating absent immutable keys and metadata deltas. It never overwrites or deletes. It requires reader credentials for both source and destination plus the destination's ordinary non-admin immutable-writer credential, so an existing destination key is checksum-verified rather than trusted from `412` or existence.
+`backup sync` catches up a missing/lagging mirror from a healthy mirror by creating absent immutable keys and metadata deltas. It never overwrites or deletes. It uses each mirror's ordinary profile: reads at the source, and reads plus immutable creates at the destination. An existing destination key is checksum-verified rather than trusted from `412` or existence.
 
 Mirror availability is operational state, not duplicated into every canonical object row. Every mirror uses the same logical object keys. Canonical metadata never records provider-specific S3 VersionIds. AWS versioning/Object Lock may be deployed as defense in depth, but portability and restore rely on provider-enforced immutability, hashes, and immutable relocation.
 
-A backend is not production-eligible merely because ordinary uploads work. AWS S3 and R2 require the real cloud contract with the exact ordinary production writer/reader credentials and a retained immutable probe. The Docker contract accepts the `backup-server` binary; its deployed TLS endpoint, credentials, restart, verification, and restore are separate gates. Contracts must prove conditional creation and checksum persistence, then attempt unconditional/copy/multipart overwrite, ordinary/version/batch deletion, role escalation, SSE-C, and every applicable bucket-policy/public-access/encryption/lifecycle/immutability/versioning mutation without changing the probe. Enforcement is backend-specific:
+A backend is not production-eligible merely because ordinary uploads work. AWS S3 and R2 require the real cloud contract with the exact ordinary production credential for each mirror and a retained immutable probe. The Docker contract accepts the `backup-server` binary; its deployed TLS endpoint, credentials, restart, verification, and restore are separate gates. Contracts must prove conditional creation and checksum persistence, then attempt unconditional/copy/multipart overwrite, ordinary/version/batch deletion, role escalation, SSE-C, and every applicable bucket-policy/public-access/encryption/lifecycle/immutability/versioning mutation without changing the probe. Enforcement is backend-specific:
 
 - `backup-server`: its narrow server protocol itself requires create-only PUT and exposes no destructive API.
-- AWS S3: a dedicated writer IAM policy plus bucket policy denies deletion and rejects object creation without `If-None-Match: *`. Libaws converges default SSE-S3 (`AES256`) and blocks SSE-C in the bucket encryption configuration; the contract proves the default with a probe that omits the encryption request header, while the backup client explicitly requests and verifies `AES256` for every object. Encryption remains independent of append-only enforcement: the bucket policy does not require an encryption request header or deny an explicit SSE-KMS request, neither of which permits overwrite or deletion. Versioning/Object Lock may add defense in depth.
-- Cloudflare R2: because it has no equivalent conditional-write bucket policy and its ordinary long-lived object-write role is not create-only, a dedicated bucket or complete backup prefix must have an enabled indefinite R2 bucket-lock rule. Contract acceptance reads the native Bucket Lock API, requires that rule to cover the exact backup namespace, and proves neither ordinary S3 credential can reach that API. The client receives only a bucket-scoped object credential, never a bucket-configuration/admin credential. The lock, not honest client behavior, is the overwrite/delete boundary.
+- AWS S3: a dedicated read/list/create IAM policy plus bucket policy denies deletion and rejects object creation without `If-None-Match: *`. Libaws converges default SSE-S3 (`AES256`) and blocks SSE-C in the bucket encryption configuration; the contract proves the default with a probe that omits the encryption request header, while the backup client explicitly requests and verifies `AES256` for every object. Encryption remains independent of append-only enforcement: the bucket policy does not require an encryption request header or deny an explicit SSE-KMS request, neither of which permits overwrite or deletion. Versioning/Object Lock may add defense in depth.
+- Cloudflare R2: because it has no equivalent conditional-write bucket policy and its ordinary long-lived object-write role is not create-only, a dedicated bucket or complete backup prefix must have an enabled indefinite R2 bucket-lock rule. Contract acceptance reads the native Bucket Lock API, requires that rule to cover the exact backup namespace, and proves neither the ordinary S3 access-key ID nor its secret authenticates to that API. The native account-token API must also deny token issuance and changes to the client token policy; R2 lifecycle, public-domain, and bucket deletion attempts must fail by authentication/authorization, not merely malformed bodies. The contract recognizes specific Cloudflare authentication error codes, including HTTP 400; a generic 400 never proves denial. The client receives only a bucket-scoped object credential, never a bucket-configuration/admin credential. The lock, not honest client behavior, is the overwrite/delete boundary. SSE-C overwrite must also fail against the locked probe. Unlike the AWS deployment, R2 is not required to reject SSE-C on new attacker-created keys: such keys cannot alter existing protected objects, and creating unusable new objects is already within the accepted compromised-client threat model.
 
 Any backend that cannot pass the destructive negative tests is rejected for production use rather than silently weakening the threat model.
 
@@ -392,7 +392,7 @@ If no healthy copy exists, hashes cannot reconstruct lost pack bytes and data-pa
 
 Metadata-bundle repair does not modify canonical Git catalogs. It may copy a healthy exact representation, or—when the exact validated Git base/tip object graph is available—generate, encrypt, split, and publish a new immutable representation for the same edge. Accept it only after recovery reconstructs the exact declared commits; leave every old manifest and part untouched. If neither healthy representation nor the required Git objects survive, repair fails honestly.
 
-The ordinary client has no effective overwrite/delete capability against existing protected objects. For data packs, `backup repair` uses reader credentials for a healthy source and each destination's ordinary non-admin immutable-writer credential, then creates a normal fast-forward relocation commit. For metadata bundles it publishes only the alternate physical representation described above and creates no Git-history edge.
+The ordinary client has no effective overwrite/delete capability against existing protected objects. For data packs, `backup repair` uses the ordinary profiles to read a healthy source and create immutable objects at each destination, then creates a normal fast-forward relocation commit. For metadata bundles it publishes only the alternate physical representation described above and creates no Git-history edge.
 
 ## Restore safety
 
@@ -421,13 +421,11 @@ Required behavior:
 
 ## Production `backup server`
 
-The server is production software and the primary object-backend test mechanism, but deliberately implements only capabilities backup needs. Production requires supplied TLS material and separate writer/reader credentials:
+The server is production software and the primary object-backend test mechanism, but deliberately implements only capabilities backup needs. Production requires supplied TLS material and one ordinary read/list/create credential:
 
 ```sh
-export BACKUP_SERVER_WRITER_ACCESS_KEY=...
-export BACKUP_SERVER_WRITER_SECRET_KEY=...
-export BACKUP_SERVER_READER_ACCESS_KEY=...
-export BACKUP_SERVER_READER_SECRET_KEY=...
+export BACKUP_SERVER_ACCESS_KEY=...
+export BACKUP_SERVER_SECRET_KEY=...
 backup server \
   --listen :8443 \
   --data-root /var/lib/backup \
@@ -449,7 +447,7 @@ Scope:
 - `PutObject`, `GetObject`, `HeadObject`, and `ListObjectsV2` only;
 - no DELETE, overwrite, multipart, CopyObject, or generic S3 features;
 - every PUT requires signed `If-None-Match: *`, `Content-MD5`, and full-object `x-amz-checksum-sha256`; omission fails, and an existing key is never treated as writable;
-- separate create-only writer and reader/auditor credentials;
+- one authenticated read/list/create credential;
 - server compromise is outside the threat boundary.
 
 The server keeps independent sorted in-memory listing indexes for the logical key classes `objects/`, `metadata/parts/`, and `metadata/manifests/`, each with an accepted ceiling of 1,000,000 keys. Creating key 1,000,001 remains durable and known-key GET/HEAD continue to work, but every ListObjectsV2 request matching that class then fails; restart rescans the same immutable files and preserves the overflow result. Other key classes remain independently listable. This deliberately bounds memory rather than risking OOM: representative current key shapes retain about 193 MiB, 193 MiB, and 269 MiB respectively near the three ceilings, or about 654 MiB together before Go/runtime and merge headroom. A compromised writer can therefore consume enough keys/inodes to deny discovery—especially by flooding `metadata/manifests/`—which is an accepted capacity/availability attack under this threat model, not a data-integrity failure. Use a dedicated data root, monitor per-class key and free-inode counts, alert well before the ceiling, and retain external capacity monitoring. Under defaults, one million ordinary data-part keys corresponds roughly to 95 TiB of unique plaintext at the 100 MiB pack target, or ten billion tiny unique files at the 10,000-member pack limit; normal initial backups should remain far below it.
@@ -466,7 +464,7 @@ Durable create path:
 
 The server acquires an exclusive process lock for its data root before serving. Temporary uploads live in a dedicated `0700` internal directory on the same filesystem, are never addressable/listed as objects, and use random `0600` no-follow files. Failed requests remove their temp; after acquiring the root lock, startup safely removes stale regular temps and fails closed on unexpected types or cleanup errors.
 
-Concurrent PUTs for the same key yield one creator and immutable conflicts for the rest. Failed auth, malformed/truncated bodies, client disconnects, disk-full conditions, and crashes never publish partial final objects. GET/HEAD never follow backend symlinks. A reader-authorized `HeadObject` with checksum mode enabled must stream the stored file locally, recompute and check key-embedded BLAKE2b plus SHA-256, MD5, and size, then return only standard full-object checksum metadata—never the body—so remote verification detects disk corruption without network transfer of object bytes. A conclusive stored-content mismatch returns HTTP 500 with `X-Backup-Integrity: corrupt`, because HEAD has no XML error body. Only the pinned `backup-server` backend interprets this header as integrity evidence; generic 500 responses and local read/I/O failures remain unavailability, not proof of corruption.
+Concurrent PUTs for the same key yield one creator and immutable conflicts for the rest. Failed auth, malformed/truncated bodies, client disconnects, disk-full conditions, and crashes never publish partial final objects. GET/HEAD never follow backend symlinks. An authenticated `HeadObject` with checksum mode enabled must stream the stored file locally, recompute and check key-embedded BLAKE2b plus SHA-256, MD5, and size, then return only standard full-object checksum metadata—never the body—so remote verification detects disk corruption without network transfer of object bytes. A conclusive stored-content mismatch returns HTTP 500 with `X-Backup-Integrity: corrupt`, because HEAD has no XML error body. Only the pinned `backup-server` backend interprets this header as integrity evidence; generic 500 responses and local read/I/O failures remain unavailability, not proof of corruption.
 
 Security requirements include strict key grammar, no path joining from untrusted strings, constant-time signature comparison, configured-region enforcement, request-date freshness, bounded headers/body/time, TLS 1.2+, HTTP server timeouts, graceful shutdown, structured audit logs, and private-key files created/mode-checked as `0600`. Self-signed certificate generation is explicit development/test behavior only.
 
@@ -532,7 +530,7 @@ make fuzz                 # ten seconds per fuzz target
 make fuzz FUZZ_TIME=1m    # longer pre-release campaign
 ```
 
-`make check` fails closed if `staticcheck`, `ineffassign`, `errcheck`, `bodyclose`, or `nargs` is unavailable and runs every linter before tests. It is deterministic and requires no cloud account. Fuzz seed corpora run during ordinary tests; `make fuzz` performs mutation campaigns against actual canonical parsers, path/key grammars, local configuration, tar/pack readers, and SigV4 request parsing.
+`make check` fails closed if `staticcheck`, `ineffassign`, `errcheck`, `bodyclose`, or `nargs` is unavailable and runs every linter before tests. It is deterministic and requires no cloud account. Coverage and race runs each allow 30 minutes per Go test package, accommodating fsync-heavy state-machine tests on contended storage without disabling durability or changing assertions. Fuzz seed corpora run during ordinary tests; `make fuzz` performs mutation campaigns against actual canonical parsers, path/key grammars, local configuration, tar/pack readers, and SigV4 request parsing.
 
 The production server runs inside Docker while tests and the real backup client run outside it.
 
@@ -541,7 +539,7 @@ The Docker integration suite must:
 - build/run the real server image as non-root;
 - use a separate persistent mounted data volume;
 - use a generated test CA and normal TLS verification, never insecure-skip;
-- use random host ports and separate writer/reader credentials;
+- use random host ports and the same ordinary credential for upload/read/list;
 - run the real client against the container;
 - kill/restart the server against the same volume;
 - exercise concurrent creates, retries, lost responses, malformed/truncated bodies, traversal, backend symlinks, disk/full-write failures, immutability, fsync/restart durability, listing, and auth failures.
@@ -555,18 +553,20 @@ make integration
 # Set LIBAWS=/path/to/libaws when the reviewed binary is not on PATH.
 ```
 
-The harness validates Docker and the guarded scratch account, completes the observable Docker build before AWS mutation, instantiates the checked-in `infra.yaml` under unique names, gives tests only generated ordinary writer/reader credentials, and removes the users, every object version, and the bucket after success or failure.
+The harness validates Docker and the guarded scratch account, completes the observable Docker build before AWS mutation, instantiates the checked-in `infra.yaml` under unique names, gives tests only the generated ordinary client credential, and removes the user, every object version, and the bucket after success or failure.
 
 R2 joins only when explicitly enabled after an indefinite Bucket Lock rule protects the entire test prefix:
 
 ```sh
-# Set BACKUP_R2_CONTRACT_{BUCKET,REGION,WRITER_ACCESS_KEY,
-# WRITER_SECRET_KEY,READER_ACCESS_KEY,READER_SECRET_KEY,ENDPOINT,ACCOUNT_ID,
+# Set BACKUP_R2_CONTRACT_{BUCKET,REGION,ACCESS_KEY,
+# SECRET_KEY,ENDPOINT,ACCOUNT_ID,
 # LOCK_AUDIT_TOKEN}; PREFIX and JURISDICTION are optional.
 BACKUP_R2_CONTRACT=1 make integration
 ```
 
-R2 uses distinct ordinary credentials and retains its successful immutable probes because libaws does not provision that control plane. Its lock audit checks the configured backup namespace independently of random probe placement; an empty configured prefix requires bucket-wide protection. Cloud-free regressions exercise that same coverage check, including rejection of probe-only locks; they do not substitute for the live deployment contract.
+R2 uses one bucket-scoped Object Read & Write credential plus a separate read-only control-plane audit token and retains its successful immutable probes because libaws does not provision that control plane. Its lock audit checks the configured backup namespace independently of random probe placement; an empty configured prefix requires bucket-wide protection. Cloud-free regressions exercise that same coverage check, including rejection of probe-only locks; they do not substitute for the live deployment contract. Native control-plane authentication-negative requests may be rate limited: the contract retries HTTP 429 with bounded backoff but never accepts it as protection evidence. R2 Bucket Lock also rejects aborts of multipart-overwrite probes, so tiny incomplete uploads can remain with the retained probes; never disable protection merely to clean up an acceptance test. The production backup client does not use multipart.
+
+Both cloud contracts also run the real CLI with one ordinary profile: genesis, two data revisions, checksum verification, broad and selected historical restores with fidelity checks, and latest plus anchored-genesis metadata recovery while the primary Git remote is unavailable. Set `BACKUP_CONTRACT_EVIDENCE_DIR` to retain private per-run workspaces, ordinary credentials, and generated fixture recovery secrets; without it, local fixtures are temporary and the retained encrypted cloud test objects lose those test keys. These synthetic revisions are deployment tests, not production backups.
 
 Additional required coverage:
 
@@ -580,28 +580,26 @@ Additional required coverage:
 - corrupt/truncated/wrong-recipient/compression-bomb/object-substitution inputs;
 - proof that content/metadata verification failures occur before publication and leave all destinations unchanged, while injected publication failures leave only complete verified paths and report the exact published subset; proof that no restore can escape through destination symlinks;
 - bit-flip relocation, alternate metadata-bundle representation, mirror catch-up, metadata recovery from one mirror with the primary Git remote absent, and explicit recovery to an externally anchored earlier tip after a valid malicious linear extension;
-- every provider contract specified above, including wrong-checksum rejection, persisted no-body checksum HEAD, and all destructive ordinary-writer attempts without changing the probe;
+- every provider contract specified above, including wrong-checksum rejection, persisted no-body checksum HEAD, and all destructive ordinary-client attempts without changing the probe;
 - proof that S3/R2 verification fetches only bounded hash-addressed plaintext completion manifests and otherwise uses provider checksum metadata—never pack or encrypted bundle-part `GetObject`; plus proof that local-server verification detects a corrupted file while returning no body.
 
 Tests must exercise actual system code. Protocol tests use official vectors or independent clients, not a reimplementation of the same production functions.
 
 ## AWS deployment and exact production acceptance
 
-`infra.yaml` implements the AWS enforcement contract above with a dedicated private, versioned bucket and separate create-only writer and read/list-only auditor users. Infrastructure convergence never creates credentials; provision with administrator credentials, then create each user's sole API key:
+`infra.yaml` implements the AWS enforcement contract above with a dedicated private, versioned bucket and one read/list/create IAM user. Infrastructure convergence never creates credentials; provision with administrator credentials, then create the user's sole API key:
 
 ```sh
 export BACKUP_AWS_INFRASET=backup-production
 export BACKUP_AWS_BUCKET=globally-unique-backup-bucket
-export BACKUP_AWS_WRITER_USER=backup-production-writer
-export BACKUP_AWS_READER_USER=backup-production-reader
+export BACKUP_AWS_USER=backup-production-client
 
 libaws infra-ensure ./infra.yaml --preview
 libaws infra-ensure ./infra.yaml
-libaws iam-ensure-user-api-key "$BACKUP_AWS_WRITER_USER"
-libaws iam-ensure-user-api-key "$BACKUP_AWS_READER_USER"
+libaws iam-ensure-user-api-key "$BACKUP_AWS_USER"
 ```
 
-Each key command prints the secret only when it creates the user's sole key. Store the values in the distinct trusted profiles used by `.backup-config`. `libaws infra-rm ./infra.yaml` is deliberately destructive: it revokes both users and deletes every bucket object and version.
+The key command prints the secret only when it creates the user's sole key. Store the values in the trusted profile used by `.backup-config`. `libaws infra-rm ./infra.yaml` is deliberately destructive: it revokes the user and deletes every bucket object and version. Do not converge this new definition over an established dual-user deployment as an implicit migration; provision/review the intended single client principal and retire obsolete credentials explicitly.
 
 The disposable deployment used by `make integration` validates the infrastructure definition, not an existing production bucket. Before the bucket contains production data, inspect its policy and run the destructive contract with that bucket's ordinary credentials—never administrator credentials. The test uses fresh random object keys, but deliberately submits destructive and bucket-wide control-plane requests that must be denied:
 
@@ -612,12 +610,11 @@ export BACKUP_AWS_CONTRACT=1
 export BACKUP_AWS_CONTRACT_BUCKET=globally-unique-production-bucket
 export BACKUP_AWS_CONTRACT_REGION=ap-northeast-1
 export BACKUP_AWS_CONTRACT_PREFIX='' # or the exact configured production prefix
-export BACKUP_AWS_CONTRACT_WRITER_ACCESS_KEY=...
-export BACKUP_AWS_CONTRACT_WRITER_SECRET_KEY=...
-export BACKUP_AWS_CONTRACT_READER_ACCESS_KEY=...
-export BACKUP_AWS_CONTRACT_READER_SECRET_KEY=...
-unset BACKUP_AWS_CONTRACT_WRITER_SESSION_TOKEN BACKUP_AWS_CONTRACT_READER_SESSION_TOKEN
-# Export the corresponding *_SESSION_TOKEN values after this when credentials are temporary.
+export BACKUP_AWS_CONTRACT_USER=backup-production-client # exact IAM user, checked with STS
+export BACKUP_AWS_CONTRACT_ACCESS_KEY=...
+export BACKUP_AWS_CONTRACT_SECRET_KEY=...
+unset BACKUP_AWS_CONTRACT_SESSION_TOKEN
+# Export BACKUP_AWS_CONTRACT_SESSION_TOKEN after this when using temporary IAM-user credentials.
 unset BACKUP_AWS_CONTRACT_ENDPOINT
 
 # Prevent fallback to ambient credentials, endpoint overrides, or custom CA roots.
@@ -644,7 +641,7 @@ go test ./integration -run '^TestAWSCloudContract$' -count=1 -v 2>&1 | tee "$evi
 printf 'evidence: %s\n' "$evidence"
 ```
 
-A passing run repeatedly checksum-audits its probes after every denied attack and prints their exact `s3://` URIs. The direct test intentionally leaves those immutable probes. Preserve the private log and externally record the passing run and probe URI. The Docker software contract likewise does not accept a deployed instance: separately confirm its exact TLS endpoint and distinct ordinary roles, restart it against the same data root, and repeat verification and restore; no second destructive protocol suite is required.
+A passing run repeatedly checksum-audits its probes after every denied attack and prints their exact `s3://` URIs. The direct test intentionally leaves those immutable probes. Preserve the private log and externally record the passing run and probe URI. The Docker software contract likewise does not accept a deployed instance: separately confirm its exact TLS endpoint and ordinary read/list/create credential, restart it against the same data root, and repeat verification and restore; no second destructive protocol suite is required.
 
 ## Dependency status
 
@@ -677,13 +674,15 @@ Deployment names and evidence paths below are anonymized placeholders.
 
 Live R2 probes reject a wrong full-object SHA-256, persist and return a valid digest through checksum-mode `HeadObject` without a body, and omit checksum type. R2 rejects simultaneous explicit SHA-256 and `Content-MD5`, so its uploads send SHA-256 only while AWS and `backup-server` receive both.
 
-The current `legacy-test-bucket/backup-test` R2 prefix is **not production-eligible** because an unconditional overwrite and delete both succeeded; its indefinite Bucket Lock and distinct-role destructive contract remain mandatory. Pre-release R2-only runs nevertheless passed genesis, changed-file commit, checksum-only verification, full restore, create-only conflict behavior, and latest plus anchored-genesis recovery without the primary Git remote. This is functional test evidence, not ransomware resistance. The latest private evidence is under `<private-contract-evidence>`.
+The current `legacy-test-bucket/backup-test` R2 prefix is **not production-eligible** because an unconditional overwrite and delete both succeeded; its indefinite Bucket Lock and ordinary-credential destructive contract remain mandatory. Pre-release R2-only runs nevertheless passed genesis, changed-file commit, checksum-only verification, full restore, create-only conflict behavior, and latest plus anchored-genesis recovery without the primary Git remote. This is functional test evidence, not ransomware resistance. The latest private evidence is under `<private-contract-evidence>`.
 
 A dedicated AWS contract bucket, `aws-contract-test-bucket` in `ap-northeast-1`, was provisioned on 2026-08-02 with separate create-only writer and read/list-only auditor IAM users, public-access blocking, SSE-S3, versioning, and bucket-policy denials for non-TLS access, writes without exact `If-None-Match: *`, writes without `AES256`, and object/version deletion. The full destructive contract passed with a retained probe: wrong checksums, unconditional create/overwrite, delete, batch-delete, copy-overwrite, multipart-overwrite, writer reads/listing, reader writes, and immutability-configuration changes all failed without changing the probe; checksum-mode HEAD returned the expected full-object SHA-256 without GET. A 2026-08-03 review rerun additionally proved that explicit `VersionId` deletion, versioned batch deletion, and bucket-versioning suspension all fail with the ordinary writer credential.
 
 The unified Docker/AWS suite passed ordinary and race contracts on 2026-08-29, 2026-08-30, and 2026-08-31. The latest run followed the mandatory-lint/dependency cleanup and hard removal of `FORMAT.object-namespace`; `make check` and every fuzz campaign also passed. Each ephemeral run revoked its users and deleted every object version and scratch bucket; the first run also passed an independent suffix scan. R2 was not enabled for the latest runs. This validates the reusable integration path, not an exact production deployment.
 
 The unified Docker/AWS suite also passed ordinary and race contracts on 2026-09-05 after the mirror-quarantine/forward-repair change. It exercised the real two-mirror client and whole-root container, then revoked its scratch users and deleted every object version and bucket. Independent AWS and Docker inventory checks confirmed no run-owned users, bucket, containers, volumes, or image tags remained. R2 was not enabled; this remains reusable-suite evidence, not acceptance of a production deployment.
+
+On 2026-09-06, the single-credential consolidation passed `make check`, all nine fuzz campaigns, and unified Docker/AWS/R2 contracts normally and under the race detector. Both clouds passed destructive ordinary-client tests plus real CLI backup, checksum verification, fidelity-checked broad/selected historical restore, and latest/anchored-genesis metadata recovery without primary Git. AWS used a fresh scratch bucket in `ap-southeast-1`; independent AWS/Docker inventory confirmed complete run-owned cleanup. The new R2 bucket `locked-r2-test-bucket` has an unchanged bucket-wide indefinite lock and passed the full destructive contract with its bucket-scoped Object Read & Write credential, without Workers. Independent checksum HEAD rechecked both final immutable probes. The bucket retains 39 objects (45,639 bytes) plus tiny incomplete multipart probes as documented above. No pre-existing Cloudflare bucket was mutated; earlier unlocked namespaces remain unaccepted. Private evidence, credentials, and fixture recovery secrets are retained locally under `<private-contract-evidence>`, with the final suite in `unified-integration-30m.log`. This is acceptance of the new test deployment and reusable suite, not completion of the separate production/first-backup gates.
 
 Separately on 2026-08-29, the real backup binary completed an AWS-only test revision against an earlier scratch bucket: genesis, add/commit, one-mirror success, checksum-only verify, full restore with content/mode/nanosecond-mtime/symlink and independent-inode checks, and latest plus anchored-genesis metadata recovery without the primary Git remote. Private credentials, recovery material, exact commits, retained object prefixes, and the probe are recorded under `<private-contract-evidence>`. One 4.5 KiB immutable prefix from an earlier failed harness assertion has no retained recovery key; it is harmless test garbage and is explicitly recorded there.
 

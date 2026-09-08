@@ -89,9 +89,8 @@ cleanup() {
   trap - EXIT
   set +e
 
-  unset BACKUP_AWS_CONTRACT_WRITER_ACCESS_KEY BACKUP_AWS_CONTRACT_WRITER_SECRET_KEY
-  unset BACKUP_AWS_CONTRACT_READER_ACCESS_KEY BACKUP_AWS_CONTRACT_READER_SECRET_KEY
-  unset BACKUP_AWS_CONTRACT_WRITER_SESSION_TOKEN BACKUP_AWS_CONTRACT_READER_SESSION_TOKEN
+  unset BACKUP_AWS_CONTRACT_ACCESS_KEY BACKUP_AWS_CONTRACT_SECRET_KEY
+  unset BACKUP_AWS_CONTRACT_SESSION_TOKEN
 
   if ! containers=$(bounded_docker 2m ps -aq --filter "label=backup.integration.run=$docker_run_id"); then
     echo "could not inventory this run's Docker containers" >&2
@@ -164,11 +163,10 @@ $built || {
 }
 export BACKUP_DOCKER_IMAGES_READY=1
 
-base="backup-${account}-$(date -u +%Y%m%d%H%M%S)-${suffix}"
+base="backup-testing-${account}-$(date -u +%Y%m%d%H%M%S)-${suffix}"
 export BACKUP_AWS_INFRASET=$base
 export BACKUP_AWS_BUCKET=$base
-export BACKUP_AWS_WRITER_USER="${base}-writer"
-export BACKUP_AWS_READER_USER="${base}-reader"
+export BACKUP_AWS_USER="${base}-client"
 
 echo "AWS integration infrastructure: $base" >&2
 cleanup_needed=true
@@ -232,21 +230,18 @@ wait_for_key() {
   return 1
 }
 
-bootstrap_key "$BACKUP_AWS_WRITER_USER" writer_id writer_secret
-bootstrap_key "$BACKUP_AWS_READER_USER" reader_id reader_secret
-wait_for_key "$writer_id" "$writer_secret" writer
-wait_for_key "$reader_id" "$reader_secret" reader
+bootstrap_key "$BACKUP_AWS_USER" client_id client_secret
+wait_for_key "$client_id" "$client_secret" client
 
 unset BACKUP_AWS_CONTRACT_ENDPOINT BACKUP_AWS_CONTRACT_PREFIX
-unset BACKUP_AWS_CONTRACT_WRITER_SESSION_TOKEN BACKUP_AWS_CONTRACT_READER_SESSION_TOKEN
+unset BACKUP_AWS_CONTRACT_SESSION_TOKEN
 export BACKUP_AWS_CONTRACT=1
 export BACKUP_AWS_CONTRACT_BUCKET=$BACKUP_AWS_BUCKET
 export BACKUP_AWS_CONTRACT_REGION=$region
-export BACKUP_AWS_CONTRACT_WRITER_ACCESS_KEY=$writer_id
-export BACKUP_AWS_CONTRACT_WRITER_SECRET_KEY=$writer_secret
-export BACKUP_AWS_CONTRACT_READER_ACCESS_KEY=$reader_id
-export BACKUP_AWS_CONTRACT_READER_SECRET_KEY=$reader_secret
-unset writer_id writer_secret reader_id reader_secret
+export BACKUP_AWS_CONTRACT_USER=$BACKUP_AWS_USER
+export BACKUP_AWS_CONTRACT_ACCESS_KEY=$client_id
+export BACKUP_AWS_CONTRACT_SECRET_KEY=$client_secret
+unset client_id client_secret
 
 run_tests() (
   scrub_aws_endpoint_environment

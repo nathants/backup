@@ -63,11 +63,7 @@ func RepairMetadataEdge(ctx context.Context, options Options, destinationMirror,
 	if !ok {
 		return result, fmt.Errorf("unknown destination mirror %q", destinationMirror)
 	}
-	writer, err := run.writer(ctx, mirror)
-	if err != nil {
-		return result, err
-	}
-	reader, err := run.reader(ctx, mirror)
+	client, err := run.client(ctx, mirror)
 	if err != nil {
 		return result, err
 	}
@@ -113,8 +109,8 @@ func RepairMetadataEdge(ctx context.Context, options Options, destinationMirror,
 			return result, err
 		}
 		expected := objectstore.Object{Size: part.Manifest.Size, BLAKE2b: part.Manifest.Hash, SHA256: part.Manifest.SHA256, MD5: part.Manifest.MD5}
-		create := writer.PutFile(ctx, key, part.Path, expected)
-		if create.Disposition != objectstore.CreateAcknowledged && !((create.Disposition == objectstore.CreateConflict || create.Disposition == objectstore.CreateAmbiguous) && reader.Audit(ctx, key, expected) == nil) {
+		create := client.PutFile(ctx, key, part.Path, expected)
+		if create.Disposition != objectstore.CreateAcknowledged && !((create.Disposition == objectstore.CreateConflict || create.Disposition == objectstore.CreateAmbiguous) && client.Audit(ctx, key, expected) == nil) {
 			return result, fmt.Errorf("destination did not acknowledge rebuilt metadata part %s: %s", key, errorText(create.Err))
 		}
 	}
@@ -130,8 +126,8 @@ func RepairMetadataEdge(ctx context.Context, options Options, destinationMirror,
 	if manifestExpected.BLAKE2b != built.ManifestHash {
 		return result, fmt.Errorf("rebuilt metadata manifest identity changed")
 	}
-	create := writer.PutFile(ctx, manifestKey, built.ManifestPath, manifestExpected)
-	if create.Disposition != objectstore.CreateAcknowledged && !((create.Disposition == objectstore.CreateConflict || create.Disposition == objectstore.CreateAmbiguous) && reader.Audit(ctx, manifestKey, manifestExpected) == nil) {
+	create := client.PutFile(ctx, manifestKey, built.ManifestPath, manifestExpected)
+	if create.Disposition != objectstore.CreateAcknowledged && !((create.Disposition == objectstore.CreateConflict || create.Disposition == objectstore.CreateAmbiguous) && client.Audit(ctx, manifestKey, manifestExpected) == nil) {
 		return result, fmt.Errorf("destination did not acknowledge rebuilt metadata manifest %s: %s", manifestKey, errorText(create.Err))
 	}
 	result.TipCommit = selected.CommitID

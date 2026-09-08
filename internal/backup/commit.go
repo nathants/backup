@@ -457,7 +457,7 @@ func (run *runtime) uploadDataParts(ctx context.Context, txn *transaction, ledge
 			if progress.DataPartCursor < uint64(partIndex) {
 				continue
 			}
-			writer, err := run.writer(ctx, mirror)
+			writer, err := run.client(ctx, mirror)
 			if err != nil {
 				if reportErr := run.reportf("mirror %s data upload unavailable: %s\n", mirror.Canonical.Name, terminalEscape(err.Error())); reportErr != nil {
 					return false, reportErr
@@ -509,7 +509,7 @@ func (run *runtime) uploadDataParts(ctx context.Context, txn *transaction, ledge
 }
 
 func (run *runtime) auditObject(ctx context.Context, mirror localconfig.Mirror, key string, expected objectstore.Object) error {
-	reader, err := run.reader(ctx, mirror)
+	reader, err := run.client(ctx, mirror)
 	if err != nil {
 		return err
 	}
@@ -629,7 +629,7 @@ func (run *runtime) uploadMetadata(ctx context.Context, txn *transaction, ledger
 		if !metadataOnly && (progress.RevisionComplete || !progress.DataComplete) {
 			continue
 		}
-		writer, err := run.writer(ctx, mirror)
+		writer, err := run.client(ctx, mirror)
 		if err != nil {
 			lastErr = err
 			continue

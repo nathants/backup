@@ -323,7 +323,7 @@ func TestCompletedPackResumeSkipsCapturedPathsAndIncompletePackRestarts(t *testi
 			t.Fatal(err)
 		}
 		unavailable := harness.options
-		unavailable.ClientFactory = func(context.Context, localconfig.Mirror, objectstore.Role) (*objectstore.Client, error) {
+		unavailable.ClientFactory = func(context.Context, localconfig.Mirror) (*objectstore.Client, error) {
 			return nil, fmt.Errorf("offline")
 		}
 		if _, err := Commit(ctx, unavailable); err == nil || !strings.Contains(err.Error(), "no individual mirror acknowledged") {

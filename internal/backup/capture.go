@@ -318,7 +318,7 @@ func (run *runtime) uploadCapturedPart(ctx context.Context, part *pack.StreamPar
 		if !ok {
 			continue
 		}
-		writer, err := run.writer(ctx, mirror)
+		writer, err := run.client(ctx, mirror)
 		if err != nil {
 			if reportErr := run.reportf("mirror %s data upload unavailable: %s\n", name, terminalEscape(err.Error())); reportErr != nil {
 				return reportErr

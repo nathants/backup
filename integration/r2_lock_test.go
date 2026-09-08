@@ -63,3 +63,30 @@ func TestR2LockCoverageStillValidatesEveryRule(t *testing.T) {
 		t.Fatalf("missing lock rules were accepted: %v", err)
 	}
 }
+
+func TestR2ControlDenialRequiresAuthenticationEvidence(t *testing.T) {
+	for _, test := range []struct {
+		status int
+		body   string
+		denied bool
+	}{
+		{400, `{"success":false,"errors":[{"code":9106}],"result":null}`, true},
+		{401, `{"success":false,"errors":[{"code":10000}],"result":null}`, true},
+		{403, `{"success":false,"errors":[{"code":10000}],"result":null}`, true},
+		{400, `{"success":false,"errors":[{"code":6003,"error_chain":[{"code":6111}]}],"result":null}`, true},
+		{403, `{"success":false,"errors":[{"code":9109}],"result":null}`, true},
+		{400, `{"success":false,"errors":[{"code":6003}],"result":null}`, false},
+		{400, `{"success":false,"errors":[{"code":6003,"error_chain":[{"code":6004}]}],"result":null}`, false},
+		{400, `{"success":false,"errors":[{"code":1004}],"result":null}`, false},
+		{403, `{"success":true,"errors":[{"code":10000}],"result":null}`, false},
+		{403, `{"success":false,"errors":[{"code":10000}],"result":{}}`, false},
+		{200, `{"success":false,"errors":[{"code":10000}],"result":null}`, false},
+		{500, `{"success":false,"errors":[{"code":10000}],"result":null}`, false},
+		{403, `{"success":false,"errors":[],"result":null}`, false},
+		{403, `not JSON`, false},
+	} {
+		if got := r2ControlDenied(test.status, []byte(test.body)); got != test.denied {
+			t.Fatalf("status=%d body=%s denied=%t, want %t", test.status, test.body, got, test.denied)
+		}
+	}
+}

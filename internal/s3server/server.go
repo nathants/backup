@@ -37,17 +37,10 @@ const (
 
 var randomSource io.Reader = rand.Reader
 
-type Role string
-
-const (
-	RoleWriter Role = "writer"
-	RoleReader Role = "reader"
-)
-
 type Credential struct {
+	AccessKey    string
 	SecretKey    string
 	SessionToken string
-	Role         Role
 }
 
 type Config struct {
@@ -55,7 +48,7 @@ type Config struct {
 	Bucket            string
 	Prefix            string
 	Region            string
-	Credentials       map[string]Credential
+	Credential        Credential
 	MaximumObjectSize int64
 	MaximumClockSkew  time.Duration
 	Now               func() time.Time
@@ -99,16 +92,8 @@ func Open(config Config) (*Server, error) {
 			}
 		}
 	}
-	if len(config.Credentials) == 0 {
-		return nil, fmt.Errorf("at least one server credential is required")
-	}
-	for accessKey, credential := range config.Credentials {
-		if accessKey == "" || credential.SecretKey == "" {
-			return nil, fmt.Errorf("access and secret keys must be nonempty")
-		}
-		if credential.Role != RoleWriter && credential.Role != RoleReader {
-			return nil, fmt.Errorf("credential %q has invalid role %q", accessKey, credential.Role)
-		}
+	if config.Credential.AccessKey == "" || config.Credential.SecretKey == "" {
+		return nil, fmt.Errorf("server access and secret keys must be nonempty")
 	}
 	if config.MaximumObjectSize == 0 {
 		config.MaximumObjectSize = defaultMaxObject
@@ -282,8 +267,8 @@ func (server *Server) handle(writer http.ResponseWriter, request *http.Request) 
 	if err != nil {
 		return http.StatusForbidden, "AccessDenied", err.Error()
 	}
-	credential, ok := server.config.Credentials[authorization.Scope.AccessKey]
-	if !ok {
+	credential := server.config.Credential
+	if authorization.Scope.AccessKey != credential.AccessKey {
 		return http.StatusForbidden, "InvalidAccessKeyId", "unknown access key"
 	}
 	if authorization.Scope.Region != server.config.Region || authorization.Scope.Service != "s3" {
@@ -323,9 +308,6 @@ func (server *Server) handle(writer http.ResponseWriter, request *http.Request) 
 		return http.StatusNotFound, "NoSuchBucket", "bucket does not exist"
 	}
 	if list {
-		if credential.Role != RoleReader {
-			return http.StatusForbidden, "AccessDenied", "reader credential required"
-		}
 		if err := server.listObjects(writer, request); err != nil {
 			return statusForError(err)
 		}
@@ -338,23 +320,14 @@ func (server *Server) handle(writer http.ResponseWriter, request *http.Request) 
 
 	switch request.Method {
 	case http.MethodPut:
-		if credential.Role != RoleWriter {
-			return http.StatusForbidden, "AccessDenied", "writer credential required"
-		}
 		if err := server.putObject(request.Context(), writer, request, key); err != nil {
 			return statusForError(err)
 		}
 	case http.MethodGet:
-		if credential.Role != RoleReader {
-			return http.StatusForbidden, "AccessDenied", "reader credential required"
-		}
 		if err := server.getObject(request.Context(), writer, key); err != nil {
 			return statusForError(err)
 		}
 	case http.MethodHead:
-		if credential.Role != RoleReader {
-			return http.StatusForbidden, "AccessDenied", "reader credential required"
-		}
 		if err := server.headObject(request.Context(), writer, request, key); err != nil {
 			return statusForError(err)
 		}

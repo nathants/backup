@@ -91,7 +91,7 @@ func TestDockerServerConcurrentCreateRetryLostResponseAndPagination(t *testing.T
 		t.Fatal(err)
 	}
 	addDockerPutHeaders(lostRequest, lostPayload)
-	h.sign(lostRequest, writerAccess, writerSecret, lostPayload)
+	h.sign(lostRequest, accessKey, secretKey, lostPayload)
 	lostClient := proxy.Client()
 	lostClient.Timeout = 15 * time.Second
 	if response, err := lostClient.Do(lostRequest); err == nil {
@@ -103,9 +103,9 @@ func TestDockerServerConcurrentCreateRetryLostResponseAndPagination(t *testing.T
 	if err := <-forwarded; err != nil {
 		t.Fatalf("lost-response proxy: %v", err)
 	}
-	head := h.request(http.MethodHead, lostKey, nil, true)
+	head := h.request(http.MethodHead, lostKey, nil)
 	head.Header.Set("x-amz-checksum-mode", "ENABLED")
-	h.sign(head, readerAccess, readerSecret, nil)
+	h.sign(head, accessKey, secretKey, nil)
 	response = h.do(head)
 	if response.StatusCode != http.StatusOK || len(closeBody(t, response)) != 0 {
 		t.Fatalf("audit after lost response status=%d", response.StatusCode)
@@ -151,7 +151,7 @@ func TestDockerServerRejectsMalformedTruncatedUnauthorizedAndTraversalRequests(t
 	if truncatedStatus == http.StatusOK {
 		t.Fatal("truncated request succeeded")
 	}
-	response := h.do(h.request(http.MethodGet, key, nil, true))
+	response := h.do(h.request(http.MethodGet, key, nil))
 	if response.StatusCode != http.StatusNotFound {
 		t.Fatalf("truncated request published an object: status=%d body=%s", response.StatusCode, closeBody(t, response))
 	}
@@ -162,20 +162,14 @@ func TestDockerServerRejectsMalformedTruncatedUnauthorizedAndTraversalRequests(t
 		t.Fatal("malformed HTTP request succeeded")
 	}
 
-	readerPut := h.putRequest(key, payload)
-	h.sign(readerPut, readerAccess, readerSecret, payload)
-	response = h.do(readerPut)
+	unknownPut := h.putRequest(key, payload)
+	h.sign(unknownPut, "unknown-access", secretKey, payload)
+	response = h.do(unknownPut)
 	if response.StatusCode != http.StatusForbidden {
-		t.Fatalf("reader PUT status=%d body=%s", response.StatusCode, closeBody(t, response))
+		t.Fatalf("unknown credential PUT status=%d body=%s", response.StatusCode, closeBody(t, response))
 	}
 	closeBody(t, response)
-	writerGet := h.request(http.MethodGet, key, nil, false)
-	response = h.do(writerGet)
-	if response.StatusCode != http.StatusForbidden {
-		t.Fatalf("writer GET status=%d body=%s", response.StatusCode, closeBody(t, response))
-	}
-	closeBody(t, response)
-	badSignature := h.request(http.MethodGet, key, nil, true)
+	badSignature := h.request(http.MethodGet, key, nil)
 	authorization := badSignature.Header.Get("Authorization")
 	replacement := byte('0')
 	if authorization[len(authorization)-1] == replacement {
@@ -194,7 +188,7 @@ func TestDockerServerRejectsMalformedTruncatedUnauthorizedAndTraversalRequests(t
 		t.Fatal(err)
 	}
 	addDockerPutHeaders(traversal, payload)
-	h.sign(traversal, writerAccess, writerSecret, payload)
+	h.sign(traversal, accessKey, secretKey, payload)
 	response = h.do(traversal)
 	if response.StatusCode == http.StatusOK {
 		t.Fatalf("traversal PUT succeeded: body=%s", closeBody(t, response))
@@ -203,7 +197,7 @@ func TestDockerServerRejectsMalformedTruncatedUnauthorizedAndTraversalRequests(t
 
 	copyRequest := h.putRequest(key, payload)
 	copyRequest.Header.Set("x-amz-copy-source", "/"+testBucket+"/source")
-	h.sign(copyRequest, writerAccess, writerSecret, payload)
+	h.sign(copyRequest, accessKey, secretKey, payload)
 	response = h.do(copyRequest)
 	if response.StatusCode == http.StatusOK {
 		t.Fatalf("copy-overwrite request succeeded: body=%s", closeBody(t, response))
@@ -213,13 +207,13 @@ func TestDockerServerRejectsMalformedTruncatedUnauthorizedAndTraversalRequests(t
 	if err != nil {
 		t.Fatal(err)
 	}
-	h.sign(multipart, writerAccess, writerSecret, nil)
+	h.sign(multipart, accessKey, secretKey, nil)
 	response = h.do(multipart)
 	if response.StatusCode == http.StatusOK {
 		t.Fatalf("multipart request succeeded: body=%s", closeBody(t, response))
 	}
 	closeBody(t, response)
-	deleteRequest := h.request(http.MethodDelete, key, nil, false)
+	deleteRequest := h.request(http.MethodDelete, key, nil)
 	response = h.do(deleteRequest)
 	if response.StatusCode != http.StatusForbidden {
 		t.Fatalf("writer DELETE status=%d body=%s", response.StatusCode, closeBody(t, response))
@@ -265,7 +259,7 @@ func TestDockerServerBackendSymlinkAndProcessKillNeverPublish(t *testing.T) {
 		request.Body = io.NopCloser(&pacedReader{reader: bytes.NewReader(payload), delay: 2 * time.Millisecond, maximum: 32 << 10})
 		request.ContentLength = int64(len(payload))
 		addDockerPutHeaders(request, payload)
-		h.sign(request, writerAccess, writerSecret, payload)
+		h.sign(request, accessKey, secretKey, payload)
 		requestError := make(chan error, 1)
 		go func() {
 			response, err := h.client.Do(request)
@@ -423,7 +417,7 @@ func listAllPages(t *testing.T, h *dockerHarness, prefix string, maxKeys int) []
 		if err != nil {
 			t.Fatal(err)
 		}
-		h.sign(request, readerAccess, readerSecret, nil)
+		h.sign(request, accessKey, secretKey, nil)
 		response := h.do(request)
 		body := closeBody(t, response)
 		if response.StatusCode != http.StatusOK {

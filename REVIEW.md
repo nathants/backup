@@ -200,7 +200,7 @@ Reproduction sources, pinned intermediate production files, overlays, per-case l
 
 Full `make check` passed on 2026-09-05, including all mandatory linters, vet, coverage tests, and race tests (`shell/4e6ae197f77c655a486ffd4857624db5/stdout` beneath the evidence directory above).
 
-### 11. Cloud acceptance still has incomplete destructive/role coverage
+### 11. [done] Cloud acceptance still has incomplete destructive/role coverage
 
 **Location:** `integration/cloud_contract_test.go:187-269,292-334,399-407`.
 
@@ -215,6 +215,14 @@ c. The copy-overwrite attempt uses the protected probe itself as the source. The
 **Evidence:** static test inventory. These are gaps in proof, not assertions that the checked-in AWS policy currently grants those powers.
 
 **Direction:** map the explicitly required attacks to executable backend-specific cases, with applicable requests and separate ordinary-role coverage. For copy, use a source demonstrably readable by the attacking credential and verify the destination remains unchanged. Keep every mutation confined to the explicitly authorized destructive acceptance environment.
+
+**Approved resolution:** Admin replaced the dual-role design with one ordinary read/list/create credential per AWS S3, R2, or backup-server mirror; administrative authority remains separate. Local configuration now requires eight fields, the server uses one credential, and obsolete role APIs/caches/environment fallbacks are removed. Canonical metadata, ciphertext, and operational-state formats are unchanged. The original separate-reader coverage requirement is superseded by this explicit design choice, not silently omitted.
+
+The expanded contracts exercise the same ordinary credential for positive read/list/create and every applicable destructive attempt. Copy uses different, demonstrably readable source bytes. AWS adds encryption replacement, ACL/lifecycle mutations, ordinary and version-specific batch deletion, IAM user-policy escalation and credential issuance. R2 checks bucket-wide/prefix-wide indefinite locking and denies native lock/lifecycle/public-domain/bucket/token mutations using both S3 credential values as bearer candidates. SSE-C overwrite is tested on both clouds. Wrong-checksum rejection has a successful corrected-checksum control. Signature failures, malformed requests, generic conflicts, throttling, and arbitrary per-object batch errors cannot count as immutability evidence; accepted failures require specific authorization/lock codes. R2's recognized HTTP-400 authentication envelopes are distinguished from generic bad requests. Regression fixtures first reproduced the loose status/batch classifications and now pass.
+
+**Validation:** full `make integration` passed on 2026-09-06, including `make check`, real Docker-server lifecycle/fault/two-mirror/whole-root tests, and live AWS plus R2 contracts both normally and under the race detector. Both clouds also completed real CLI genesis and two data revisions, checksum verification, broad/selected historical restore with content/mode/nanosecond-mtime/symlink/independent-inode checks, and latest plus anchored-genesis metadata recovery with the primary Git remote unavailable. All nine fuzz campaigns passed. The final cloud-free gate uses Admin's approved 30-minute per-package timeout after the former 10-minute budget expired during fsync under host contention; assertions, race checks, and durability settings were not weakened.
+
+Private evidence is `<private-contract-evidence>`, with retained recovery fixtures and probe coordinates alongside it. Independent AWS/Docker inventory confirms the run-owned IAM user, bucket, containers, volumes, and image tags are gone. Independent checksum HEAD confirms both final R2 probes remain unchanged, and native lock readback matches the original bucket-wide indefinite rule. The new R2 test bucket retains 39 objects (45,639 bytes) plus tiny incomplete multipart probes because its lock also rejects their abort; protection was never disabled for cleanup. No existing unrelated Cloudflare bucket was mutated. This accepts the new test deployment and reusable suite, not existing production namespaces or the separate first-backup release gates.
 
 ### 12. Several safety tests pass for the wrong reason
 

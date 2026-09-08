@@ -28,8 +28,7 @@ type runtime struct {
 	repo                       *repository.Managed
 	store                      *durable.Store
 	lock                       *os.File
-	writerClients              map[string]*objectstore.Client
-	readerClients              map[string]*objectstore.Client
+	clients                    map[string]*objectstore.Client
 	candidateState             *repository.State
 	capturedCandidateValidated bool
 }
@@ -652,51 +651,27 @@ func (run *runtime) requirePinnedMirrors(state repository.State) error {
 	return run.config.RequireCanonicalMirrors(state.Mirrors)
 }
 
-func (run *runtime) writer(ctx context.Context, mirror localconfig.Mirror) (*objectstore.Client, error) {
-	if run.writerClients == nil {
-		run.writerClients = make(map[string]*objectstore.Client)
+func (run *runtime) client(ctx context.Context, mirror localconfig.Mirror) (*objectstore.Client, error) {
+	if run.clients == nil {
+		run.clients = make(map[string]*objectstore.Client)
 	}
-	if client := run.writerClients[mirror.Canonical.Name]; client != nil {
+	if client := run.clients[mirror.Canonical.Name]; client != nil {
 		return client, nil
 	}
 	var client *objectstore.Client
 	var err error
 	if run.options.ClientFactory != nil {
-		client, err = run.options.ClientFactory(ctx, mirror, objectstore.RoleWriter)
+		client, err = run.options.ClientFactory(ctx, mirror)
 	} else {
-		if mirror.WriterProfile == "-" {
-			return nil, fmt.Errorf("mirror %s has no writer profile", mirror.Canonical.Name)
+		if mirror.Profile == "-" {
+			return nil, fmt.Errorf("mirror %s has no credential profile", mirror.Canonical.Name)
 		}
-		client, err = objectstore.New(ctx, objectstore.Options{Mirror: mirror.Canonical, Role: objectstore.RoleWriter, Profile: mirror.WriterProfile, CAFile: mirror.CAFile})
+		client, err = objectstore.New(ctx, objectstore.Options{Mirror: mirror.Canonical, Profile: mirror.Profile, CAFile: mirror.CAFile})
 	}
 	if err != nil {
 		return nil, err
 	}
-	run.writerClients[mirror.Canonical.Name] = client
-	return client, nil
-}
-
-func (run *runtime) reader(ctx context.Context, mirror localconfig.Mirror) (*objectstore.Client, error) {
-	if run.readerClients == nil {
-		run.readerClients = make(map[string]*objectstore.Client)
-	}
-	if client := run.readerClients[mirror.Canonical.Name]; client != nil {
-		return client, nil
-	}
-	var client *objectstore.Client
-	var err error
-	if run.options.ClientFactory != nil {
-		client, err = run.options.ClientFactory(ctx, mirror, objectstore.RoleReader)
-	} else {
-		if mirror.ReaderProfile == "-" {
-			return nil, fmt.Errorf("mirror %s has no reader profile", mirror.Canonical.Name)
-		}
-		client, err = objectstore.New(ctx, objectstore.Options{Mirror: mirror.Canonical, Role: objectstore.RoleReader, Profile: mirror.ReaderProfile, CAFile: mirror.CAFile})
-	}
-	if err != nil {
-		return nil, err
-	}
-	run.readerClients[mirror.Canonical.Name] = client
+	run.clients[mirror.Canonical.Name] = client
 	return client, nil
 }
 

@@ -20,10 +20,9 @@ const maximumConfigBytes = 16 << 20
 var branchPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/-]{0,254}$`)
 
 type Mirror struct {
-	Canonical     format.Mirror
-	WriterProfile string
-	ReaderProfile string
-	CAFile        string
+	Canonical format.Mirror
+	Profile   string
+	CAFile    string
 }
 
 type Config struct {
@@ -92,8 +91,8 @@ func parse(data []byte) (Config, error) {
 			seenBranch = true
 			config.Branch = fields[1]
 		case "mirror":
-			if len(fields) != 9 {
-				return Config{}, fmt.Errorf("mirror row at line %d has %d fields, expected 9", lineNumber, len(fields))
+			if len(fields) != 8 {
+				return Config{}, fmt.Errorf("mirror row at line %d has %d fields, expected 8", lineNumber, len(fields))
 			}
 			canonical := format.Mirror{Name: fields[1], Kind: fields[2], S3URL: fields[3], Endpoint: fields[4], Region: fields[5]}
 			if _, err := format.MarshalMirrors([]format.Mirror{canonical}); err != nil {
@@ -103,12 +102,12 @@ func parse(data []byte) (Config, error) {
 				return Config{}, fmt.Errorf("duplicate mirror %q", canonical.Name)
 			}
 			seenMirrors[canonical.Name] = true
-			for index := 6; index <= 8; index++ {
+			for index := 6; index <= 7; index++ {
 				if fields[index] == "" || strings.ContainsAny(fields[index], "\x00\t\r\n") {
 					return Config{}, fmt.Errorf("mirror %q has an invalid local binding", canonical.Name)
 				}
 			}
-			config.Mirrors = append(config.Mirrors, Mirror{Canonical: canonical, WriterProfile: fields[6], ReaderProfile: fields[7], CAFile: fields[8]})
+			config.Mirrors = append(config.Mirrors, Mirror{Canonical: canonical, Profile: fields[6], CAFile: fields[7]})
 		default:
 			return Config{}, fmt.Errorf("unknown trusted config row %q", fields[0])
 		}

@@ -23,10 +23,7 @@ import (
 func TestClientAgainstProductionServerContract(t *testing.T) {
 	server, err := s3server.Open(s3server.Config{
 		Root: t.TempDir(), Bucket: "backup-test", Prefix: "repository", Region: "us-east-1",
-		Credentials: map[string]s3server.Credential{
-			"writer": {SecretKey: "writer-secret", Role: s3server.RoleWriter},
-			"reader": {SecretKey: "reader-secret", Role: s3server.RoleReader},
-		},
+		Credential: s3server.Credential{AccessKey: "backup", SecretKey: "backup-secret"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -35,11 +32,7 @@ func TestClientAgainstProductionServerContract(t *testing.T) {
 	httpServer := httptest.NewTLSServer(server)
 	defer httpServer.Close()
 	mirror := format.Mirror{Name: "local", Kind: format.MirrorBackupServer, S3URL: "s3://backup-test/repository", Endpoint: httpServer.URL, Region: "us-east-1"}
-	writer, err := New(context.Background(), Options{Mirror: mirror, Role: RoleWriter, CredentialsProvider: credentials.NewStaticCredentialsProvider("writer", "writer-secret", ""), HTTPClient: httpServer.Client()})
-	if err != nil {
-		t.Fatal(err)
-	}
-	reader, err := New(context.Background(), Options{Mirror: mirror, Role: RoleReader, CredentialsProvider: credentials.NewStaticCredentialsProvider("reader", "reader-secret", ""), HTTPClient: httpServer.Client()})
+	client, err := New(context.Background(), Options{Mirror: mirror, CredentialsProvider: credentials.NewStaticCredentialsProvider("backup", "backup-secret", ""), HTTPClient: httpServer.Client()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,35 +44,35 @@ func TestClientAgainstProductionServerContract(t *testing.T) {
 	if err := os.WriteFile(filename, payload, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	result := writer.PutFile(context.Background(), key, filename, expected)
+	result := client.PutFile(context.Background(), key, filename, expected)
 	if result.Disposition != CreateAcknowledged || result.Err != nil {
 		t.Fatalf("first create: disposition=%v err=%+v", result.Disposition, result.Err)
 	}
-	result = writer.PutFile(context.Background(), key, filename, expected)
+	result = client.PutFile(context.Background(), key, filename, expected)
 	if result.Disposition != CreateConflict || result.Err == nil {
 		t.Fatalf("second create: %#v", result)
 	}
-	if err := reader.Audit(context.Background(), key, expected); err != nil {
+	if err := client.Audit(context.Background(), key, expected); err != nil {
 		t.Fatal(err)
 	}
 	var downloaded bytes.Buffer
-	if err := reader.GetVerified(context.Background(), key, expected, &downloaded); err != nil {
+	if err := client.GetVerified(context.Background(), key, expected, &downloaded); err != nil {
 		t.Fatal(err)
 	}
 	if !bytes.Equal(downloaded.Bytes(), payload) {
 		t.Fatal("download mismatch")
 	}
-	keys, err := reader.List(context.Background(), "objects/")
+	keys, err := client.List(context.Background(), "objects/")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(keys) != 1 || keys[0] != key {
 		t.Fatalf("keys=%#v", keys)
 	}
-	if _, err := reader.ListLimited(context.Background(), "objects/", 0); err == nil {
+	if _, err := client.ListLimited(context.Background(), "objects/", 0); err == nil {
 		t.Fatal("accepted a zero listing limit")
 	}
-	if _, err := reader.ListLimited(context.Background(), "objects/", 1); err != nil {
+	if _, err := client.ListLimited(context.Background(), "objects/", 1); err != nil {
 		t.Fatalf("exact listing limit failed: %v", err)
 	}
 	secondPayload := []byte("second object store payload")
@@ -89,13 +82,13 @@ func TestClientAgainstProductionServerContract(t *testing.T) {
 	if err := os.WriteFile(secondFile, secondPayload, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if result := writer.PutFile(context.Background(), secondKey, secondFile, secondExpected); result.Disposition != CreateAcknowledged {
+	if result := client.PutFile(context.Background(), secondKey, secondFile, secondExpected); result.Disposition != CreateAcknowledged {
 		t.Fatalf("second object create: %#v", result)
 	}
-	if _, err := reader.ListLimited(context.Background(), "objects/", 1); err == nil || !strings.Contains(err.Error(), "exceeds 1 keys") {
+	if _, err := client.ListLimited(context.Background(), "objects/", 1); err == nil || !strings.Contains(err.Error(), "exceeds 1 keys") {
 		t.Fatalf("bounded listing accepted excess objects: %v", err)
 	}
-	deeperKeys, err := reader.List(context.Background(), "objects/"+expected.BLAKE2b+"/")
+	deeperKeys, err := client.List(context.Background(), "objects/"+expected.BLAKE2b+"/")
 	if err != nil || len(deeperKeys) != 1 || deeperKeys[0] != key {
 		t.Fatalf("deep prefix keys=%#v err=%v", deeperKeys, err)
 	}
@@ -108,10 +101,10 @@ func TestClientAgainstProductionServerContract(t *testing.T) {
 	if err := os.WriteFile(manifestFile, manifest, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if result := writer.PutFile(context.Background(), manifestKey, manifestFile, HashBytes(manifest)); result.Disposition != CreateAcknowledged {
+	if result := client.PutFile(context.Background(), manifestKey, manifestFile, HashBytes(manifest)); result.Disposition != CreateAcknowledged {
 		t.Fatalf("manifest create: %#v", result)
 	}
-	got, err := reader.GetManifest(context.Background(), manifestKey, manifestHashText)
+	got, err := client.GetManifest(context.Background(), manifestKey, manifestHashText)
 	if err != nil || !bytes.Equal(got, manifest) {
 		t.Fatalf("manifest: %q %v", got, err)
 	}
@@ -130,7 +123,7 @@ func TestPinnedEndpointRejectsAmbientSDKOverrides(t *testing.T) {
 	t.Setenv("AWS_CONFIG_FILE", "/dev/null")
 	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", "/dev/null")
 	newClient := func(mirror format.Mirror, httpClient *endpointRejectHTTPClient) (*Client, error) {
-		return New(context.Background(), Options{Mirror: mirror, Role: RoleReader, CredentialsProvider: credentials.NewStaticCredentialsProvider("reader", "reader-secret", ""), HTTPClient: httpClient})
+		return New(context.Background(), Options{Mirror: mirror, CredentialsProvider: credentials.NewStaticCredentialsProvider("reader", "reader-secret", ""), HTTPClient: httpClient})
 	}
 	assertOptions := func(t *testing.T, client *Client, endpoint string) {
 		t.Helper()
@@ -195,7 +188,7 @@ func TestPinnedEndpointRejectsAmbientSDKOverrides(t *testing.T) {
 		}
 		t.Setenv("AWS_CONFIG_FILE", config)
 		httpClient := &endpointRejectHTTPClient{}
-		client, err := New(context.Background(), Options{Mirror: awsMirror, Role: RoleReader, Profile: "role", HTTPClient: httpClient})
+		client, err := New(context.Background(), Options{Mirror: awsMirror, Profile: "role", HTTPClient: httpClient})
 		if err == nil {
 			t.Fatalf("role profile endpoint override accepted: %#v", client)
 		}
@@ -344,7 +337,7 @@ func TestCloudflareR2UsesOnlyItsSupportedSHA256Checksum(t *testing.T) {
 	endpoint := httptest.NewTLSServer(handler)
 	defer endpoint.Close()
 	mirror := format.Mirror{Name: "r2", Kind: format.MirrorCloudflareR2, S3URL: "s3://backup-test/repository", Endpoint: endpoint.URL, Region: "auto"}
-	client, err := New(context.Background(), Options{Mirror: mirror, Role: RoleWriter, CredentialsProvider: credentials.NewStaticCredentialsProvider("writer", "secret", ""), HTTPClient: endpoint.Client()})
+	client, err := New(context.Background(), Options{Mirror: mirror, CredentialsProvider: credentials.NewStaticCredentialsProvider("writer", "secret", ""), HTTPClient: endpoint.Client()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -394,7 +387,7 @@ func TestListRejectsNonAdvancingPagination(t *testing.T) {
 	}))
 	defer endpoint.Close()
 	mirror := format.Mirror{Name: "local", Kind: format.MirrorBackupServer, S3URL: "s3://backup-test/repository", Endpoint: endpoint.URL, Region: "us-east-1"}
-	client, err := New(context.Background(), Options{Mirror: mirror, Role: RoleReader, CredentialsProvider: credentials.NewStaticCredentialsProvider("reader", "secret", ""), HTTPClient: endpoint.Client()})
+	client, err := New(context.Background(), Options{Mirror: mirror, CredentialsProvider: credentials.NewStaticCredentialsProvider("reader", "secret", ""), HTTPClient: endpoint.Client()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -421,7 +414,7 @@ func TestCreateDispositionClassifiesHTTPOutcomes(t *testing.T) {
 			endpoint := httptest.NewTLSServer(httpErrorHandler(test.status))
 			defer endpoint.Close()
 			mirror := format.Mirror{Name: "local", Kind: format.MirrorBackupServer, S3URL: "s3://backup-test/repository", Endpoint: endpoint.URL, Region: "us-east-1"}
-			client, err := New(context.Background(), Options{Mirror: mirror, Role: RoleWriter, CredentialsProvider: credentials.NewStaticCredentialsProvider("writer", "secret", ""), HTTPClient: endpoint.Client()})
+			client, err := New(context.Background(), Options{Mirror: mirror, CredentialsProvider: credentials.NewStaticCredentialsProvider("writer", "secret", ""), HTTPClient: endpoint.Client()})
 			if err != nil {
 				t.Fatal(err)
 			}

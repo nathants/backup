@@ -56,7 +56,7 @@ func RepairDataPart(ctx context.Context, options Options, sourceMirror, packHash
 	if !ok {
 		return result, fmt.Errorf("unknown source mirror %q", sourceMirror)
 	}
-	source, err := run.reader(ctx, sourcePin)
+	source, err := run.client(ctx, sourcePin)
 	if err != nil {
 		return result, err
 	}

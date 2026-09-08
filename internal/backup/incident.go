@@ -189,7 +189,7 @@ func (run *runtime) auditChain(ctx context.Context, client *objectstore.Client, 
 }
 
 func (run *runtime) auditMirror(ctx context.Context, mirror localconfig.Mirror, history *repository.History, selected repository.ValidatedCommit) error {
-	reader, err := run.reader(ctx, mirror)
+	reader, err := run.client(ctx, mirror)
 	if err != nil {
 		return err
 	}
@@ -236,7 +236,7 @@ func (run *runtime) requireBackupEligibility(txn *transaction, ledger completion
 		eligible = eligible || ledger.eligible(name, txn.BaseCommit) || txn.LocalCommit != "" && ledger.eligible(name, txn.LocalCommit)
 	}
 	if !eligible {
-		return fmt.Errorf("ordinary backups paused: no mirror is durably known complete; run verify with reader credentials, then repair or sync as needed")
+		return fmt.Errorf("ordinary backups paused: no mirror is durably known complete; run verify, then repair or sync as needed")
 	}
 	if len(ledger.Quarantined) != 0 {
 		return run.reportf("DEGRADED REDUNDANCY: quarantined mirrors %q remain excluded until repaired and successfully verified\n", sortedMirrorNames(ledger.Quarantined))
@@ -252,7 +252,7 @@ func (run *runtime) revalidateCapture(ctx context.Context, txn *transaction, led
 			continue
 		}
 		if txn.Incident != ledger.Incident {
-			reader, err := run.reader(ctx, mirror)
+			reader, err := run.client(ctx, mirror)
 			if err != nil {
 				continue
 			}
@@ -319,7 +319,7 @@ func (run *runtime) revalidateCandidate(ctx context.Context, txn *transaction, c
 		if txn.Kind != "repair" && !ledger.eligible(name, txn.BaseCommit) && !(txn.LocalCommit != "" && ledger.eligible(name, txn.LocalCommit)) {
 			continue
 		}
-		reader, err := run.reader(ctx, mirror)
+		reader, err := run.client(ctx, mirror)
 		if err == nil {
 			err = run.auditData(ctx, reader, name, candidate)
 		}

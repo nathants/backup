@@ -180,3 +180,30 @@ func TestTerminalErrorsEscapeControls(t *testing.T) {
 		t.Fatalf("escaped=%q", got)
 	}
 }
+
+func TestServerRequiresSingleCredentialEnvironment(t *testing.T) {
+	for _, name := range []string{"BACKUP_SERVER_ACCESS_KEY", "BACKUP_SERVER_SECRET_KEY", "BACKUP_SERVER_SESSION_TOKEN"} {
+		t.Setenv(name, "")
+	}
+	// Old names must not become a fallback credential source.
+	t.Setenv("BACKUP_SERVER_WRITER_ACCESS_KEY", "old-writer")
+	t.Setenv("BACKUP_SERVER_WRITER_SECRET_KEY", "old-secret")
+	t.Setenv("BACKUP_SERVER_READER_ACCESS_KEY", "old-reader")
+	t.Setenv("BACKUP_SERVER_READER_SECRET_KEY", "old-reader-secret")
+	args := []string{"server", "--data-root", filepath.Join(t.TempDir(), "data"), "--bucket", "backup-test", "--tls-cert", "/nonexistent-backup-test.crt", "--tls-key", "/nonexistent-backup-test.key"}
+	var stdout, stderr bytes.Buffer
+	err := run(context.Background(), args, &stdout, &stderr)
+	if err == nil || !strings.Contains(err.Error(), "BACKUP_SERVER_ACCESS_KEY and BACKUP_SERVER_SECRET_KEY are required") {
+		t.Fatalf("legacy server credential environment was accepted: %v", err)
+	}
+	t.Setenv("BACKUP_SERVER_ACCESS_KEY", "backup-client")
+	err = run(context.Background(), args, &stdout, &stderr)
+	if err == nil || !strings.Contains(err.Error(), "BACKUP_SERVER_ACCESS_KEY and BACKUP_SERVER_SECRET_KEY are required") {
+		t.Fatalf("incomplete credential accepted: %v", err)
+	}
+	t.Setenv("BACKUP_SERVER_SECRET_KEY", "backup-secret")
+	err = run(context.Background(), args, &stdout, &stderr)
+	if !errors.Is(err, os.ErrNotExist) || !strings.Contains(err.Error(), "read TLS certificate") {
+		t.Fatalf("single credential did not advance to TLS validation: %v", err)
+	}
+}

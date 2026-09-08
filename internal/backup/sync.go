@@ -54,15 +54,11 @@ func Sync(ctx context.Context, options Options, sourceName, destinationName, rev
 	if !ok {
 		return result, fmt.Errorf("unknown destination mirror %q", destinationName)
 	}
-	source, err := run.reader(ctx, sourcePin)
+	source, err := run.client(ctx, sourcePin)
 	if err != nil {
 		return result, err
 	}
-	destinationReader, err := run.reader(ctx, destinationPin)
-	if err != nil {
-		return result, err
-	}
-	destinationWriter, err := run.writer(ctx, destinationPin)
+	destination, err := run.client(ctx, destinationPin)
 	if err != nil {
 		return result, err
 	}
@@ -74,7 +70,7 @@ func Sync(ctx context.Context, options Options, sourceName, destinationName, rev
 	if err := run.observeSyncDestination(ctx, destinationPin, history, selected); err != nil {
 		return result, err
 	}
-	copying := mirrorCopy{run: run, source: source, reader: destinationReader, writer: destinationWriter, sourceName: sourceName, destinationName: destinationName}
+	copying := mirrorCopy{run: run, source: source, destination: destination, sourceName: sourceName, destinationName: destinationName}
 	stage, err := os.MkdirTemp(run.options.statePath(), ".backup-sync-*")
 	if err != nil {
 		return result, err
@@ -203,7 +199,7 @@ func updateCompletionLedgerForSync(ledger *completionLedger, mirror, selected st
 		return err
 	}
 	if !currentFound {
-		return fmt.Errorf("completion ledger for mirror %s names a commit outside validated history; rebuild it with reader/auditor verification", mirror)
+		return fmt.Errorf("completion ledger for mirror %s names a commit outside validated history; rebuild it with verification", mirror)
 	}
 	if !selectedFound {
 		return fmt.Errorf("selected revision is outside validated history")
@@ -217,12 +213,12 @@ func updateCompletionLedgerForSync(ledger *completionLedger, mirror, selected st
 
 type mirrorCopy struct {
 	run                         *runtime
-	source, reader, writer      *objectstore.Client
+	source, destination         *objectstore.Client
 	sourceName, destinationName string
 }
 
 func (copying mirrorCopy) auditDestination(ctx context.Context, key string, expected objectstore.Object) error {
-	err := copying.reader.Audit(ctx, key, expected)
+	err := copying.destination.Audit(ctx, key, expected)
 	if observationErr := copying.run.observeDataFailure(copying.destinationName, key, err); observationErr != nil {
 		return observationErr
 	}
@@ -262,7 +258,7 @@ func (copying mirrorCopy) ensureObject(ctx context.Context, key string, expected
 	} else if isIncidentStateError(err) {
 		return false, err
 	}
-	result := copying.writer.PutFile(ctx, key, path, expected)
+	result := copying.destination.PutFile(ctx, key, path, expected)
 	if result.Disposition == objectstore.CreateAcknowledged {
 		return true, nil
 	}

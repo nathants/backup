@@ -69,7 +69,7 @@ func (run *runtime) prepareForwardRepair(ctx context.Context, txn *transaction) 
 	}
 	complete := false
 	for _, mirror := range run.config.Mirrors {
-		reader, err := run.reader(ctx, mirror)
+		reader, err := run.client(ctx, mirror)
 		if err == nil {
 			err = auditManifestChain(ctx, reader, history, history.Len()-1, head.State.Format.RepositoryUUID, nil)
 		}

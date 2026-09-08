@@ -53,10 +53,7 @@ func newIntegrationHarness(t *testing.T) *integrationHarness {
 	serverRoot := t.TempDir()
 	server, err := s3server.Open(s3server.Config{
 		Root: serverRoot, Bucket: "backup-test", Prefix: "repository", Region: "us-east-1",
-		Credentials: map[string]s3server.Credential{
-			"writer": {SecretKey: "writer-secret", Role: s3server.RoleWriter},
-			"reader": {SecretKey: "reader-secret", Role: s3server.RoleReader},
-		},
+		Credential: s3server.Credential{AccessKey: "backup", SecretKey: "backup-secret"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -69,17 +66,14 @@ func newIntegrationHarness(t *testing.T) *integrationHarness {
 		}
 	})
 	configPath := filepath.Join(root, ".backup-config")
-	config := fmt.Sprintf("git-remote\t%s\nbranch\tmain\nmirror\tlocal\tbackup-server\ts3://backup-test/repository\t%s\tus-east-1\t-\t-\t-\n", bare, httpServer.URL)
+	config := fmt.Sprintf("git-remote\t%s\nbranch\tmain\nmirror\tlocal\tbackup-server\ts3://backup-test/repository\t%s\tus-east-1\t-\t-\n", bare, httpServer.URL)
 	if err := os.WriteFile(configPath, []byte(config), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	factory := func(ctx context.Context, mirror localconfig.Mirror, role objectstore.Role) (*objectstore.Client, error) {
-		access, secret := "writer", "writer-secret"
-		if role == objectstore.RoleReader {
-			access, secret = "reader", "reader-secret"
-		}
+	factory := func(ctx context.Context, mirror localconfig.Mirror) (*objectstore.Client, error) {
+		access, secret := "backup", "backup-secret"
 		return objectstore.New(ctx, objectstore.Options{
-			Mirror: mirror.Canonical, Role: role,
+			Mirror:              mirror.Canonical,
 			CredentialsProvider: credentials.NewStaticCredentialsProvider(access, secret, ""),
 			HTTPClient:          httpServer.Client(),
 		})
@@ -160,7 +154,7 @@ func TestMirrorTopologyCanBeAddedAndRemovedWithoutRebinding(t *testing.T) {
 	if err := os.WriteFile(metadataPath, []byte(localRow+newRow), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	config := fmt.Sprintf("git-remote\t%s\nbranch\tmain\nmirror\tlocal\tbackup-server\ts3://backup-test/repository\t%s\tus-east-1\t-\t-\t-\nmirror\tnew\tbackup-server\ts3://backup-new/repository\thttps://new.example\tus-east-1\t-\t-\t-\n", harness.bare, harness.http.URL)
+	config := fmt.Sprintf("git-remote\t%s\nbranch\tmain\nmirror\tlocal\tbackup-server\ts3://backup-test/repository\t%s\tus-east-1\t-\t-\nmirror\tnew\tbackup-server\ts3://backup-new/repository\thttps://new.example\tus-east-1\t-\t-\n", harness.bare, harness.http.URL)
 	if err := os.WriteFile(harness.configPath, []byte(config), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -175,7 +169,7 @@ func TestMirrorTopologyCanBeAddedAndRemovedWithoutRebinding(t *testing.T) {
 	if err := os.WriteFile(metadataPath, []byte(localRow), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	config = fmt.Sprintf("git-remote\t%s\nbranch\tmain\nmirror\tlocal\tbackup-server\ts3://backup-test/repository\t%s\tus-east-1\t-\t-\t-\n", harness.bare, harness.http.URL)
+	config = fmt.Sprintf("git-remote\t%s\nbranch\tmain\nmirror\tlocal\tbackup-server\ts3://backup-test/repository\t%s\tus-east-1\t-\t-\n", harness.bare, harness.http.URL)
 	if err := os.WriteFile(harness.configPath, []byte(config), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -437,7 +431,7 @@ func TestRepairMetadataEdgePublishesAlternateWithoutGitCommit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	reader := testMirrorClient(t, ctx, harness, objectstore.RoleReader)
+	reader := testMirrorClient(t, ctx, harness)
 	before, err := listManifestRepresentations(ctx, reader, latest.CommitID, testHistoryGenesisFormat(t, history).RepositoryUUID)
 	if err != nil || len(before) != 1 {
 		t.Fatalf("representations=%#v err=%v", before, err)
@@ -539,13 +533,12 @@ func TestRecoverTriesAlternateLogicalPaths(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	reader := testMirrorClient(t, ctx, harness, objectstore.RoleReader)
-	writer := testMirrorClient(t, ctx, harness, objectstore.RoleWriter)
+	client := testMirrorClient(t, ctx, harness)
 	history, err := (repository.Validator{Repo: filepath.Join(harness.root, ".backup"), Limits: format.DefaultLimits()}).ValidateHistory(latest.CommitID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	representations, err := listManifestRepresentations(ctx, reader, latest.CommitID, testHistoryGenesisFormat(t, history).RepositoryUUID)
+	representations, err := listManifestRepresentations(ctx, client, latest.CommitID, testHistoryGenesisFormat(t, history).RepositoryUUID)
 	if err != nil || len(representations) != 1 {
 		t.Fatalf("representations=%#v err=%v", representations, err)
 	}
@@ -553,7 +546,7 @@ func TestRecoverTriesAlternateLogicalPaths(t *testing.T) {
 	manifest := cloneTestManifest(valid.Manifest)
 	manifest.BaseCommit = strings.Repeat("f", 64)
 	manifest.Parts[0].ObjectID = strings.Repeat("0", 32)
-	uploadTestManifest(t, ctx, writer, manifest, strings.Repeat("1", 32))
+	uploadTestManifest(t, ctx, client, manifest, strings.Repeat("1", 32))
 	t.Setenv("BACKUP_SECRET_KEY", fmt.Sprintf("%x", harness.secretKey))
 	destination := filepath.Join(t.TempDir(), "recovered.git")
 	recovered, err := Recover(ctx, harness.options, RecoverRequest{Mirror: "local", Tip: latest.CommitID, Destination: destination})
@@ -578,13 +571,12 @@ func TestRecoverIgnoresUnusableMaximalExtension(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	reader := testMirrorClient(t, ctx, harness, objectstore.RoleReader)
-	writer := testMirrorClient(t, ctx, harness, objectstore.RoleWriter)
+	client := testMirrorClient(t, ctx, harness)
 	history, err := (repository.Validator{Repo: filepath.Join(harness.root, ".backup"), Limits: format.DefaultLimits()}).ValidateHistory(latest.CommitID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	representations, err := listManifestRepresentations(ctx, reader, latest.CommitID, testHistoryGenesisFormat(t, history).RepositoryUUID)
+	representations, err := listManifestRepresentations(ctx, client, latest.CommitID, testHistoryGenesisFormat(t, history).RepositoryUUID)
 	if err != nil || len(representations) != 1 {
 		t.Fatalf("representations=%#v err=%v", representations, err)
 	}
@@ -594,7 +586,7 @@ func TestRecoverIgnoresUnusableMaximalExtension(t *testing.T) {
 	manifest.BaseCommit = latest.CommitID
 	manifest.TipCommit = fakeTip
 	manifest.Kind = format.BundleIncremental
-	uploadTestManifest(t, ctx, writer, manifest, strings.Repeat("e", 32))
+	uploadTestManifest(t, ctx, client, manifest, strings.Repeat("e", 32))
 
 	t.Setenv("BACKUP_SECRET_KEY", fmt.Sprintf("%x", harness.secretKey))
 	destination := filepath.Join(t.TempDir(), "recovered.git")
@@ -633,7 +625,7 @@ func TestRecoverRequiresChoiceForVerifiedForks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	writer := testMirrorClient(t, ctx, harness, objectstore.RoleWriter)
+	writer := testMirrorClient(t, ctx, harness)
 	uploadTestMetadataBundle(t, ctx, writer, repo, testHistoryGenesisFormat(t, genesisHistory).RepositoryUUID, genesis.CommitID, forkTip, 1, harness.publicKey, harness.options.MetadataPartSize)
 
 	t.Setenv("BACKUP_SECRET_KEY", fmt.Sprintf("%x", harness.secretKey))
@@ -710,7 +702,7 @@ func TestMetadataRecoveryTriesAlternatePhysicalRepresentations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	reader, err := harness.options.ClientFactory(ctx, config.Mirrors[0], objectstore.RoleReader)
+	reader, err := harness.options.ClientFactory(ctx, config.Mirrors[0])
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -754,9 +746,8 @@ func TestMetadataRecoveryTriesAlternativeAfterDeclaredTipMismatch(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	reader := testMirrorClient(t, ctx, harness, objectstore.RoleReader)
-	writer := testMirrorClient(t, ctx, harness, objectstore.RoleWriter)
-	valid, err := listManifestRepresentations(ctx, reader, genesis.CommitID, testHistoryGenesisFormat(t, history).RepositoryUUID)
+	client := testMirrorClient(t, ctx, harness)
+	valid, err := listManifestRepresentations(ctx, client, genesis.CommitID, testHistoryGenesisFormat(t, history).RepositoryUUID)
 	if err != nil || len(valid) != 1 {
 		t.Fatalf("representations=%#v err=%v", valid, err)
 	}
@@ -767,7 +758,7 @@ func TestMetadataRecoveryTriesAlternativeAfterDeclaredTipMismatch(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	bad := uploadTestMetadataBundle(t, ctx, writer, repo, testHistoryGenesisFormat(t, history).RepositoryUUID, "", fork, 0, harness.publicKey, harness.options.MetadataPartSize)
+	bad := uploadTestMetadataBundle(t, ctx, client, repo, testHistoryGenesisFormat(t, history).RepositoryUUID, "", fork, 0, harness.publicKey, harness.options.MetadataPartSize)
 	// The ciphertext is a valid full bundle for fork, but its completion marker
 	// claims genesis. Header validation rejects this before importing objects;
 	// actual post-import cleanup is covered by the unreachable-object fixture.
@@ -779,7 +770,7 @@ func TestMetadataRecoveryTriesAlternativeAfterDeclaredTipMismatch(t *testing.T) 
 		t.Fatal(err)
 	}
 	quarantine := filepath.Join(root, "recovered.git")
-	if _, err := materializeMetadataChain(ctx, reader, [][]manifestRepresentation{{bad, valid[0]}}, harness.secretKey, quarantine, stage); err != nil {
+	if _, err := materializeMetadataChain(ctx, client, [][]manifestRepresentation{{bad, valid[0]}}, harness.secretKey, quarantine, stage); err != nil {
 		t.Fatalf("declared-tip mismatch prevented the healthy retry: %v", err)
 	}
 }
@@ -1119,7 +1110,7 @@ func TestDeterministicMirrorUnavailabilityRetainsImmutableIdentities(t *testing.
 			t.Fatal(err)
 		}
 		options := harness.options
-		options.ClientFactory = func(context.Context, localconfig.Mirror, objectstore.Role) (*objectstore.Client, error) {
+		options.ClientFactory = func(context.Context, localconfig.Mirror) (*objectstore.Client, error) {
 			return nil, fmt.Errorf("mirror is deterministically unavailable")
 		}
 		if _, err := Commit(ctx, options); err == nil || !strings.Contains(err.Error(), "no individual mirror acknowledged ciphertext part") {
@@ -1153,13 +1144,9 @@ func TestDeterministicMirrorUnavailabilityRetainsImmutableIdentities(t *testing.
 		if _, err := Add(ctx, harness.options, false); err != nil {
 			t.Fatal(err)
 		}
-		originalFactory := harness.options.ClientFactory
 		options := harness.options
-		options.ClientFactory = func(ctx context.Context, mirror localconfig.Mirror, role objectstore.Role) (*objectstore.Client, error) {
-			if role == objectstore.RoleWriter {
-				return nil, fmt.Errorf("mirror is deterministically unavailable")
-			}
-			return originalFactory(ctx, mirror, role)
+		options.ClientFactory = func(context.Context, localconfig.Mirror) (*objectstore.Client, error) {
+			return nil, fmt.Errorf("mirror is deterministically unavailable")
 		}
 		if _, err := Commit(ctx, options); err == nil || !strings.Contains(err.Error(), "no individual mirror has a complete metadata chain") || !strings.Contains(err.Error(), "mirror is deterministically unavailable") {
 			t.Fatalf("deterministic metadata unavailability was misclassified: %v", err)
@@ -1467,18 +1454,14 @@ func (transport *faultRoundTripper) RoundTrip(request *http.Request) (*http.Resp
 
 func withWriterTransport(harness *integrationHarness, wrap func(http.RoundTripper) http.RoundTripper) Options {
 	options := harness.options
-	options.ClientFactory = func(ctx context.Context, mirror localconfig.Mirror, role objectstore.Role) (*objectstore.Client, error) {
-		access, secret := "writer", "writer-secret"
+	options.ClientFactory = func(ctx context.Context, mirror localconfig.Mirror) (*objectstore.Client, error) {
+		access, secret := "backup", "backup-secret"
 		httpClient := harness.http.Client()
-		if role == objectstore.RoleReader {
-			access, secret = "reader", "reader-secret"
-		} else {
-			clone := *httpClient
-			clone.Transport = wrap(httpClient.Transport)
-			httpClient = &clone
-		}
+		clone := *httpClient
+		clone.Transport = wrap(httpClient.Transport)
+		httpClient = &clone
 		return objectstore.New(ctx, objectstore.Options{
-			Mirror: mirror.Canonical, Role: role,
+			Mirror:              mirror.Canonical,
 			CredentialsProvider: credentials.NewStaticCredentialsProvider(access, secret, ""),
 			HTTPClient:          httpClient,
 		})
@@ -2224,13 +2207,13 @@ func testStateBlobs(t *testing.T, state repository.State) map[string][]byte {
 	return blobs
 }
 
-func testMirrorClient(t *testing.T, ctx context.Context, harness *integrationHarness, role objectstore.Role) *objectstore.Client {
+func testMirrorClient(t *testing.T, ctx context.Context, harness *integrationHarness) *objectstore.Client {
 	t.Helper()
 	config, err := localconfig.Load(harness.configPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	client, err := harness.options.ClientFactory(ctx, config.Mirrors[0], role)
+	client, err := harness.options.ClientFactory(ctx, config.Mirrors[0])
 	if err != nil {
 		t.Fatal(err)
 	}

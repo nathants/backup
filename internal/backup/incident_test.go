@@ -259,16 +259,16 @@ func TestIntegrityIncidentHealthyMirrorCanResumeWhileDamagedMirrorStaysExcluded(
 	if err != nil {
 		t.Fatal(err)
 	}
-	config = append(config, []byte(fmt.Sprintf("mirror\tremote\tbackup-server\ts3://backup-test/repository\t%s\tus-east-1\t-\t-\t-\n", remote.http.URL))...)
+	config = append(config, []byte(fmt.Sprintf("mirror\tremote\tbackup-server\ts3://backup-test/repository\t%s\tus-east-1\t-\t-\n", remote.http.URL))...)
 	if err := os.WriteFile(h.configPath, config, 0600); err != nil {
 		t.Fatal(err)
 	}
 	localFactory := h.options.ClientFactory
-	h.options.ClientFactory = func(ctx context.Context, pin localconfig.Mirror, role objectstore.Role) (*objectstore.Client, error) {
+	h.options.ClientFactory = func(ctx context.Context, pin localconfig.Mirror) (*objectstore.Client, error) {
 		if pin.Canonical.Name == "remote" {
-			return remote.options.ClientFactory(ctx, pin, role)
+			return remote.options.ClientFactory(ctx, pin)
 		}
-		return localFactory(ctx, pin, role)
+		return localFactory(ctx, pin)
 	}
 	ctx := context.Background()
 	if _, err := Init(ctx, h.options, InitRequest{RecoveryPublicKey: h.publicKey}); err != nil {
@@ -304,21 +304,18 @@ func TestIntegrityIncidentHealthyMirrorCanResumeWhileDamagedMirrorStaysExcluded(
 		t.Fatal(err)
 	}
 	var reports bytes.Buffer
-	writerOnly := h.options
-	writerOnly.Stderr = &reports
+	ordinary := h.options
+	ordinary.Stderr = &reports
 	factory := h.options.ClientFactory
-	writerOnly.ClientFactory = func(ctx context.Context, pin localconfig.Mirror, role objectstore.Role) (*objectstore.Client, error) {
-		if role == objectstore.RoleReader {
-			return nil, errors.New("writer-only operation")
-		}
+	ordinary.ClientFactory = func(ctx context.Context, pin localconfig.Mirror) (*objectstore.Client, error) {
 		if pin.Canonical.Name == "remote" {
 			t.Error("ordinary commit attempted a quarantined mirror")
 		}
-		return factory(ctx, pin, role)
+		return factory(ctx, pin)
 	}
-	result, err := Commit(ctx, writerOnly)
+	result, err := Commit(ctx, ordinary)
 	if err != nil || strings.Join(result.CompleteMirrors, ",") != "local" {
-		t.Fatalf("healthy writer-only resume: %+v %v", result, err)
+		t.Fatalf("healthy ordinary resume: %+v %v", result, err)
 	}
 	if !strings.Contains(reports.String(), "DEGRADED REDUNDANCY") {
 		t.Fatalf("missing visible degradation: %s", reports.String())
@@ -412,7 +409,7 @@ func TestIntegrityIncidentLedgerRebuildAndTransientFailures(t *testing.T) {
 				}
 			} else {
 				unavailable := h.options
-				unavailable.ClientFactory = func(context.Context, localconfig.Mirror, objectstore.Role) (*objectstore.Client, error) {
+				unavailable.ClientFactory = func(context.Context, localconfig.Mirror) (*objectstore.Client, error) {
 					return nil, errors.New("temporary unavailable reader")
 				}
 				if _, err := Verify(ctx, unavailable, 1, "HEAD"); err == nil {
@@ -501,7 +498,7 @@ func TestIntegrityIncidentMetadataRepairRestoresEligibilityWithoutRemovingBadAlt
 			if err != nil {
 				t.Fatal(err)
 			}
-			reader := testMirrorClient(t, ctx, h, objectstore.RoleReader)
+			reader := testMirrorClient(t, ctx, h)
 			representations, err := listManifestRepresentations(ctx, reader, snapshot, testHistoryGenesisFormat(t, history).RepositoryUUID)
 			_ = history.Close()
 			if err != nil || len(representations) != 1 {
