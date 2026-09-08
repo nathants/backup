@@ -224,7 +224,7 @@ The expanded contracts exercise the same ordinary credential for positive read/l
 
 Private evidence is `<private-contract-evidence>`, with retained recovery fixtures and probe coordinates alongside it. Independent AWS/Docker inventory confirms the run-owned IAM user, bucket, containers, volumes, and image tags are gone. Independent checksum HEAD confirms both final R2 probes remain unchanged, and native lock readback matches the original bucket-wide indefinite rule. The new R2 test bucket retains 39 objects (45,639 bytes) plus tiny incomplete multipart probes because its lock also rejects their abort; protection was never disabled for cleanup. No existing unrelated Cloudflare bucket was mutated. This accepts the new test deployment and reusable suite, not existing production namespaces or the separate first-backup release gates.
 
-### 12. Several safety tests pass for the wrong reason
+### 12. [done] Several safety tests pass for the wrong reason
 
 **Locations and reproduced problems:**
 
@@ -237,6 +237,12 @@ c. `internal/s3server/s3server_test.go:572-577`: the truncated-body request is p
 A related fuzzing weakness is static: `internal/pack/fuzz_test.go:14-36` has only empty/garbage ciphertext seeds and a zero secret. Random mutations will not cross the recipient/authentication barrier into authenticated framing and decompression. The separate canonical tar fuzz target is usefully seeded, but does not close this encrypted-reader gap.
 
 **Direction:** require each baseline to succeed, mutate exactly one property, and assert the relevant error/observable boundary. Add valid recipient/ciphertext seeds and a separate structured authenticated-input fuzz path where needed. Do not respond by weakening production checks or merely adding more negative cases that fail earlier.
+
+**Resolution:** test-only changes now require successful tar/encrypted baselines with the actual plaintext hash, then assert the specific framing, PAX, recipient, and trailing-ciphertext errors. Parser fixtures are otherwise valid, accept records exactly at their line/count bounds, and reject only the one-byte/one-record excess at the intended boundary. The direct server test has a successful incoming-request-shaped control, consumes the truncated body, requires `IncompleteBody` rather than generic HTTP 400, and retains the successful create retry proving no partial object was published; the wrong-body case explicitly requires `BadDigest`.
+
+Encrypted fuzzing now includes a valid seed and fixed public test-only recipient so saved ciphertext remains replayable. The new `FuzzAuthenticatedPackReader` mutates either tar bytes before compression or compressed bytes before real encryption, exercising deeper readers without bypassing authentication. Positive seed controls must actually deliver the expected plaintext member. The target is included in `make fuzz`; fixture construction reuses the actual test tar/encryption helpers rather than reimplementing the readers.
+
+**Validation:** strengthening assertions before correcting fixtures reproduced all four failures in `shell/993cc1e28f9a4cce61ac7dae9deca622/stdout` beneath the evidence directory above. Corrected targeted tests and all three affected packages pass; explicit encrypted/authenticated seed replays pass in `shell/10f2c28dbf21ade1482de06660492053/stdout`. Full `make check` passed on 2026-09-06, including mandatory linters, vet, coverage, and race tests. All ten `make fuzz` mutation campaigns passed with four workers. Final logs are `scratch/finding12-check.log` and `scratch/finding12-fuzz.log` beneath the evidence directory. Production code, runtime formats, dependencies, and security checks are unchanged; no new cloud deployment run was needed or claimed.
 
 ### 13. Server logs discard internal causes and report successful HTTP status as zero
 

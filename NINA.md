@@ -530,7 +530,7 @@ make fuzz                 # ten seconds per fuzz target
 make fuzz FUZZ_TIME=1m    # longer pre-release campaign
 ```
 
-`make check` fails closed if `staticcheck`, `ineffassign`, `errcheck`, `bodyclose`, or `nargs` is unavailable and runs every linter before tests. It is deterministic and requires no cloud account. Coverage and race runs each allow 30 minutes per Go test package, accommodating fsync-heavy state-machine tests on contended storage without disabling durability or changing assertions. Fuzz seed corpora run during ordinary tests; `make fuzz` performs mutation campaigns against actual canonical parsers, path/key grammars, local configuration, tar/pack readers, and SigV4 request parsing.
+`make check` fails closed if `staticcheck`, `ineffassign`, `errcheck`, `bodyclose`, or `nargs` is unavailable and runs every linter before tests. It is deterministic and requires no cloud account. Coverage and race runs each allow 30 minutes per Go test package, accommodating fsync-heavy state-machine tests on contended storage without disabling durability or changing assertions. Fuzz seed corpora run during ordinary tests; `make fuzz` performs mutation campaigns against actual canonical parsers, path/key grammars, local configuration, tar/pack readers, and SigV4 request parsing. Pack fuzzing includes a valid ciphertext seed with a fixed public test-only recipient for replay, plus authenticated-input mutations of tar or compressed bytes before real encryption. Positive seed controls must deliver the expected plaintext; authentication is never bypassed.
 
 The production server runs inside Docker while tests and the real backup client run outside it.
 

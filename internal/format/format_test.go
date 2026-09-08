@@ -1,8 +1,10 @@
 package format
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -312,16 +314,34 @@ func TestMirrorsAndManifestGolden(t *testing.T) {
 }
 
 func TestBoundsApplyBeforeLargeRecordsAreAccepted(t *testing.T) {
+	const row = "./a\tsymlink\ttarget:./x\t0\t-\t-\n"
 	limits := DefaultLimits()
-	limits.MaxLineBytes = 16
-	if _, err := ParseIndex(strings.NewReader(strings.Repeat("a", 17)+"\n"), limits); err == nil {
-		t.Fatal("accepted oversized line")
+	limits.MaxLineBytes = len(row) - 1 // The LF is not part of the record.
+	limits.MaxFieldBytes = limits.MaxLineBytes
+	if err := limits.validate(); err != nil {
+		t.Fatalf("invalid line-limit fixture: %v", err)
+	}
+	if entries, err := ParseIndex(strings.NewReader(row), limits); err != nil || len(entries) != 1 {
+		t.Fatalf("record at the line limit rejected: %v", err)
+	}
+	longer := strings.Replace(row, "./a\t", "./aa\t", 1)
+	if _, err := ParseIndex(strings.NewReader(longer), DefaultLimits()); err != nil {
+		t.Fatalf("oversized fixture is not otherwise valid: %v", err)
+	}
+	if _, err := ParseIndex(strings.NewReader(longer), limits); !errors.Is(err, bufio.ErrTooLong) {
+		t.Fatalf("expected line-length rejection, got %v", err)
 	}
 	limits = DefaultLimits()
 	limits.MaxRecords = 1
-	input := "./a\tsymlink\ttarget:./x\t0\t-\t-\n./b\tsymlink\ttarget:./x\t0\t-\t-\n"
-	if _, err := ParseIndex(strings.NewReader(input), limits); err == nil {
-		t.Fatal("accepted too many records")
+	if entries, err := ParseIndex(strings.NewReader(row), limits); err != nil || len(entries) != 1 {
+		t.Fatalf("record at the count limit rejected: %v", err)
+	}
+	input := row + strings.Replace(row, "./a\t", "./b\t", 1)
+	if entries, err := ParseIndex(strings.NewReader(input), DefaultLimits()); err != nil || len(entries) != 2 {
+		t.Fatalf("two-record fixture is not otherwise valid: %v", err)
+	}
+	if _, err := ParseIndex(strings.NewReader(input), limits); err == nil || err.Error() != "index.tsv: metadata exceeds 1 records" {
+		t.Fatalf("expected record-count rejection, got %v", err)
 	}
 }
 

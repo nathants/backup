@@ -203,19 +203,23 @@ func TestStreamingPackIdentityFailurePoisonsBuilder(t *testing.T) {
 }
 
 func TestReadArchiveRejectsNoncanonicalAndTrailingData(t *testing.T) {
-	name := strings.Repeat("a", 128)
+	digest := blake2b.Sum512([]byte("x"))
+	name := hex.EncodeToString(digest[:])
 	canonical, err := buildTestTar(name, []byte("x"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	expected := map[string]uint64{name: 1}
+	if err := ReadArchive(bytes.NewReader(canonical), expected, discardMember); err != nil {
+		t.Fatalf("canonical baseline rejected: %v", err)
+	}
 	for title, data := range map[string][]byte{
 		"trailing":      append(append([]byte(nil), canonical...), 0),
 		"truncated end": canonical[:len(canonical)-1024],
 	} {
 		t.Run(title, func(t *testing.T) {
-			if err := ReadArchive(bytes.NewReader(data), expected, discardMember); err == nil {
-				t.Fatal("invalid archive accepted")
+			if err := ReadArchive(bytes.NewReader(data), expected, discardMember); err == nil || err.Error() != "tar has noncanonical headers, end markers, or trailing data" {
+				t.Fatalf("expected canonical framing rejection, got %v", err)
 			}
 		})
 	}
@@ -223,8 +227,8 @@ func TestReadArchiveRejectsNoncanonicalAndTrailingData(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := ReadArchive(bytes.NewReader(withExtraPAX), expected, discardMember); err == nil {
-		t.Fatal("unexpected PAX record accepted")
+	if err := ReadArchive(bytes.NewReader(withExtraPAX), expected, discardMember); err == nil || err.Error() != "tar member "+name+" has unexpected PAX records" {
+		t.Fatalf("expected PAX-record rejection, got %v", err)
 	}
 }
 
@@ -276,7 +280,8 @@ func TestDecryptRejectsWrongRecipientAndTrailingCiphertext(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	name := strings.Repeat("a", 128)
+	plainDigest := blake2b.Sum512([]byte("x"))
+	name := hex.EncodeToString(plainDigest[:])
 	archive, err := buildTestTar(name, []byte("x"), nil)
 	if err != nil {
 		t.Fatal(err)
@@ -289,13 +294,16 @@ func TestDecryptRejectsWrongRecipientAndTrailingCiphertext(t *testing.T) {
 	digest := blake2b.Sum512(cipher)
 	hash := hex.EncodeToString(digest[:])
 	expected := map[string]uint64{name: 1}
-	if err := DecryptAndRead(bytes.NewReader(cipher), hash, uint64(len(cipher)), wrongSecret, expected, discardMember); err == nil {
-		t.Fatal("wrong recipient accepted")
+	if err := DecryptAndRead(bytes.NewReader(cipher), hash, uint64(len(cipher)), secretKey, expected, discardMember); err != nil {
+		t.Fatalf("valid encrypted baseline rejected: %v", err)
+	}
+	if err := DecryptAndRead(bytes.NewReader(cipher), hash, uint64(len(cipher)), wrongSecret, expected, discardMember); err == nil || err.Error() != "read tar header: no recipient matched secret key" {
+		t.Fatalf("expected recipient rejection, got %v", err)
 	}
 	trailing := append(append([]byte(nil), cipher...), 0)
 	trailingDigest := blake2b.Sum512(trailing)
-	if err := DecryptAndRead(bytes.NewReader(trailing), hex.EncodeToString(trailingDigest[:]), uint64(len(trailing)), secretKey, expected, discardMember); err == nil {
-		t.Fatal("trailing ciphertext accepted")
+	if err := DecryptAndRead(bytes.NewReader(trailing), hex.EncodeToString(trailingDigest[:]), uint64(len(trailing)), secretKey, expected, discardMember); err == nil || err.Error() != "ciphertext size disagrees with metadata or contains trailing bytes" {
+		t.Fatalf("expected trailing-ciphertext rejection, got %v", err)
 	}
 }
 

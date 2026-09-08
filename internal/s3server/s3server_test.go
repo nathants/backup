@@ -551,20 +551,33 @@ func TestWrongAndTruncatedBodiesNeverPublish(t *testing.T) {
 	payload := []byte("complete")
 	key := objectKey(payload, 3)
 
+	// A direct-handler positive control must use the incoming request-target
+	// shape, just like the truncated request below; net/http normally does this.
+	controlKey := objectKey(payload, 4)
+	control := h.putRequest(controlKey, payload)
+	control.URL.Scheme, control.URL.Host = "", ""
+	controlRecorder := httptest.NewRecorder()
+	h.server.ServeHTTP(controlRecorder, control)
+	if controlRecorder.Code != http.StatusOK {
+		t.Fatalf("direct-handler baseline rejected: status=%d body=%s", controlRecorder.Code, controlRecorder.Body.String())
+	}
+
 	wrong := h.putRequest(key, payload)
 	wrong.Body = io.NopCloser(strings.NewReader("corrupt!"))
 	response := h.do(wrong)
-	if response.StatusCode != http.StatusBadRequest {
-		t.Fatalf("wrong body status=%d body=%s", response.StatusCode, closeBody(t, response))
+	wrongResponse := closeBody(t, response)
+	if response.StatusCode != http.StatusBadRequest || !bytes.Contains(wrongResponse, []byte("<Code>BadDigest</Code>")) {
+		t.Fatalf("wrong body did not reach checksum validation: status=%d body=%s", response.StatusCode, wrongResponse)
 	}
-	closeBody(t, response)
 
 	truncated := h.putRequest(key, payload)
-	truncated.Body = io.NopCloser(bytes.NewReader(payload[:3]))
+	truncated.URL.Scheme, truncated.URL.Host = "", ""
+	shortBody := bytes.NewReader(payload[:3])
+	truncated.Body = io.NopCloser(shortBody)
 	recorder := httptest.NewRecorder()
 	h.server.ServeHTTP(recorder, truncated)
-	if recorder.Code != http.StatusBadRequest {
-		t.Fatalf("truncated body status=%d body=%s", recorder.Code, recorder.Body.Bytes())
+	if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), "<Code>IncompleteBody</Code>") || shortBody.Len() != 0 {
+		t.Fatalf("truncated body did not reach body validation: status=%d unread=%d body=%s", recorder.Code, shortBody.Len(), recorder.Body.Bytes())
 	}
 
 	response = h.do(h.putRequest(key, payload))

@@ -8,6 +8,7 @@ FUZZ_TARGETS := \
 	./internal/objectstore:FuzzObjectIdentityAndLogicalKeys \
 	./internal/pack:FuzzCanonicalTarReader \
 	./internal/pack:FuzzEncryptedPackReader \
+	./internal/pack:FuzzAuthenticatedPackReader \
 	./internal/s3server:FuzzRequestTargetGrammar \
 	./internal/s3server:FuzzCanonicalQuery
 FUZZ_TIME ?= 10s
