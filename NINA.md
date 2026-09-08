@@ -260,6 +260,18 @@ Candidate and local operational state live beneath a fixed private directory rec
 
 `backup init` is the genesis publication transaction, not merely local setup. It creates and validates the exact seven-file Git SHA-256 root commit, fast-forward-creates the primary branch, builds one encrypted full metadata bundle, and completes that full bundle on at least one configured mirror before reporting success. It records the exact genesis commit and mirror completion in durable resumable state and prints the commit ID. A push followed by interrupted mirror completion resumes; it never creates a second genesis. Later backup commits can therefore always publish incremental metadata edges, and a newly added mirror is seeded from the existing full bundle plus deltas by `sync`.
 
+**Accepted pre-genesis manual-recovery exception:** interruption after local `git init` but before configuring `origin` can leave `.backup` present while retry refuses the missing remote pin. At this exact point in a genuinely fresh attempt, only Git setup/configuration has been written: candidate metadata/UUID are still in memory, operational staging and the genesis transaction have not been created, no local or remote genesis exists from this attempt, and no backup objects have been uploaded. Trusted configuration, source files, and independently stored recovery keys are not disposable. Missing/mismatched-origin errors alone do not establish this window: damaged established repositories, wrong local configuration, or previously used remote namespaces require a different diagnosis.
+
+For this exception, the operator follows preservation-first manual recovery:
+
+1. Stop competing operations; confirm the intended root, branch, remote, and mirror namespaces against trusted configuration and deployment records.
+2. Preserve the entire `.backup`, including `.git`, hidden operational state, refs, reflogs, and objects, in private storage without dereferencing unexpected symlinks. Do not begin with deletion, reset, clean, or reinitialization.
+3. Inspect file types, all refs (including packed refs), loose/packed/unreachable objects, reflogs, canonical metadata, and staged transactions. Confirm positively that this is fresh unpublished Git setup residue. An unborn HEAD or absent transaction alone is insufficient. Unexpected content, links, or evidence of prior use means stop and investigate.
+4. Where prior use is possible, resolve remote history/namespace ambiguity with read-only inspection of the exact trusted primary branch and object mirrors. Authentication failures, timeouts, or unavailability do not prove emptiness. Existing history requires preserving/recovering its repository identity, not another genesis.
+5. Only after confirming the fresh pre-genesis case, quarantine the partial directory under a unique non-overwriting private name and retry `backup init` with the same trusted configuration and permanent recipient. Keep preserved/quarantined metadata outside the source tree, or explicitly exclude it before the next `add`.
+
+Do not blindly add `origin` and retry: the existing no-transaction/no-head init path removes the repository and starts over. Established or ambiguous repositories require preservation and targeted configuration repair or metadata recovery instead. Admin accepts manual intervention in this early setup window; no initialization redesign, relaxed remote-pin checks, or automatic cleanup of ambiguous repositories is authorized. Later durable genesis publication remains resumable under the transaction protocol above.
+
 `backup add`:
 
 - acquires the local repository lock and fetches/validates metadata base state;

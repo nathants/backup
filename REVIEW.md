@@ -144,7 +144,7 @@ After the local ledger is lost, writer-only commit correctly refuses to guess. H
 
 **Resolution and validation:** resolved as part of finding 3's approved fresh-audit policy. Successful current-tip `Verify` records exact per-mirror completeness even when the ledger was lost; successful `Sync` records both fully audited endpoints and retains its non-regression checks. Historical verification cannot clear a current quarantine. `TestIntegrityIncidentLedgerRebuildAndTransientFailures/single_mirror_rebuild` deletes the ledger, runs actual verification, and completes a changed-file backup. Full cloud-free and Docker/AWS gates passed as recorded under finding 3.
 
-### 8. Initialization is not resumable across its earliest Git-creation window
+### 8. [done] Initialization is not resumable across its earliest Git-creation window
 
 **Location:** `internal/repository/manage.go:71-90,96-112`; existing coverage at `internal/backup/backup_test.go:961`.
 
@@ -152,7 +152,11 @@ Git initialization and origin configuration are separate commands. A crash after
 
 **Reproduced:** `TestReviewInitAfterGitInitCrash` runs the same SHA-256 `git init` into `.backup`, then invokes actual `Init`: `metadata Git remote does not match its trusted pin`. The existing early-init test calls the entire `repository.Initialize`, so it misses this window.
 
-**Direction:** retain a resumable initialization intent before the first mutation, or stage and atomically publish a fully configured empty repository. Only repair an authenticated/recognizably task-owned partial initialization; do not weaken the remote-pin check for arbitrary existing repositories.
+**Accepted manual intervention (2026-09-05):** Admin chose the preservation-first procedure now documented beside the genesis protocol in `NINA.md`, rather than an initialization redesign. In the confirmed fresh window, `Init` has only computed candidate metadata/UUID in memory and created Git setup files; operational staging, a durable genesis transaction, local commit, primary publication, and mirror uploads all occur after `repository.Initialize` returns. No acknowledged backup or meaningful backup staging is lost from this attempt. Previously used remote namespaces or damaged established repositories can nevertheless present the same missing/mismatched-origin error and must not be treated as disposable.
+
+The procedure stops competing operations, preserves all metadata/state, inspects refs/objects/reflogs/candidates and trusted deployment history, resolves possible remote history read-only, and quarantines only positively identified unpublished setup residue before retrying. It explicitly rejects blind deletion and blind origin repair followed by `init`; the existing no-transaction/no-head branch can remove the directory. Remote-pin checks and later durable genesis resumability remain unchanged.
+
+`[done]` means **accepted manual intervention**, not automatic crash recovery. The code limitation remains and the earlier private-build/atomic-publication proposal is superseded. Validation for this documentation-only resolution was a current call-path review (`init.go:21-131`, `repository/manage.go:71-114`, `commit.go:191-299`) and inspection of the retained reproduction above; no new crash test, runtime change, or destructive recovery action was performed.
 
 ### 9. Symlink race handling both rejects legal filenames and leaks descriptors
 
