@@ -62,6 +62,9 @@ func TestTLSPrivateKeyMustBeRegularNoFollowAndPrivate(t *testing.T) {
 	if err := os.WriteFile(key, []byte("not a real key"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.Chmod(key, 0o644); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := readTLSFile(key, true); err == nil || !strings.Contains(err.Error(), "0600") {
 		t.Fatalf("world-readable key accepted: %v", err)
 	}

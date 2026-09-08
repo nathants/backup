@@ -1,0 +1,18 @@
+name: ${BACKUP_AWS_INFRASET}
+
+s3:
+  ${BACKUP_AWS_BUCKET}:
+    attr:
+      - acl=private
+      - versioning=true
+      - appendonly=true
+
+user:
+  ${BACKUP_AWS_WRITER_USER}:
+    allow:
+      - s3:PutObject arn:aws:s3:::${BACKUP_AWS_BUCKET}/*
+  ${BACKUP_AWS_READER_USER}:
+    allow:
+      - s3:GetObject arn:aws:s3:::${BACKUP_AWS_BUCKET}/*
+      - s3:GetObjectVersion arn:aws:s3:::${BACKUP_AWS_BUCKET}/*
+      - s3:ListBucket arn:aws:s3:::${BACKUP_AWS_BUCKET}

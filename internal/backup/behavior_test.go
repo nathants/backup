@@ -98,6 +98,9 @@ func TestSecretKeyFileIsPrivateBoundedAndNoFollow(t *testing.T) {
 		if err := os.WriteFile(path, []byte(keyText), 0o640); err != nil {
 			t.Fatal(err)
 		}
+		if err := os.Chmod(path, 0o640); err != nil {
+			t.Fatal(err)
+		}
 		t.Setenv("BACKUP_SECRET_KEY", "")
 		t.Setenv("BACKUP_SECRET_KEY_FILE", path)
 		if _, err := (&runtime{}).secretKey(); err == nil {

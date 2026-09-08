@@ -96,26 +96,99 @@ The server supports only signed fixed-payload create-only PUT, reader GET/HEAD, 
 ## Check
 
 ```sh
-make check
+make check                # cloud-free coverage, race detector, and vet
 make fuzz                 # ten seconds per parser/path/tar target
 make fuzz FUZZ_TIME=1m    # longer pre-release campaign
-make docker-test          # real non-root server containers and real client
 ```
 
-Docker integration tests require Docker and run the real server image as non-root while the test client runs outside the container. Fuzz seed corpora also run during ordinary `go test`; `make fuzz` performs mutation campaigns against the actual canonical parsers, path/key grammars, local configuration parser, tar reader, and SigV4 request-target/query parsing.
+`make check` is deterministic and cloud-free. It covers the local filesystem and in-process server paths but does not require Docker, AWS, or R2. Fuzz seed corpora run during ordinary `go test`; `make fuzz` performs mutation campaigns against the actual canonical parsers, path/key grammars, local configuration parser, tar reader, and SigV4 request-target/query parsing.
 
-Credential-gated cloud contracts use dedicated ordinary writer and reader credentials and retain immutable probes:
+## AWS infrastructure
+
+[`infra.yaml`](infra.yaml) declares one dedicated private, versioned, append-only AWS bucket and separate create-only writer and read/list-only auditor users. Libaws converges TLS-only access, default SSE-S3 `AES256`, blocked SSE-C, conditional object creation, and denied object/version deletion. Backup still explicitly requests and verifies `AES256` for every AWS object. Infrastructure ensure never creates credentials.
 
 ```sh
-# Set BACKUP_AWS_CONTRACT_{BUCKET,REGION,WRITER_ACCESS_KEY,
-# WRITER_SECRET_KEY,READER_ACCESS_KEY,READER_SECRET_KEY}; PREFIX is optional.
-make aws-contract
+export BACKUP_AWS_INFRASET=backup-production
+export BACKUP_AWS_BUCKET=globally-unique-backup-bucket
+export BACKUP_AWS_WRITER_USER=backup-production-writer
+export BACKUP_AWS_READER_USER=backup-production-reader
 
-# Set the analogous BACKUP_R2_CONTRACT_* variables plus ENDPOINT, ACCOUNT_ID,
-# and LOCK_AUDIT_TOKEN (a separate Workers R2 Storage Read bearer token) only
-# after an indefinite Cloudflare bucket-lock rule protects the entire test
-# prefix. JURISDICTION is optional: default, eu, or fedramp.
-make r2-contract
+libaws infra-ensure ./infra.yaml --preview
+libaws infra-ensure ./infra.yaml
+
+# Each command prints a secret only when it creates the user's sole key.
+libaws iam-ensure-user-api-key "$BACKUP_AWS_WRITER_USER"
+libaws iam-ensure-user-api-key "$BACKUP_AWS_READER_USER"
 ```
 
-The contracts deliberately attempt unconditional/copy/multipart overwrites, ordinary and version-specific delete and batch-delete, role escalation, wrong checksums, disallowed AWS encryption modes, and bucket-policy/public-access/encryption/lifecycle/immutability/versioning control-plane changes. The R2 contract reads the native Bucket Lock API, requires an enabled indefinite rule covering the exact test namespace, and proves both ordinary S3 credential values cannot reach that API. Use dedicated buckets or prefixes; successful probes are intentionally never deleted.
+Store those one-time secrets in the distinct trusted writer and reader profiles used by `.backup-config`. Removing this infrastructure is deliberately destructive: `libaws infra-rm ./infra.yaml` revokes both users and deletes every bucket object and version.
+
+## Integration
+
+`make integration` first runs the complete cloud-free `make check`, then runs one real-backend suite against the non-root Docker server and an ephemeral AWS deployment by default. It validates the Docker daemon and explicit AWS account guard, completes a bounded observable Docker build before creating AWS resources, instantiates unique infrastructure from the production `infra.yaml`, bootstraps distinct ordinary writer and reader keys, runs the integration package normally and under the race detector, and removes the users, every object version, and the bucket once on every exit. The test processes receive only the generated ordinary credentials, not the administrator credentials used for setup and teardown.
+
+```sh
+# Requires Docker, administrator AWS credentials, a region, and this guard.
+export LIBAWS_TEST_ACCOUNT=123456789012
+make integration
+# Set LIBAWS=/path/to/libaws when the reviewed binary is not on PATH.
+```
+
+The AWS run proves provisioning and enforcement but deliberately retains no production data. R2 joins the same suite only when explicitly enabled because its security boundary is Cloudflare Bucket Lock rather than libaws bucket-policy provisioning:
+
+```sh
+# Set BACKUP_R2_CONTRACT_{BUCKET,REGION,WRITER_ACCESS_KEY,
+# WRITER_SECRET_KEY,READER_ACCESS_KEY,READER_SECRET_KEY,ENDPOINT,ACCOUNT_ID,
+# LOCK_AUDIT_TOKEN}; PREFIX and JURISDICTION are optional. Run this only after
+# an indefinite Cloudflare bucket-lock rule protects the entire test prefix.
+BACKUP_R2_CONTRACT=1 make integration
+```
+
+The contracts deliberately attempt unconditional/copy/multipart overwrites, ordinary and version-specific delete and batch-delete, role escalation, wrong checksums, SSE-C, and bucket-policy/public-access/encryption/lifecycle/immutability/versioning control-plane changes. They also prove AWS applies default SSE-S3 when a request omits an encryption header. The R2 contract reads the native Bucket Lock API, requires an enabled indefinite rule covering the exact test namespace, and proves both ordinary S3 credential values cannot reach that API. R2 successful probes are intentionally never deleted.
+
+### Exact production AWS acceptance
+
+The disposable AWS deployment above validates `infra.yaml`, but it does not accept an already configured production bucket. Before storing the first production backup, run the AWS contract directly against that exact bucket with its distinct ordinary writer and reader credentials—never administrator credentials. The test uses fresh random object keys, but deliberately submits destructive and bucket-wide control-plane requests that must be denied; first inspect the deployed policy and run this before the bucket contains production data.
+
+```bash
+set -euo pipefail
+
+export BACKUP_AWS_CONTRACT=1
+export BACKUP_AWS_CONTRACT_BUCKET=globally-unique-production-bucket
+export BACKUP_AWS_CONTRACT_REGION=ap-northeast-1
+export BACKUP_AWS_CONTRACT_PREFIX='' # or the exact configured production prefix
+export BACKUP_AWS_CONTRACT_WRITER_ACCESS_KEY=...
+export BACKUP_AWS_CONTRACT_WRITER_SECRET_KEY=...
+export BACKUP_AWS_CONTRACT_READER_ACCESS_KEY=...
+export BACKUP_AWS_CONTRACT_READER_SECRET_KEY=...
+unset BACKUP_AWS_CONTRACT_WRITER_SESSION_TOKEN BACKUP_AWS_CONTRACT_READER_SESSION_TOKEN
+# Export the corresponding *_SESSION_TOKEN values after this when credentials are temporary.
+unset BACKUP_AWS_CONTRACT_ENDPOINT
+
+# Prevent fallback to ambient credentials, endpoint overrides, or custom CA roots.
+unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
+unset AWS_ACCESS_KEY AWS_SECRET_KEY AWS_SECURITY_TOKEN
+unset AWS_PROFILE AWS_DEFAULT_PROFILE AWS_REGION AWS_DEFAULT_REGION
+unset AWS_WEB_IDENTITY_TOKEN_FILE AWS_ROLE_ARN AWS_ROLE_SESSION_NAME
+unset AWS_CONTAINER_CREDENTIALS_FULL_URI AWS_CONTAINER_CREDENTIALS_RELATIVE_URI
+unset AWS_CONTAINER_AUTHORIZATION_TOKEN AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE
+while IFS= read -r -d '' entry; do
+  name=${entry%%=*}
+  case "$name" in AWS_ENDPOINT_URL | AWS_ENDPOINT_URL_*) unset "$name" ;; esac
+done < <(env -0)
+unset AWS_CA_BUNDLE SSL_CERT_FILE SSL_CERT_DIR
+export AWS_CONFIG_FILE=/dev/null AWS_SHARED_CREDENTIALS_FILE=/dev/null
+export AWS_EC2_METADATA_DISABLED=true AWS_IGNORE_CONFIGURED_ENDPOINT_URLS=true
+export AWS_USE_FIPS_ENDPOINT=false AWS_USE_DUALSTACK_ENDPOINT=false
+
+umask 077
+evidence_dir=${BACKUP_CONTRACT_EVIDENCE_DIR:-"$HOME/.config/backup/contracts"}
+mkdir -p -- "$evidence_dir"
+evidence="$evidence_dir/aws-production-$(date -u +%Y%m%dT%H%M%SZ).log"
+go test ./integration -run '^TestAWSCloudContract$' -count=1 -v 2>&1 | tee "$evidence"
+printf 'evidence: %s\n' "$evidence"
+```
+
+A passing run repeatedly checksum-audits the immutable probe after the denied attacks and prints its exact `s3://` URI, plus the default-encryption probe URI. The direct test does not remove either object. Preserve the private log and externally record the passing run and immutable-probe URI as production acceptance evidence.
+
+The Docker portion of `make integration` is the remote `backup-server` software contract: clients access the real production binary over verified TLS, and the suite restarts it against the same persistent volume. This accepts the backend implementation, not an already deployed instance. For that exact deployment, confirm its TLS endpoint and distinct ordinary writer/reader credentials, then restart it against the same data directory and repeat verification and restore; no duplicate destructive contract suite is required.

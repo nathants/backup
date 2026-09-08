@@ -15,6 +15,7 @@ import (
 
 	"backup/internal/format"
 	"backup/internal/s3server"
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"golang.org/x/crypto/blake2b"
 )
@@ -114,6 +115,128 @@ func TestClientAgainstProductionServerContract(t *testing.T) {
 	if err != nil || !bytes.Equal(got, manifest) {
 		t.Fatalf("manifest: %q %v", got, err)
 	}
+}
+
+type endpointRejectHTTPClient struct {
+	calls int
+}
+
+func (client *endpointRejectHTTPClient) Do(*http.Request) (*http.Response, error) {
+	client.calls++
+	return nil, context.Canceled
+}
+
+func TestPinnedEndpointRejectsAmbientSDKOverrides(t *testing.T) {
+	t.Setenv("AWS_CONFIG_FILE", "/dev/null")
+	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", "/dev/null")
+	newClient := func(mirror format.Mirror, httpClient *endpointRejectHTTPClient) (*Client, error) {
+		return New(context.Background(), Options{Mirror: mirror, Role: RoleReader, CredentialsProvider: credentials.NewStaticCredentialsProvider("reader", "reader-secret", ""), HTTPClient: httpClient})
+	}
+	assertOptions := func(t *testing.T, client *Client, endpoint string) {
+		t.Helper()
+		options := client.client.Options()
+		if endpoint == "-" && options.BaseEndpoint != nil {
+			t.Fatalf("ambient endpoint accepted: %q", *options.BaseEndpoint)
+		}
+		if endpoint != "-" && (options.BaseEndpoint == nil || *options.BaseEndpoint != endpoint) {
+			t.Fatalf("base endpoint = %v, want %q", options.BaseEndpoint, endpoint)
+		}
+		if options.EndpointOptions.UseFIPSEndpoint != aws.FIPSEndpointStateDisabled {
+			t.Fatalf("ambient FIPS mode accepted: %v", options.EndpointOptions.UseFIPSEndpoint)
+		}
+		if options.EndpointOptions.UseDualStackEndpoint != aws.DualStackEndpointStateDisabled {
+			t.Fatalf("ambient dual-stack mode accepted: %v", options.EndpointOptions.UseDualStackEndpoint)
+		}
+	}
+	assertRejected := func(t *testing.T, mirror format.Mirror) {
+		t.Helper()
+		httpClient := &endpointRejectHTTPClient{}
+		client, err := newClient(mirror, httpClient)
+		if err == nil {
+			t.Fatalf("ambient AWS SDK endpoint override accepted: %#v", client)
+		}
+		if !strings.Contains(err.Error(), "AWS SDK endpoint overrides are not allowed") {
+			t.Fatalf("wrong rejection: %v", err)
+		}
+		if httpClient.calls != 0 {
+			t.Fatalf("made %d HTTP requests before rejecting endpoint override", httpClient.calls)
+		}
+	}
+	awsMirror := format.Mirror{Name: "aws", Kind: format.MirrorAWSS3, S3URL: "s3://backup-test/repository", Endpoint: "-", Region: "us-east-1"}
+	t.Run("global environment endpoint", func(t *testing.T) {
+		t.Setenv("AWS_ENDPOINT_URL", "https://ambient.example.invalid")
+		assertRejected(t, awsMirror)
+	})
+	t.Run("service environment endpoint", func(t *testing.T) {
+		t.Setenv("AWS_ENDPOINT_URL_STS", "https://ambient.example.invalid")
+		assertRejected(t, awsMirror)
+	})
+	t.Run("shared config endpoint", func(t *testing.T) {
+		config := filepath.Join(t.TempDir(), "config")
+		if err := os.WriteFile(config, []byte("[default]\nregion = us-east-1\nendpoint_url = https://shared.example.invalid\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("AWS_CONFIG_FILE", config)
+		assertRejected(t, awsMirror)
+	})
+	t.Run("shared config service endpoints", func(t *testing.T) {
+		config := filepath.Join(t.TempDir(), "config")
+		if err := os.WriteFile(config, []byte("[default]\nregion = us-east-1\nservices = local\n[services local]\nsts =\n  endpoint_url = https://shared.example.invalid\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("AWS_CONFIG_FILE", config)
+		assertRejected(t, awsMirror)
+	})
+	t.Run("role profile rejected before credential HTTP", func(t *testing.T) {
+		config := filepath.Join(t.TempDir(), "config")
+		contents := "[profile role]\nregion = us-east-1\nrole_arn = arn:aws:iam::123456789012:role/test\nsource_profile = source\nendpoint_url = https://shared.example.invalid\n[profile source]\naws_access_key_id = source\naws_secret_access_key = source-secret\n"
+		if err := os.WriteFile(config, []byte(contents), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("AWS_CONFIG_FILE", config)
+		httpClient := &endpointRejectHTTPClient{}
+		client, err := New(context.Background(), Options{Mirror: awsMirror, Role: RoleReader, Profile: "role", HTTPClient: httpClient})
+		if err == nil {
+			t.Fatalf("role profile endpoint override accepted: %#v", client)
+		}
+		if !strings.Contains(err.Error(), "AWS SDK endpoint overrides are not allowed") {
+			t.Fatalf("wrong rejection: %v", err)
+		}
+		if httpClient.calls != 0 {
+			t.Fatalf("made %d credential HTTP requests before rejecting endpoint override", httpClient.calls)
+		}
+	})
+	t.Run("environment endpoint modes are forced off", func(t *testing.T) {
+		t.Setenv("AWS_USE_FIPS_ENDPOINT", "true")
+		t.Setenv("AWS_USE_DUALSTACK_ENDPOINT", "true")
+		client, err := newClient(awsMirror, &endpointRejectHTTPClient{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertOptions(t, client, "-")
+	})
+	t.Run("shared config endpoint modes are forced off", func(t *testing.T) {
+		config := filepath.Join(t.TempDir(), "config")
+		if err := os.WriteFile(config, []byte("[default]\nregion = us-east-1\nuse_fips_endpoint = true\nuse_dualstack_endpoint = true\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("AWS_CONFIG_FILE", config)
+		client, err := newClient(awsMirror, &endpointRejectHTTPClient{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertOptions(t, client, "-")
+	})
+	t.Run("custom endpoint", func(t *testing.T) {
+		t.Setenv("AWS_USE_FIPS_ENDPOINT", "true")
+		t.Setenv("AWS_USE_DUALSTACK_ENDPOINT", "true")
+		mirror := format.Mirror{Name: "server", Kind: format.MirrorBackupServer, S3URL: "s3://backup-test/repository", Endpoint: "https://pinned.example.test", Region: "us-east-1"}
+		client, err := newClient(mirror, &endpointRejectHTTPClient{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertOptions(t, client, mirror.Endpoint)
+	})
 }
 
 func TestTrustedHTTPClientBoundsHeaderAndBodyInactivity(t *testing.T) {

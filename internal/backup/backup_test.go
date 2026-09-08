@@ -226,6 +226,9 @@ func TestRestoreVerifiesBeforePublicationAndPreservesMetadata(t *testing.T) {
 	if err := os.WriteFile(filePath, []byte("payload"), 0o640); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.Chmod(filePath, 0o640); err != nil {
+		t.Fatal(err)
+	}
 	mtime := int64(1_700_000_000_123_456_789)
 	stamp := time.Unix(0, mtime)
 	if err := os.Chtimes(filePath, stamp, stamp); err != nil {
@@ -1168,7 +1171,7 @@ func TestDeterministicMirrorUnavailabilityRetainsImmutableIdentities(t *testing.
 			}
 			return originalFactory(ctx, mirror, role)
 		}
-		if _, err := Commit(ctx, options); err == nil || !strings.Contains(err.Error(), "no individual mirror has a complete metadata chain") {
+		if _, err := Commit(ctx, options); err == nil || !strings.Contains(err.Error(), "no individual mirror has a complete metadata chain") || !strings.Contains(err.Error(), "mirror is deterministically unavailable") {
 			t.Fatalf("deterministic metadata unavailability was misclassified: %v", err)
 		}
 		first := loadTestTransaction(t, harness.options)
@@ -1176,7 +1179,7 @@ func TestDeterministicMirrorUnavailabilityRetainsImmutableIdentities(t *testing.
 			t.Fatalf("expected resumable post-push metadata staging, got %#v", first)
 		}
 		partID, manifestID := first.Metadata.Manifest.Parts[0].ObjectID, first.Metadata.ManifestObjectID
-		if _, err := Commit(ctx, options); err == nil || !strings.Contains(err.Error(), "no individual mirror has a complete metadata chain") {
+		if _, err := Commit(ctx, options); err == nil || !strings.Contains(err.Error(), "no individual mirror has a complete metadata chain") || !strings.Contains(err.Error(), "mirror is deterministically unavailable") {
 			t.Fatalf("repeated deterministic metadata unavailability was misclassified: %v", err)
 		}
 		second := loadTestTransaction(t, harness.options)
@@ -1912,6 +1915,9 @@ func TestOperationalStateDirectorySymlinkIsRejected(t *testing.T) {
 	}
 	target := filepath.Join(t.TempDir(), "target")
 	if err := os.Mkdir(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(target, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Symlink(target, state); err != nil {

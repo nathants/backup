@@ -682,6 +682,9 @@ func TestDataRootSymlinkIsRejected(t *testing.T) {
 	if err := os.Mkdir(target, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.Chmod(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	link := filepath.Join(parent, "root")
 	if err := os.Symlink(target, link); err != nil {
 		t.Fatal(err)

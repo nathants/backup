@@ -29,32 +29,63 @@ import (
 )
 
 const (
-	dockerImage       = "backup-test:rewrite"
-	dockerClientImage = "backup-test:integration-client"
-	testBucket        = "backup-test"
-	testRegion        = "us-east-1"
-	writerAccess      = "writer-access"
-	writerSecret      = "writer-secret"
-	readerAccess      = "reader-access"
-	readerSecret      = "reader-secret"
+	defaultDockerImage       = "backup-test:rewrite"
+	defaultDockerClientImage = "backup-test:integration-client"
+	dockerRunLabelKey        = "backup.integration.run"
+	testBucket               = "backup-test"
+	testRegion               = "us-east-1"
+	writerAccess             = "writer-access"
+	writerSecret             = "writer-secret"
+	readerAccess             = "reader-access"
+	readerSecret             = "reader-secret"
 )
 
 var (
+	dockerImage       = environmentOrDefault("BACKUP_DOCKER_SERVER_IMAGE", defaultDockerImage)
+	dockerClientImage = environmentOrDefault("BACKUP_DOCKER_CLIENT_IMAGE", defaultDockerClientImage)
+	dockerRunID       = environmentOrDefault("BACKUP_DOCKER_RUN_ID", fmt.Sprintf("direct-%d", os.Getpid()))
+	dockerRunLabel    = dockerRunLabelKey + "=" + dockerRunID
 	dockerBuildOnce   sync.Once
 	dockerBuildOutput []byte
 	dockerBuildErr    error
 )
 
+func environmentOrDefault(name, fallback string) string {
+	if value := os.Getenv(name); value != "" {
+		return value
+	}
+	return fallback
+}
+
+func dockerResourceName(prefix string) string {
+	return fmt.Sprintf("%s-%s-%d", prefix, dockerRunID, time.Now().UnixNano())
+}
+
 func ensureDockerImages(t *testing.T, repoRoot string) {
 	t.Helper()
 	dockerBuildOnce.Do(func() {
+		if os.Getenv("BACKUP_DOCKER_IMAGES_READY") == "1" {
+			for _, image := range []string{dockerImage, dockerClientImage} {
+				output, err := exec.Command("docker", "image", "inspect", image).CombinedOutput()
+				if err != nil {
+					dockerBuildOutput = append(dockerBuildOutput, output...)
+					dockerBuildErr = fmt.Errorf("inspect prebuilt Docker image %s: %w", image, err)
+					return
+				}
+			}
+			return
+		}
 		for _, arguments := range [][]string{
-			{"build", "-t", dockerImage, repoRoot},
-			{"build", "--target", "integration-client", "-t", dockerClientImage, repoRoot},
+			{"build", "--progress=plain", "-t", dockerImage, repoRoot},
+			{"build", "--progress=plain", "--target", "integration-client", "-t", dockerClientImage, repoRoot},
 		} {
 			command := exec.Command("docker", arguments...)
-			output, err := command.CombinedOutput()
-			dockerBuildOutput = append(dockerBuildOutput, output...)
+			var output bytes.Buffer
+			stream := io.MultiWriter(&output, os.Stderr)
+			command.Stdout = stream
+			command.Stderr = stream
+			err := command.Run()
+			dockerBuildOutput = append(dockerBuildOutput, output.Bytes()...)
 			if err != nil {
 				dockerBuildErr = fmt.Errorf("docker %v: %w", arguments, err)
 				return
@@ -448,8 +479,8 @@ func TestDockerWholeRootClientContainerAgainstSeparateServer(t *testing.T) {
 	writeFile(t, caPath, ca, 0o644)
 	config := fmt.Sprintf("git-remote\t/metadata.git\nbranch\tmain\nmirror\tlocal\tbackup-server\ts3://%s\thttps://localhost:%s\t%s\twriter\treader\t/test-config/ca.crt\n", testBucket, server.port, testRegion)
 	writeFile(t, filepath.Join(configDirectory, "backup-config"), []byte(config), 0o600)
-	stateVolume := "backup-client-state-" + fmt.Sprint(time.Now().UnixNano())
-	run(t, "", "docker", "volume", "create", stateVolume)
+	stateVolume := dockerResourceName("backup-client-state")
+	run(t, "", "docker", "volume", "create", "--label", dockerRunLabel, stateVolume)
 	t.Cleanup(func() { _, _ = exec.Command("docker", "volume", "rm", "-f", stateVolume).CombinedOutput() })
 	restoreRoot := filepath.Join(workspace, "restore")
 	if err := os.Mkdir(restoreRoot, 0o700); err != nil {
@@ -463,7 +494,7 @@ func TestDockerWholeRootClientContainerAgainstSeparateServer(t *testing.T) {
 	runClient := func(arguments ...string) string {
 		t.Helper()
 		dockerArguments := []string{
-			"run", "--rm", "--network", "host",
+			"run", "--rm", "--label", dockerRunLabel, "--network", "host",
 			"-v", stateVolume + ":/.backup",
 			"-v", remote + ":/metadata.git",
 			"-v", configDirectory + ":/test-config:ro",
@@ -489,7 +520,7 @@ func TestDockerWholeRootClientContainerAgainstSeparateServer(t *testing.T) {
 		t.Fatalf("unexpected whole-root init output:\n%s", initOutput)
 	}
 	ignore := `printf '%s\n' '^\./(\.dockerenv|etc|go|metadata\.git|out|restore|src|test-config|usr|var)(/|$)' > /.backup/ignore && chmod 0644 /.backup/ignore`
-	run(t, "", "docker", "run", "--rm", "-v", stateVolume+":/.backup", "--entrypoint", "/bin/sh", dockerClientImage, "-c", ignore)
+	run(t, "", "docker", "run", "--rm", "--label", dockerRunLabel, "-v", stateVolume+":/.backup", "--entrypoint", "/bin/sh", dockerClientImage, "-c", ignore)
 	addOutput := runClient(withCommon("add")...)
 	if !strings.Contains(addOutput, "entries\t") || !strings.Contains(runClient(withCommon("diff")...), "./fixture/root-only\tfile\t") {
 		t.Fatalf("whole-root fixture was not staged:\n%s", addOutput)
@@ -525,6 +556,9 @@ func newDockerHarness(t *testing.T) *dockerHarness {
 	if err := os.Mkdir(certDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.Chmod(certDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	configPath := filepath.Join(certDir, "openssl.cnf")
 	config := `[req]
 distinguished_name=dn
@@ -547,13 +581,20 @@ subjectAltName=DNS:localhost,DNS:host.docker.internal,IP:127.0.0.1
 	run(t, "", "openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "2", "-config", configPath, "-keyout", filepath.Join(certDir, "ca.key"), "-out", filepath.Join(certDir, "ca.crt"))
 	run(t, "", "openssl", "req", "-newkey", "rsa:2048", "-nodes", "-subj", "/CN=localhost", "-keyout", filepath.Join(certDir, "server.key"), "-out", filepath.Join(certDir, "server.csr"))
 	run(t, "", "openssl", "x509", "-req", "-days", "2", "-in", filepath.Join(certDir, "server.csr"), "-CA", filepath.Join(certDir, "ca.crt"), "-CAkey", filepath.Join(certDir, "ca.key"), "-CAcreateserial", "-extfile", configPath, "-extensions", "server", "-out", filepath.Join(certDir, "server.crt"))
-	if err := os.Chmod(filepath.Join(certDir, "server.key"), 0o600); err != nil {
-		t.Fatal(err)
+	for _, name := range []string{"ca.crt", "server.crt"} {
+		if err := os.Chmod(filepath.Join(certDir, name), 0o644); err != nil {
+			t.Fatal(err)
+		}
 	}
-	volume := "backup-test-" + fmt.Sprint(time.Now().UnixNano())
-	run(t, "", "docker", "run", "--rm", "--user", "0", "--entrypoint", "/bin/sh", "-v", certDir+":/tls", dockerImage, "-c", "chown 65532:65532 /tls/server.key && chmod 0600 /tls/server.key")
-	run(t, "", "docker", "volume", "create", volume)
-	run(t, "", "docker", "run", "--rm", "--user", "0", "--entrypoint", "/bin/chown", "-v", volume+":/data", dockerImage, "65532:65532", "/data")
+	for _, name := range []string{"ca.key", "server.key"} {
+		if err := os.Chmod(filepath.Join(certDir, name), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	volume := dockerResourceName("backup-test")
+	run(t, "", "docker", "run", "--rm", "--label", dockerRunLabel, "--user", "0", "--entrypoint", "/bin/sh", "-v", certDir+":/tls", dockerImage, "-c", "chown 65532:65532 /tls/server.key && chmod 0600 /tls/server.key")
+	run(t, "", "docker", "volume", "create", "--label", dockerRunLabel, volume)
+	run(t, "", "docker", "run", "--rm", "--label", dockerRunLabel, "--user", "0", "--entrypoint", "/bin/chown", "-v", volume+":/data", dockerImage, "65532:65532", "/data")
 	client := &http.Client{Timeout: 10 * time.Second}
 	relay := newTCPRelay(t)
 	h := &dockerHarness{t: t, volume: volume, certDir: certDir, port: relay.port(t), client: client, relay: relay}
@@ -573,8 +614,8 @@ func (h *dockerHarness) start() {
 		return
 	}
 
-	name := "backup-test-" + fmt.Sprint(time.Now().UnixNano())
-	arguments := []string{"run", "-d", "--name", name, "-p", "127.0.0.1::8443"}
+	name := dockerResourceName("backup-test")
+	arguments := []string{"run", "-d", "--name", name, "--label", dockerRunLabel, "-p", "127.0.0.1::8443"}
 	if len(h.dataMount) != 0 {
 		arguments = append(arguments, h.dataMount...)
 	} else {

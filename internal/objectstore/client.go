@@ -81,6 +81,32 @@ type CreateResult struct {
 	Err         error
 }
 
+func rejectAWSEndpointEnvironment() error {
+	for _, entry := range os.Environ() {
+		name, value, found := strings.Cut(entry, "=")
+		if found && value != "" && (name == "AWS_ENDPOINT_URL" || strings.HasPrefix(name, "AWS_ENDPOINT_URL_")) {
+			return fmt.Errorf("AWS SDK endpoint overrides are not allowed")
+		}
+	}
+	return nil
+}
+
+func rejectAWSSharedConfigEndpoints(sources []interface{}) error {
+	for _, source := range sources {
+		var shared *awsconfig.SharedConfig
+		switch value := source.(type) {
+		case awsconfig.SharedConfig:
+			shared = &value
+		case *awsconfig.SharedConfig:
+			shared = value
+		}
+		if shared != nil && (shared.BaseEndpoint != "" || shared.ServicesSectionName != "" || len(shared.Services.ServiceValues) != 0) {
+			return fmt.Errorf("AWS SDK endpoint overrides are not allowed")
+		}
+	}
+	return nil
+}
+
 func New(ctx context.Context, options Options) (*Client, error) {
 	if options.Role != RoleWriter && options.Role != RoleReader {
 		return nil, fmt.Errorf("invalid mirror role %q", options.Role)
@@ -93,7 +119,14 @@ func New(ctx context.Context, options Options) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	loadOptions := []func(*awsconfig.LoadOptions) error{awsconfig.WithRegion(options.Mirror.Region)}
+	if err := rejectAWSEndpointEnvironment(); err != nil {
+		return nil, err
+	}
+	loadOptions := []func(*awsconfig.LoadOptions) error{
+		awsconfig.WithRegion(options.Mirror.Region),
+		awsconfig.WithUseFIPSEndpoint(aws.FIPSEndpointStateDisabled),
+		awsconfig.WithUseDualStackEndpoint(aws.DualStackEndpointStateDisabled),
+	}
 	if options.Profile != "" && options.Profile != "-" {
 		loadOptions = append(loadOptions, awsconfig.WithSharedConfigProfile(options.Profile))
 	}
@@ -112,12 +145,21 @@ func New(ctx context.Context, options Options) (*Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("load AWS configuration: %w", err)
 	}
+	if err := rejectAWSSharedConfigEndpoints(awsConfig.ConfigSources); err != nil {
+		return nil, err
+	}
+	awsConfig.BaseEndpoint = nil
 	awsConfig.RequestChecksumCalculation = aws.RequestChecksumCalculationWhenRequired
 	awsConfig.ResponseChecksumValidation = aws.ResponseChecksumValidationWhenRequired
 	client := s3.NewFromConfig(awsConfig, func(s3Options *s3.Options) {
-		if options.Mirror.Endpoint != "-" {
+		if options.Mirror.Endpoint == "-" {
+			s3Options.BaseEndpoint = nil
+		} else {
 			s3Options.BaseEndpoint = aws.String(options.Mirror.Endpoint)
 		}
+		s3Options.EndpointOptions.UseFIPSEndpoint = aws.FIPSEndpointStateDisabled
+		s3Options.EndpointOptions.UseDualStackEndpoint = aws.DualStackEndpointStateDisabled
+		s3Options.UseDualstack = false
 		s3Options.UsePathStyle = options.Mirror.Kind != format.MirrorAWSS3
 		s3Options.APIOptions = append(s3Options.APIOptions, forceSignedPayload)
 	})

@@ -24,7 +24,6 @@ import (
 	"backup/internal/format"
 	"backup/internal/objectstore"
 	"github.com/aws/aws-sdk-go-v2/aws"
-	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
@@ -85,6 +84,57 @@ func contractConfigFromEnvironment(t *testing.T, label, kind string) cloudContra
 	return config
 }
 
+func createAndAuditCloudProbe(ctx context.Context, kind string, writer, reader *objectstore.Client, logicalKey, staged string, expected objectstore.Object) error {
+	if kind != format.MirrorAWSS3 {
+		created := writer.PutFile(ctx, logicalKey, staged, expected)
+		if created.Disposition != objectstore.CreateAcknowledged {
+			return fmt.Errorf("production client could not create immutable probe: %w", created.Err)
+		}
+		if err := reader.Audit(ctx, logicalKey, expected); err != nil {
+			return fmt.Errorf("checksum HEAD did not validate the probe: %w", err)
+		}
+		return nil
+	}
+
+	readinessCtx, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+	writeConfirmed := false
+	var lastErr error
+	for {
+		auditCandidate := writeConfirmed
+		if !writeConfirmed {
+			created := writer.PutFile(readinessCtx, logicalKey, staged, expected)
+			switch created.Disposition {
+			case objectstore.CreateAcknowledged, objectstore.CreateConflict:
+				writeConfirmed = true
+				auditCandidate = true
+			case objectstore.CreateAmbiguous:
+				auditCandidate = true
+				lastErr = created.Err
+			default:
+				lastErr = created.Err
+			}
+		}
+		if auditCandidate {
+			if err := reader.Audit(readinessCtx, logicalKey, expected); err == nil {
+				return nil
+			} else {
+				lastErr = err
+			}
+		}
+		timer := time.NewTimer(time.Second)
+		select {
+		case <-readinessCtx.Done():
+			timer.Stop()
+			if lastErr == nil {
+				lastErr = readinessCtx.Err()
+			}
+			return fmt.Errorf("AWS writer/reader policies did not become ready: %w", lastErr)
+		case <-timer.C:
+		}
+	}
+}
+
 func runCloudContract(t *testing.T, config cloudContractConfig) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
@@ -106,8 +156,8 @@ func runCloudContract(t *testing.T, config cloudContractConfig) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	writerS3 := directCloudClient(t, ctx, config, config.writer)
-	readerS3 := directCloudClient(t, ctx, config, config.reader)
+	writerS3 := directCloudClient(config, config.writer)
+	readerS3 := directCloudClient(config, config.reader)
 
 	payload := bytes.Repeat([]byte("immutable-backup-contract\n"), 128)
 	expected := objectstore.HashBytes(payload)
@@ -117,14 +167,10 @@ func runCloudContract(t *testing.T, config cloudContractConfig) {
 	if err := os.WriteFile(staged, payload, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	created := writer.PutFile(ctx, logicalKey, staged, expected)
-	if created.Disposition != objectstore.CreateAcknowledged {
-		t.Fatalf("production client could not create immutable probe: %v", created.Err)
+	if err := createAndAuditCloudProbe(ctx, config.kind, writer, reader, logicalKey, staged, expected); err != nil {
+		t.Fatal(err)
 	}
-	t.Logf("retained immutable probe: s3://%s/%s", config.bucket, wireKey)
-	if err := reader.Audit(ctx, logicalKey, expected); err != nil {
-		t.Fatalf("checksum HEAD did not validate the probe: %v", err)
-	}
+	t.Logf("immutable probe: s3://%s/%s", config.bucket, wireKey)
 	if config.kind == format.MirrorCloudflareR2 {
 		runR2LockProtectionContract(t, ctx, config, reader, logicalKey, expected, contractPrefix)
 	}
@@ -225,34 +271,40 @@ func runCloudContract(t *testing.T, config cloudContractConfig) {
 
 func runAWSCreateProtectionContract(t *testing.T, ctx context.Context, config cloudContractConfig, writer, reader *s3.Client) {
 	t.Helper()
-	tests := []struct {
-		name   string
-		mutate func(*s3.PutObjectInput)
-	}{
-		{"missing-SSE", func(input *s3.PutObjectInput) { input.ServerSideEncryption = "" }},
-		{"SSE-KMS", func(input *s3.PutObjectInput) { input.ServerSideEncryption = types.ServerSideEncryptionAwsKms }},
-		{"SSE-C", func(input *s3.PutObjectInput) {
-			input.ServerSideEncryption = ""
-			key := bytes.Repeat([]byte{0x42}, 32)
-			digest := md5.Sum(key)
-			input.SSECustomerAlgorithm = aws.String("AES256")
-			input.SSECustomerKey = aws.String(base64.StdEncoding.EncodeToString(key))
-			input.SSECustomerKeyMD5 = aws.String(base64.StdEncoding.EncodeToString(digest[:]))
-		}},
+	payload := []byte("default SSE-S3 upload")
+	object := objectstore.HashBytes(payload)
+	key := strings.Trim(config.prefix, "/") + "/contract-default-encryption-" + randomContractHex(t, 8) + "/objects/" + object.BLAKE2b + "/" + randomContractHex(t, 16)
+	key = strings.TrimPrefix(key, "/")
+	input := contractPutInput(config, key, payload, true)
+	input.ServerSideEncryption = ""
+	if _, err := writer.PutObject(ctx, input); err != nil {
+		t.Fatalf("AWS default-encryption create failed: %v", err)
 	}
-	for _, test := range tests {
-		t.Run("AWS rejects "+test.name, func(t *testing.T) {
-			payload := []byte("rejected " + test.name + " upload")
-			object := objectstore.HashBytes(payload)
-			key := strings.Trim(config.prefix, "/") + "/contract-encryption-" + randomContractHex(t, 8) + "/objects/" + object.BLAKE2b + "/" + randomContractHex(t, 16)
-			key = strings.TrimPrefix(key, "/")
-			input := contractPutInput(config, key, payload, true)
-			test.mutate(input)
-			_, err := writer.PutObject(ctx, input)
-			requireCloudHTTPStatus(t, test.name, err, http.StatusForbidden)
-			assertCloudKeyAbsent(t, ctx, reader, config.bucket, key, test.name)
-		})
+	head, err := reader.HeadObject(ctx, &s3.HeadObjectInput{Bucket: &config.bucket, Key: &key})
+	if err != nil {
+		t.Fatalf("inspect AWS default-encryption object: %v", err)
 	}
+	if head.ServerSideEncryption != types.ServerSideEncryptionAes256 {
+		t.Fatalf("AWS default encryption=%q, want AES256", head.ServerSideEncryption)
+	}
+	t.Logf("default-encrypted probe: s3://%s/%s", config.bucket, key)
+
+	t.Run("AWS rejects SSE-C", func(t *testing.T) {
+		payload := []byte("rejected SSE-C upload")
+		object := objectstore.HashBytes(payload)
+		key := strings.Trim(config.prefix, "/") + "/contract-encryption-" + randomContractHex(t, 8) + "/objects/" + object.BLAKE2b + "/" + randomContractHex(t, 16)
+		key = strings.TrimPrefix(key, "/")
+		input := contractPutInput(config, key, payload, true)
+		input.ServerSideEncryption = ""
+		customerKey := bytes.Repeat([]byte{0x42}, 32)
+		digest := md5.Sum(customerKey)
+		input.SSECustomerAlgorithm = aws.String("AES256")
+		input.SSECustomerKey = aws.String(base64.StdEncoding.EncodeToString(customerKey))
+		input.SSECustomerKeyMD5 = aws.String(base64.StdEncoding.EncodeToString(digest[:]))
+		_, err := writer.PutObject(ctx, input)
+		requireCloudHTTPStatus(t, "SSE-C", err, http.StatusForbidden)
+		assertCloudKeyAbsent(t, ctx, reader, config.bucket, key, "SSE-C")
+	})
 }
 
 func runAWSControlPlaneProtectionContract(t *testing.T, ctx context.Context, config cloudContractConfig, writer *s3.Client, reader *objectstore.Client, probeKey string, expected objectstore.Object) {
@@ -413,22 +465,23 @@ func doR2LockRequest(ctx context.Context, method, endpoint, token, jurisdiction 
 	return response.StatusCode, data, nil
 }
 
-func directCloudClient(t *testing.T, ctx context.Context, config cloudContractConfig, credential aws.Credentials) *s3.Client {
-	t.Helper()
-	loaded, err := awsconfig.LoadDefaultConfig(ctx,
-		awsconfig.WithRegion(config.region),
-		awsconfig.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(credential.AccessKeyID, credential.SecretAccessKey, credential.SessionToken)),
-		awsconfig.WithHTTPClient(contractHTTPClient()),
-	)
-	if err != nil {
-		t.Fatal(err)
+func directCloudClient(config cloudContractConfig, credential aws.Credentials) *s3.Client {
+	loaded := aws.Config{
+		Region:      config.region,
+		Credentials: aws.NewCredentialsCache(credentials.NewStaticCredentialsProvider(credential.AccessKeyID, credential.SecretAccessKey, credential.SessionToken)),
+		HTTPClient:  contractHTTPClient(),
 	}
 	loaded.RequestChecksumCalculation = aws.RequestChecksumCalculationWhenRequired
 	loaded.ResponseChecksumValidation = aws.ResponseChecksumValidationWhenRequired
 	return s3.NewFromConfig(loaded, func(options *s3.Options) {
-		if config.endpoint != "" {
+		if config.endpoint == "" {
+			options.BaseEndpoint = nil
+		} else {
 			options.BaseEndpoint = &config.endpoint
 		}
+		options.EndpointOptions.UseFIPSEndpoint = aws.FIPSEndpointStateDisabled
+		options.EndpointOptions.UseDualStackEndpoint = aws.DualStackEndpointStateDisabled
+		options.UseDualstack = false
 		options.UsePathStyle = config.kind != format.MirrorAWSS3
 	})
 }

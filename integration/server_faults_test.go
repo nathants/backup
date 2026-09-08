@@ -239,7 +239,7 @@ func TestDockerServerBackendSymlinkAndProcessKillNeverPublish(t *testing.T) {
 
 	t.Run("backend symlink", func(t *testing.T) {
 		h := newDockerHarness(t)
-		run(t, "", "docker", "run", "--rm", "--user", "0", "--entrypoint", "/bin/sh", "-v", h.volume+":/data", dockerImage, "-c", "mkdir -p /data/escape && ln -s /data/escape /data/objects && chown -h 65532:65532 /data/objects")
+		run(t, "", "docker", "run", "--rm", "--label", dockerRunLabel, "--user", "0", "--entrypoint", "/bin/sh", "-v", h.volume+":/data", dockerImage, "-c", "mkdir -p /data/escape && ln -s /data/escape /data/objects && chown -h 65532:65532 /data/objects")
 		h.start()
 		payload := []byte("must not follow backend symlink")
 		key := objectKey(payload, 51)
@@ -248,7 +248,7 @@ func TestDockerServerBackendSymlinkAndProcessKillNeverPublish(t *testing.T) {
 			t.Fatalf("symlink PUT status=%d body=%s", response.StatusCode, closeBody(t, response))
 		}
 		closeBody(t, response)
-		if output := run(t, "", "docker", "run", "--rm", "--entrypoint", "/bin/sh", "-v", h.volume+":/data", dockerImage, "-c", "find /data/escape -mindepth 1 -print"); strings.TrimSpace(output) != "" {
+		if output := run(t, "", "docker", "run", "--rm", "--label", dockerRunLabel, "--entrypoint", "/bin/sh", "-v", h.volume+":/data", dockerImage, "-c", "find /data/escape -mindepth 1 -print"); strings.TrimSpace(output) != "" {
 			t.Fatalf("server escaped through backend symlink: %s", output)
 		}
 	})
@@ -390,7 +390,7 @@ func buildDockerServer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	run(t, "", "docker", "build", "-t", dockerImage, repoRoot)
+	ensureDockerImages(t, repoRoot)
 }
 
 func addDockerPutHeaders(request *http.Request, body []byte) {

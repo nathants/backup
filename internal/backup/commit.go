@@ -260,6 +260,9 @@ func (run *runtime) commitTransaction(ctx context.Context, txn *transaction) (Sn
 				return SnapshotResult{}, fmt.Errorf("ambiguous metadata uploads were assigned fresh immutable keys; retry commit")
 			}
 		}
+		if unavailable != nil {
+			return SnapshotResult{}, fmt.Errorf("no individual mirror has a complete metadata chain through revision %s: %w", txn.LocalCommit, unavailable)
+		}
 		return SnapshotResult{}, fmt.Errorf("no individual mirror has a complete metadata chain through revision %s", txn.LocalCommit)
 	}
 	complete := make(map[string]bool)

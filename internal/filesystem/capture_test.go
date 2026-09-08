@@ -107,6 +107,9 @@ func TestCapturePathAcceptsSupportedTypeChangesAndOmitsSpecials(t *testing.T) {
 		if err := os.WriteFile(path, want, 0o640); err != nil {
 			t.Fatal(err)
 		}
+		if err := os.Chmod(path, 0o640); err != nil {
+			t.Fatal(err)
+		}
 		captured := capturePlanned(t, root, planned)
 		assertCapturedBytes(t, captured, want)
 		if captured.Entry.Kind != format.KindFile || captured.Entry.Mode != 0o640 || !captured.Changed {
@@ -128,7 +131,10 @@ func TestCapturePathAcceptsSupportedTypeChangesAndOmitsSpecials(t *testing.T) {
 			if err := os.Remove(path); err != nil {
 				return err
 			}
-			return os.WriteFile(path, want, 0o640)
+			if err := os.WriteFile(path, want, 0o640); err != nil {
+				return err
+			}
+			return os.Chmod(path, 0o640)
 		}
 		captured := capturePlanned(t, root, planned)
 		assertCapturedBytes(t, captured, want)
