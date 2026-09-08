@@ -171,7 +171,7 @@ func runAdd(ctx context.Context, arguments []string, stdout, stderr io.Writer) e
 	if _, err := fmt.Fprintf(stdout, "base\t%s\nentries\t%d\nnew-objects\t%d\nnew-packs\t%d\nno-changes\t%t\n", result.BaseCommit, result.Entries, result.UniqueNewObjects, result.NewPacks, result.NoChanges); err != nil {
 		return err
 	}
-	_, err = fmt.Fprintf(stdout, "skipped-special\t%d\nskipped-broken-symlinks\t%d\nskipped-outside-symlinks\t%d\nmounts-entered\t%d\n", result.Scan.SkippedSpecial, result.Scan.SkippedBrokenSymlinks, result.Scan.SkippedOutsideSymlinks, result.Scan.MountsEntered)
+	_, err = fmt.Fprintf(stdout, "skipped-special\t%d\nskipped-broken-symlinks\t%d\nskipped-outside-symlinks\t%d\nskipped-permission-denied\t%d\nmounts-entered\t%d\n", result.Scan.SkippedSpecial, result.Scan.SkippedBrokenSymlinks, result.Scan.SkippedOutsideSymlinks, result.Scan.SkippedPermissionDenied, result.Scan.MountsEntered)
 	return err
 }
 

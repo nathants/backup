@@ -40,6 +40,12 @@ and pattern-only matching, without tracked-file exceptions. Non-ignored untracke
 work is included. The backup ignore file contains Go regular expressions, not Git
 patterns.
 
+Source permission denials skip the affected file, symlink, or directory subtree
+with a warning; broken and outside-root symlinks are also skipped. Review add's
+warnings and skip counts before committing: omitted paths are absent from the new
+snapshot. Permissions are never changed automatically. Ignore-policy, metadata,
+and staging failures still stop the operation.
+
 Configure the trusted remote and mirrors before the first commit. Fields below are
 separated by literal tabs; credentials stay in local AWS shared-credential profiles.
 

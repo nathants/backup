@@ -294,7 +294,7 @@ func (run *runtime) capturePlan(ctx context.Context, txn *transaction, base repo
 		}
 	}
 	if txn.Capture.Entries == 0 && !txn.Plan.AllowEmpty {
-		return false, fmt.Errorf("every path selected by add disappeared or became unsupported; rerun add or use --allow-empty")
+		return false, fmt.Errorf("every path selected by add disappeared, became inaccessible, or became unsupported; rerun add or use add --allow-empty")
 	}
 	return run.finalizeCapture(txn, base)
 }

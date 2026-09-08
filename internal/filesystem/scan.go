@@ -23,11 +23,13 @@ const (
 	EventSpecialSkipped    EventKind = "special-skipped"
 	EventBrokenSymlink     EventKind = "broken-symlink-skipped"
 	EventOutsideSymlink    EventKind = "outside-symlink-skipped"
+	EventPermissionSkipped EventKind = "permission-denied-skipped"
 )
 
 type Event struct {
-	Kind EventKind
-	Path string
+	Kind   EventKind
+	Path   string
+	Detail string
 }
 
 type Reporter func(Event)
@@ -51,12 +53,13 @@ type File struct {
 }
 
 type Result struct {
-	Entries                uint64
-	SkippedSpecial         uint64
-	SkippedGitIgnored      uint64
-	SkippedBrokenSymlinks  uint64
-	SkippedOutsideSymlinks uint64
-	MountsEntered          uint64
+	Entries                 uint64
+	SkippedSpecial          uint64
+	SkippedGitIgnored       uint64
+	SkippedBrokenSymlinks   uint64
+	SkippedOutsideSymlinks  uint64
+	SkippedPermissionDenied uint64
+	MountsEntered           uint64
 }
 
 type CaptureResult struct {
@@ -152,6 +155,15 @@ func (root *Root) scanDirectory(directoryFD int, relative string, parentMount ui
 	if stat.Mask&unix.STATX_MNT_ID == 0 {
 		return fmt.Errorf("statx mount ID is required for source directory %q", displayPath(relative))
 	}
+	// A readable but unsearchable directory cannot be scanned. Check access
+	// before inspecting its ignore policy, whose own read errors remain fatal.
+	if err := unix.Faccessat(directoryFD, ".", unix.R_OK|unix.X_OK, unix.AT_EACCESS); err != nil {
+		err = fmt.Errorf("access source directory %q: %w", displayPath(relative), err)
+		if relative != "" && reportPermissionSkip(err, displayPath(relative), result, reporter) {
+			return nil
+		}
+		return err
+	}
 	if relative != "" && stat.Mnt_id != parentMount {
 		result.MountsEntered++
 		report(reporter, Event{Kind: EventMountEntered, Path: displayPath(relative)})
@@ -182,6 +194,10 @@ func (root *Root) scanDirectory(directoryFD int, relative string, parentMount ui
 	// Dup shares the directory offset and would exhaust later walks of root.fd.
 	copyFD, err := unix.Openat(directoryFD, ".", unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
 	if err != nil {
+		err = fmt.Errorf("open source directory reader %q: %w", displayPath(relative), err)
+		if relative != "" && reportPermissionSkip(err, displayPath(relative), result, reporter) {
+			return nil
+		}
 		return err
 	}
 	directory := os.NewFile(uintptr(copyFD), relative)
@@ -193,7 +209,11 @@ func (root *Root) scanDirectory(directoryFD int, relative string, parentMount ui
 	for {
 		entries, readErr := directory.ReadDir(256)
 		if readErr != nil && !errors.Is(readErr, io.EOF) {
-			return fmt.Errorf("read directory %q: %w", displayPath(relative), readErr)
+			readErr = fmt.Errorf("read source directory %q: %w", displayPath(relative), readErr)
+			if relative != "" && reportPermissionSkip(readErr, displayPath(relative), result, reporter) {
+				return nil
+			}
+			return readErr
 		}
 		for _, entry := range entries {
 			name := entry.Name()
@@ -210,7 +230,11 @@ func (root *Root) scanDirectory(directoryFD int, relative string, parentMount ui
 			}
 			var stat unix.Stat_t
 			if err := unix.Fstatat(directoryFD, name, &stat, unix.AT_SYMLINK_NOFOLLOW); err != nil {
-				return fmt.Errorf("stat source %q: %w", indexPath, err)
+				err = fmt.Errorf("stat source %q: %w", indexPath, err)
+				if reportPermissionSkip(err, indexPath, result, reporter) {
+					continue
+				}
+				return err
 			}
 			isDirectory := stat.Mode&unix.S_IFMT == unix.S_IFDIR
 			if gitRules.ownsWorkspace(filepath.Join(root.Path, childRelative)) {
@@ -229,7 +253,11 @@ func (root *Root) scanDirectory(directoryFD int, relative string, parentMount ui
 			case unix.S_IFDIR:
 				childFD, err := unix.Openat(directoryFD, name, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
 				if err != nil {
-					return fmt.Errorf("open source directory %q: %w", indexPath, err)
+					err = fmt.Errorf("open source directory %q: %w", indexPath, err)
+					if reportPermissionSkip(err, indexPath, result, reporter) {
+						continue
+					}
+					return err
 				}
 				err = root.scanDirectory(childFD, childRelative, mountID, ignore, gitRules, reporter, result, visit)
 				_ = unix.Close(childFD)
@@ -239,6 +267,9 @@ func (root *Root) scanDirectory(directoryFD int, relative string, parentMount ui
 			case unix.S_IFREG:
 				file, indexEntry, err := root.scanRegular(directoryFD, name, indexPath, stat)
 				if err != nil {
+					if reportPermissionSkip(err, indexPath, result, reporter) {
+						continue
+					}
 					return err
 				}
 				if err := visit(&file, indexEntry); err != nil {
@@ -248,6 +279,9 @@ func (root *Root) scanDirectory(directoryFD int, relative string, parentMount ui
 			case unix.S_IFLNK:
 				indexEntry, skipKind, err := root.scanSymlink(directoryFD, name, indexPath, stat)
 				if err != nil {
+					if reportPermissionSkip(err, indexPath, result, reporter) {
+						continue
+					}
 					return err
 				}
 				if indexEntry != nil {
@@ -345,12 +379,18 @@ func (root *Root) scanSymlink(directoryFD int, name, indexPath string, before un
 	targetAfter, readErr := readSymlinkAt(directoryFD, name)
 	var after unix.Stat_t
 	statErr := unix.Fstatat(directoryFD, name, &after, unix.AT_SYMLINK_NOFOLLOW)
+	if errors.Is(readErr, os.ErrPermission) {
+		return nil, "", fmt.Errorf("reread source symlink %q: %w", indexPath, readErr)
+	}
+	if errors.Is(statErr, os.ErrPermission) {
+		return nil, "", fmt.Errorf("restat source symlink %q: %w", indexPath, statErr)
+	}
 	if readErr != nil || statErr != nil || targetBefore != targetAfter || !sameSymlink(before, after) {
 		return nil, "", fmt.Errorf("source symlink %q changed during scan: %w", indexPath, errCaptureRace)
 	}
 	if resolveErr != nil {
 		switch {
-		case errors.Is(resolveErr, unix.ENOENT), errors.Is(resolveErr, unix.ELOOP):
+		case errors.Is(resolveErr, unix.ENOENT), errors.Is(resolveErr, unix.ENOTDIR), errors.Is(resolveErr, unix.ELOOP):
 			if symlinkTargetOutsideRoot(root.Path, indexPath, targetBefore) {
 				return nil, EventOutsideSymlink, nil
 			}
@@ -469,7 +509,7 @@ func (root *Root) capturePathOnce(planned format.IndexEntry, spool *Spool, reser
 		if errors.Is(err, unix.ENOENT) {
 			return CaptureResult{Changed: true, Reason: "removed since add; omitted"}, nil
 		}
-		return CaptureResult{}, err
+		return captureSourceFailure(err)
 	}
 	defer func() { _ = unix.Close(parentFD) }()
 	var pathStat unix.Stat_t
@@ -477,7 +517,7 @@ func (root *Root) capturePathOnce(planned format.IndexEntry, spool *Spool, reser
 		if errors.Is(err, unix.ENOENT) {
 			return CaptureResult{Changed: true, Reason: "removed since add; omitted"}, nil
 		}
-		return CaptureResult{}, fmt.Errorf("stat planned source %q: %w", planned.Path, err)
+		return captureSourceFailure(fmt.Errorf("stat planned source %q: %w", planned.Path, err))
 	}
 	switch pathStat.Mode & unix.S_IFMT {
 	case unix.S_IFREG:
@@ -485,7 +525,7 @@ func (root *Root) capturePathOnce(planned format.IndexEntry, spool *Spool, reser
 	case unix.S_IFLNK:
 		entry, skip, err := root.scanSymlink(parentFD, name, planned.Path, pathStat)
 		if err != nil {
-			return CaptureResult{}, err
+			return captureSourceFailure(err)
 		}
 		if entry == nil {
 			reason := "symlink became unavailable; omitted"
@@ -500,7 +540,7 @@ func (root *Root) capturePathOnce(planned format.IndexEntry, spool *Spool, reser
 	}
 }
 
-func (root *Root) captureRegular(parentFD int, name string, planned format.IndexEntry, classified unix.Stat_t, spool *Spool, reserveBytes uint64) (CaptureResult, error) {
+func (root *Root) captureRegular(parentFD int, name string, planned format.IndexEntry, classified unix.Stat_t, spool *Spool, reserveBytes uint64) (_ CaptureResult, returnErr error) {
 	if root.captureBeforeOpen != nil {
 		if err := root.captureBeforeOpen(planned.Path); err != nil {
 			return CaptureResult{}, err
@@ -515,13 +555,13 @@ func (root *Root) captureRegular(parentFD int, name string, planned format.Index
 		if changed {
 			return CaptureResult{}, errCaptureRace
 		}
-		return CaptureResult{}, fmt.Errorf("open planned source %q: %w", planned.Path, err)
+		return captureSourceFailure(fmt.Errorf("open planned source %q: %w", planned.Path, err))
 	}
 	source := os.NewFile(uintptr(fd), planned.Path)
 	defer func() { _ = source.Close() }()
 	var before unix.Stat_t
 	if err := unix.Fstat(fd, &before); err != nil {
-		return CaptureResult{}, fmt.Errorf("stat open planned source %q: %w", planned.Path, err)
+		return captureSourceFailure(fmt.Errorf("stat open planned source %q: %w", planned.Path, err))
 	}
 	if before.Mode&unix.S_IFMT != unix.S_IFREG {
 		return CaptureResult{}, errCaptureRace
@@ -534,22 +574,27 @@ func (root *Root) captureRegular(parentFD int, name string, planned format.Index
 	if err != nil {
 		return CaptureResult{}, err
 	}
-	if root.captureOpened != nil {
-		if err := root.captureOpened(planned.Path); err != nil {
-			_ = temporary.Remove()
-			return CaptureResult{}, err
-		}
-	}
 	keep := false
 	defer func() {
 		if !keep {
-			_ = temporary.Remove()
+			if err := temporary.Remove(); err != nil {
+				returnErr = errors.Join(returnErr, fmt.Errorf("remove plaintext spool for %q: %w", planned.Path, err))
+			}
 		}
 	}()
+	if root.captureOpened != nil {
+		if err := root.captureOpened(planned.Path); err != nil {
+			return CaptureResult{}, err
+		}
+	}
 	hash, _ := blake2b.New512(nil)
-	limited := &io.LimitedReader{R: source, N: int64(identity.Size)}
+	limited := &io.LimitedReader{R: sourceReader{Reader: source}, N: int64(identity.Size)}
 	count, err := io.CopyBuffer(io.MultiWriter(temporary.File, hash), limited, make([]byte, 1<<20))
 	if err != nil {
+		var readErr *sourceReadError
+		if errors.As(err, &readErr) {
+			return captureSourceFailure(fmt.Errorf("read planned source %q: %w", planned.Path, err))
+		}
 		return CaptureResult{}, fmt.Errorf("capture planned source %q: %w", planned.Path, err)
 	}
 	if err := temporary.Sync(); err != nil {
@@ -557,7 +602,7 @@ func (root *Root) captureRegular(parentFD int, name string, planned format.Index
 	}
 	var after unix.Stat_t
 	if err := unix.Fstat(fd, &after); err != nil {
-		return CaptureResult{}, fmt.Errorf("restat planned source %q: %w", planned.Path, err)
+		return captureSourceFailure(fmt.Errorf("restat planned source %q: %w", planned.Path, err))
 	}
 	afterIdentity, afterErr := identityFromStat(after)
 	mtime, err := checkedTimespec(identity.MtimeSec, identity.MtimeNS)

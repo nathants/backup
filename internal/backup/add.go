@@ -143,7 +143,11 @@ func (run *runtime) buildAddPlan(root *filesystem.Root, ignore format.Ignore, co
 	var reportErr error
 	scan, walkErr := root.Walk(ignore, func(event filesystem.Event) {
 		if reportErr == nil {
-			reportErr = run.reportf("%s\t%s\n", event.Kind, terminalEscape(event.Path))
+			if event.Detail != "" {
+				reportErr = run.reportf("%s\t%s\t%s\n", event.Kind, terminalEscape(event.Path), terminalEscape(event.Detail))
+			} else {
+				reportErr = run.reportf("%s\t%s\n", event.Kind, terminalEscape(event.Path))
+			}
 		}
 	}, func(file *filesystem.File, entry format.IndexEntry) error {
 		if reportErr != nil {
