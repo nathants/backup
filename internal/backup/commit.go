@@ -135,15 +135,17 @@ func (run *runtime) commitTransaction(ctx context.Context, txn *transaction) (Sn
 	if err := validateStagedMetadataIdentity(*txn, candidate, sequence); err != nil {
 		return SnapshotResult{}, err
 	}
+	var localHistory *repository.History
+	var local repository.ValidatedCommit
 	if txn.LocalCommit != "" {
-		validated, err := (repository.Validator{Repo: run.repo.Directory, Limits: format.DefaultLimits()}).ValidateHistory(txn.LocalCommit)
+		localHistory, err = (repository.Validator{Repo: run.repo.Directory, Limits: format.DefaultLimits()}).ValidateHistory(txn.LocalCommit)
 		if err != nil {
 			return SnapshotResult{}, fmt.Errorf("validate recorded local commit: %w", err)
 		}
-		local, tipErr := validated.Tip()
-		_ = validated.Close()
-		if tipErr != nil {
-			return SnapshotResult{}, tipErr
+		defer func() { _ = localHistory.Close() }()
+		local, err = localHistory.Tip()
+		if err != nil {
+			return SnapshotResult{}, err
 		}
 		if local.ParentID != txn.BaseCommit || !local.State.Equal(candidate) {
 			return SnapshotResult{}, fmt.Errorf("recorded local commit disagrees with the durable candidate")
@@ -156,19 +158,40 @@ func (run *runtime) commitTransaction(ctx context.Context, txn *transaction) (Sn
 	if err := run.requireBackupEligibility(txn, ledger); err != nil {
 		return SnapshotResult{}, err
 	}
-	// A full audit may complete a pending tip through an alternate metadata
-	// representation. Finalize from that ledger evidence, without inventing
-	// acknowledgements for this transaction's different staged representation.
+	// A ledger row names a commit, not its physical metadata representation.
+	// Recheck one complete mirror against this transaction's pin before cleanup,
+	// including after an explicit repair adopts a validated replacement.
 	if txn.LocalCommit != "" {
+		var completionErr error
 		for _, mirror := range run.config.Mirrors {
-			if ledger.eligible(mirror.Canonical.Name, txn.LocalCommit) {
-				if !txn.PushConfirmed {
-					if err := run.confirmOrPush(ctx, txn); err != nil {
-						return SnapshotResult{}, err
-					}
-				}
-				return run.finishSnapshot(txn, ledger)
+			if !ledger.eligible(mirror.Canonical.Name, txn.LocalCommit) {
+				continue
 			}
+			if err := run.auditMirror(ctx, mirror, localHistory, local, txn); err != nil {
+				if isIncidentStateError(err) {
+					return SnapshotResult{}, err
+				}
+				completionErr = errors.Join(completionErr, fmt.Errorf("mirror %s: %w", mirror.Canonical.Name, err))
+				continue
+			}
+			if !txn.PushConfirmed {
+				if err := run.confirmOrPush(ctx, txn); err != nil {
+					return SnapshotResult{}, err
+				}
+			}
+			// Earlier mirrors may have revealed a new incident. This successful
+			// audit is fresh evidence, not reuse of the pre-incident ledger row.
+			if err := run.recordVerified(candidate.Format.RepositoryUUID, mirror.Canonical.Name, txn.LocalCommit); err != nil {
+				return SnapshotResult{}, err
+			}
+			current, err := run.loadLedger(candidate.Format.RepositoryUUID)
+			if err != nil {
+				return SnapshotResult{}, err
+			}
+			return run.finishSnapshot(txn, current)
+		}
+		if completionErr != nil {
+			return SnapshotResult{}, fmt.Errorf("recorded pending completion failed verification; staging retained: %w", completionErr)
 		}
 	}
 	for _, mirror := range run.config.Mirrors {
@@ -260,30 +283,9 @@ func (run *runtime) commitTransaction(ctx context.Context, txn *transaction) (Sn
 		if err != nil {
 			return SnapshotResult{}, err
 		}
-		partsDirectory, err := run.stagedRelativePath(metadataStage)
+		staged, err := run.stageMetadataResult(result, metadataStage)
 		if err != nil {
 			return SnapshotResult{}, err
-		}
-		for index, part := range result.Parts {
-			destination := filepath.Join(metadataStage, fmt.Sprintf("part-%08d", index))
-			if err := os.Rename(part.Path, destination); err != nil {
-				return SnapshotResult{}, err
-			}
-		}
-		manifestDestination := filepath.Join(metadataStage, "manifest-"+result.ManifestHash)
-		if err := os.Rename(result.ManifestPath, manifestDestination); err != nil {
-			return SnapshotResult{}, err
-		}
-		if err := syncDirectory(metadataStage); err != nil {
-			return SnapshotResult{}, err
-		}
-		manifestRelative, err := run.stagedRelativePath(manifestDestination)
-		if err != nil {
-			return SnapshotResult{}, err
-		}
-		staged := &stagedMetadata{
-			Manifest: result.Manifest, ManifestHash: result.ManifestHash, PartsDirectory: partsDirectory,
-			ManifestObjectID: result.ManifestObjectID, ManifestRelativePath: manifestRelative,
 		}
 		txn.Metadata = staged
 		if err := run.saveTransaction(txn); err != nil {

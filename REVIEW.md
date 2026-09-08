@@ -18,23 +18,25 @@ High findings affect recoverability or durable transaction guarantees. Medium fi
 
 ## Findings
 
-### 1. High — Checksum verification can certify an unrecoverable metadata chain and retire the real pending bundle
+### 1. Medium [done] — Unproven metadata representations could retire a pending bundle
 
-**Locations:** backup `internal/backup/metadata.go:117–185`, `internal/backup/verify.go:46–73`, `internal/backup/incident.go:212–219`, `internal/backup/commit.go:159–170,322–376`.
+**Reviewed locations:** backup `internal/backup/metadata.go:117–185`, `internal/backup/verify.go:46–73`, `internal/backup/incident.go:212–219`, `internal/backup/commit.go:159–170,322–376`.
 
-`auditManifestChain` checks the manifest's declared UUID, sequence, base/tip and object checksums. Nothing establishes that the ciphertext actually reconstructs that Git edge. The manifest is public, unsigned, and self-hash-addressed: its hash establishes byte identity, not the truth of its declarations. An ordinary create credential can publish another internally consistent description of existing ciphertext.
+On the reviewed source, `auditManifestChain` checked the manifest's declared UUID, sequence, base/tip and object checksums without establishing that the ciphertext actually reconstructed that Git edge. The manifest is public, unsigned, and self-hash-addressed: its hash establishes byte identity, not the truth of its declarations. An ordinary create credential can publish another internally consistent description of existing ciphertext.
 
-**Reproduced:** publish a healthy genesis, then interrupt a real snapshot immediately after confirmed primary Git publication but before its metadata edge is uploaded. Publish a new immutable manifest declaring that missing edge while referencing the existing genesis bundle bytes. No existing object is overwritten or deleted. Healthy genesis verification/recovery pass, and the missing-edge control fails. After the added manifest:
+**Reproduced on the reviewed source:** publish a healthy genesis, then interrupt a real snapshot immediately after confirmed primary Git publication but before its metadata edge is uploaded. Publish a new immutable manifest declaring that missing edge while referencing the existing genesis bundle bytes. No existing object is overwritten or deleted. Healthy genesis verification/recovery pass, and the missing-edge control fails. After the added manifest:
 
 - `Verify(HEAD)` succeeds with one complete mirror;
 - `Recover(--tip <same exact commit>)` rejects the bundle's advertised tip;
 - resumed `Commit` nevertheless reports that mirror complete and deletes its real pending transaction/bundle staging.
 
-This is not the accepted possibility of a malicious but structurally valid new snapshot: the anchored Git commit is unchanged, and the mirror cannot reconstruct it. Restore's content authentication still fails closed; the broken promise is successful backup/verification implying self-contained recoverability.
+**Severity correction:** this falsely completes an unfinished revision; it does not destroy an already healthy immutable chain. Surviving local/primary Git can regenerate the missing edge. The demonstrated impact is medium correctness/reliability, not the loss of previously successful backups through overwrite or deletion.
 
-**Required action:** do not promote an unproven physical representation into completion-ledger evidence or retire staging because of it. Representation-to-Git-edge validity needs trusted evidence, with checksum-only audits subsequently checking those exact bytes. The treatment of previously unseen representations and lost local evidence requires an explicit design decision: the current no-body cloud-verification contract cannot prove arbitrary ciphertext's Git semantics. Silently downloading all encrypted cloud objects or merely weakening the completion claim is not an acceptable incidental fix.
+**Resolution:** implemented the narrow pending-transaction fix after rebasing onto backup `99a2aeb`. The existing staged manifest hash and object ID pin the only eligible representation for that pending Git edge in verification, sync, commit finalization, and forward-repair retirement. A ledger commit ID alone cannot authorize staging cleanup: commit freshly audits one individual mirror's complete candidate data and pinned metadata chain, with mandatory primary publication. Explicit metadata repair decrypts/imports and validates its rebuilt edge before publication, then atomically adopts durable replacement staging and actual destination acknowledgements into the pending transaction. Interrupted handoff preserves a usable old or new pin and retains old staging until transaction cleanup.
 
-**Regression:** `TestReviewVerifyRequiresRecoverableMetadataRepresentation` exercises the actual backup APIs, Git, encryption and TLS object server.
+**Accepted remaining limit:** checksum-only audits of unfamiliar historical representations cannot prove that ciphertext reconstructs its declarations and can still mask an absent/damaged genuine edge. Adding false representations cannot overwrite or destroy a healthy immutable chain; actual recovery decrypts/imports and rejects them. No permanent provenance database, signing keys, encrypted-body downloads during protocol verification, object-format change, or additional restore prerequisite was introduced. This limited resolution and the accepted audit boundary are documented in `NINA.md` and `readme.md`.
+
+**Permanent regressions:** `internal/backup/pending_metadata_test.go` exercises the actual backup APIs, Git, encryption and TLS server: missing/unrelated pending representations, stale ledger cleanup, forward repair, validated repair adoption and interruption replay, no-body verification, two-mirror pinned sync/fresh incident evidence, and primary-offline recovery. Targeted regressions and full `make check` passed.
 
 ### 2. High — A failed helper manifest upload advances the published DynamoDB pointer
 
@@ -207,7 +209,7 @@ The unchanged `make check` run took 1,253 seconds, with the backup package takin
 
 **Recommended simplification:** use ordinary single-part fixture sizes by default and request small parts explicitly in tests asserting splitting, partial acknowledgement, recovery edges or related crashes. Preserve real server/Git code, fsyncs, race coverage and all assertions. Measure the resulting gate improvement; do not mask latency with weaker durability or reduced test coverage.
 
-## Validation evidence and limits
+## Original review validation evidence and limits
 
 Reproduction tests were added only to exact-source private copies. Their failures above are assertions of desired behavior against the actual implementations, not replacement implementations of the algorithms. Backup probes use native Git and the real local TLS server; helper publication probes replace only the SDK transport and run separately where cached SDK clients require fresh processes. All keys and credentials in those fixtures are synthetic.
 

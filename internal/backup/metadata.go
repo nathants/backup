@@ -114,7 +114,7 @@ func manifestLimits() format.Limits {
 	return limits
 }
 
-func auditManifestChain(ctx context.Context, client *objectstore.Client, history *repository.History, targetIndex int, repositoryUUID string, visit func(index int, representation manifestRepresentation) error) error {
+func auditManifestChain(ctx context.Context, client *objectstore.Client, history *repository.History, targetIndex int, repositoryUUID string, pending *transaction, visit func(index int, representation manifestRepresentation) error) error {
 	if history == nil || targetIndex < 0 || targetIndex >= history.Len() {
 		return fmt.Errorf("invalid target history position")
 	}
@@ -141,6 +141,12 @@ func auditManifestChain(ctx context.Context, client *objectstore.Client, history
 		var failures []string
 		accepted := false
 		for _, representation := range representations {
+			// Only the locally staged representation can complete a pending edge.
+			// Explicit metadata repair may durably replace that pin after validation.
+			if pending != nil && pending.LocalCommit == tip && (pending.Metadata == nil ||
+				representation.Hash != pending.Metadata.ManifestHash || representation.ObjectID != pending.Metadata.ManifestObjectID) {
+				continue
+			}
 			manifest := representation.Manifest
 			if manifest.Sequence != uint64(index) || manifest.TipCommit != tip || manifest.Kind != kind || manifest.BaseCommit != base {
 				continue
@@ -183,6 +189,36 @@ func auditManifestChain(ctx context.Context, client *objectstore.Client, history
 		}
 	}
 	return nil
+}
+
+// stageMetadataResult gives a completed local build the transaction's stable
+// filenames. Its caller persists the containing directory before the control pin.
+func (run *runtime) stageMetadataResult(result metadatachain.Result, directory string) (*stagedMetadata, error) {
+	partsDirectory, err := run.stagedRelativePath(directory)
+	if err != nil {
+		return nil, err
+	}
+	for index, part := range result.Parts {
+		destination := filepath.Join(directory, fmt.Sprintf("part-%08d", index))
+		if err := os.Rename(part.Path, destination); err != nil {
+			return nil, err
+		}
+	}
+	manifestDestination := filepath.Join(directory, "manifest-"+result.ManifestHash)
+	if err := os.Rename(result.ManifestPath, manifestDestination); err != nil {
+		return nil, err
+	}
+	if err := syncDirectory(directory); err != nil {
+		return nil, err
+	}
+	manifestRelative, err := run.stagedRelativePath(manifestDestination)
+	if err != nil {
+		return nil, err
+	}
+	return &stagedMetadata{
+		Manifest: result.Manifest, ManifestHash: result.ManifestHash, PartsDirectory: partsDirectory,
+		ManifestObjectID: result.ManifestObjectID, ManifestRelativePath: manifestRelative,
+	}, nil
 }
 
 func fetchMetadataBundle(ctx context.Context, client *objectstore.Client, representation manifestRepresentation, destination, stage string) error {

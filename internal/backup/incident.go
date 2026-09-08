@@ -128,7 +128,7 @@ func (run *runtime) auditData(ctx context.Context, client *objectstore.Client, n
 	})
 }
 
-func (run *runtime) auditChain(ctx context.Context, client *objectstore.Client, name string, history *repository.History, target int) error {
+func (run *runtime) auditChain(ctx context.Context, client *objectstore.Client, name string, history *repository.History, target int, txn *transaction) error {
 	selected, err := history.CommitID(target)
 	if err != nil {
 		return incidentStateFailure(err)
@@ -138,7 +138,7 @@ func (run *runtime) auditChain(ctx context.Context, client *objectstore.Client, 
 		return incidentStateFailure(err)
 	}
 	uuid := state.State.Format.RepositoryUUID
-	failure := auditManifestChain(ctx, client, history, target, uuid, nil)
+	failure := auditManifestChain(ctx, client, history, target, uuid, txn, nil)
 	if !conclusiveObjectFailure(failure) {
 		return failure
 	}
@@ -149,10 +149,6 @@ func (run *runtime) auditChain(ctx context.Context, client *objectstore.Client, 
 		return failure
 	}
 	ledger, err := run.loadLedger(uuid)
-	if err != nil {
-		return incidentStateFailure(err)
-	}
-	txn, err := run.loadTransaction()
 	if err != nil {
 		return incidentStateFailure(err)
 	}
@@ -178,7 +174,7 @@ func (run *runtime) auditChain(ctx context.Context, client *objectstore.Client, 
 	// chain before interpreting an absent representation as lost recovery data.
 	knownFailure := failure
 	if knownIndex != target {
-		knownFailure = auditManifestChain(ctx, client, history, knownIndex, uuid, nil)
+		knownFailure = auditManifestChain(ctx, client, history, knownIndex, uuid, txn, nil)
 	}
 	if conclusiveObjectFailure(knownFailure) {
 		if err := run.quarantine(uuid, name); err != nil {
@@ -188,7 +184,7 @@ func (run *runtime) auditChain(ctx context.Context, client *objectstore.Client, 
 	return failure
 }
 
-func (run *runtime) auditMirror(ctx context.Context, mirror localconfig.Mirror, history *repository.History, selected repository.ValidatedCommit) error {
+func (run *runtime) auditMirror(ctx context.Context, mirror localconfig.Mirror, history *repository.History, selected repository.ValidatedCommit, txn *transaction) error {
 	reader, err := run.client(ctx, mirror)
 	if err != nil {
 		return err
@@ -205,7 +201,7 @@ func (run *runtime) auditMirror(ctx context.Context, mirror localconfig.Mirror, 
 	if isIncidentStateError(dataErr) {
 		return dataErr
 	}
-	chainErr := run.auditChain(ctx, reader, mirror.Canonical.Name, history, index)
+	chainErr := run.auditChain(ctx, reader, mirror.Canonical.Name, history, index, txn)
 	return errors.Join(dataErr, chainErr)
 }
 
@@ -331,7 +327,7 @@ func (run *runtime) revalidateCandidate(ctx context.Context, txn *transaction, c
 			if !found {
 				return fmt.Errorf("candidate base is outside validated history")
 			}
-			err = run.auditChain(ctx, reader, name, history, baseIndex)
+			err = run.auditChain(ctx, reader, name, history, baseIndex, txn)
 		}
 		if err != nil {
 			if isIncidentStateError(err) {
@@ -381,8 +377,8 @@ func incidentStateFailure(err error) error {
 	return &incidentStateError{cause: err}
 }
 
-func (run *runtime) observeSyncDestination(ctx context.Context, mirror localconfig.Mirror, history *repository.History, selected repository.ValidatedCommit) error {
-	err := run.auditMirror(ctx, mirror, history, selected)
+func (run *runtime) observeSyncDestination(ctx context.Context, mirror localconfig.Mirror, history *repository.History, selected repository.ValidatedCommit, txn *transaction) error {
+	err := run.auditMirror(ctx, mirror, history, selected, txn)
 	if isIncidentStateError(err) {
 		return err
 	}

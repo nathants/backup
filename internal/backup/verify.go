@@ -45,7 +45,7 @@ func Verify(ctx context.Context, options Options, minimumMirrors int, revision s
 		result.Passed = 0
 		for _, mirror := range run.config.Mirrors {
 			verification := MirrorVerification{Name: mirror.Canonical.Name}
-			if err := run.auditMirror(ctx, mirror, history, selected); err != nil {
+			if err := run.auditMirror(ctx, mirror, history, selected, txn); err != nil {
 				if isIncidentStateError(err) {
 					return result, err
 				}

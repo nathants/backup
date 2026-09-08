@@ -40,7 +40,8 @@ func RepairMetadataEdge(ctx context.Context, options Options, destinationMirror,
 	if err != nil {
 		return result, err
 	}
-	if txn != nil && selected.CommitID == txn.LocalCommit {
+	pending := txn != nil && selected.CommitID == txn.LocalCommit
+	if pending {
 		_, remote, err := run.remoteHistory()
 		if err != nil {
 			return result, err
@@ -91,6 +92,18 @@ func RepairMetadataEdge(ctx context.Context, options Options, destinationMirror,
 		}
 	}
 	buildDirectory := filepath.Join(stage, "build")
+	keepBuild := false
+	if pending {
+		buildDirectory, err = os.MkdirTemp(run.options.transactionFilesPath(), "metadata-repair-")
+		if err != nil {
+			return result, err
+		}
+		defer func() {
+			if !keepBuild {
+				_ = removeTreeNoFollow(buildDirectory)
+			}
+		}()
+	}
 	if err := ensurePrivateDirectory(buildDirectory); err != nil {
 		return result, err
 	}
@@ -106,6 +119,9 @@ func RepairMetadataEdge(ctx context.Context, options Options, destinationMirror,
 	}
 	if err := validateRebuiltMetadataEdge(run.repo, built, selected.State.Format.RepositoryUUID, base, selected.CommitID, secretKey, stage, run.options.SpaceReserveBytes); err != nil {
 		return result, fmt.Errorf("validate rebuilt metadata edge: %w", err)
+	}
+	if err := run.checkpoint("metadata-repair-validated"); err != nil {
+		return result, err
 	}
 	for _, part := range built.Parts {
 		key, err := format.MetadataPartKey(part.Manifest)
@@ -133,6 +149,40 @@ func RepairMetadataEdge(ctx context.Context, options Options, destinationMirror,
 	create := client.PutFile(ctx, manifestKey, built.ManifestPath, manifestExpected)
 	if create.Disposition != objectstore.CreateAcknowledged && !((create.Disposition == objectstore.CreateConflict || create.Disposition == objectstore.CreateAmbiguous) && client.Audit(ctx, manifestKey, manifestExpected) == nil) {
 		return result, fmt.Errorf("destination did not acknowledge rebuilt metadata manifest %s: %s", manifestKey, errorText(create.Err))
+	}
+	if err := run.checkpoint("metadata-repair-published"); err != nil {
+		return result, err
+	}
+	if pending {
+		staged, err := run.stageMetadataResult(built, buildDirectory)
+		if err != nil {
+			return result, err
+		}
+		if err := syncDirectory(run.options.transactionFilesPath()); err != nil {
+			return result, err
+		}
+		txn.Metadata = staged
+		// Primary publication was verified above; only this new representation's
+		// actual destination acknowledgements survive the atomic handoff.
+		txn.PushAttempted, txn.PushConfirmed = true, true
+		for _, progress := range txn.Mirrors {
+			progress.MetadataPartCursor = 0
+			progress.MetadataManifest = false
+			progress.RevisionComplete = false
+		}
+		progress := txn.progress(destinationMirror)
+		progress.MetadataPartCursor = uint32(len(built.Parts))
+		progress.MetadataManifest = true
+		// Save may have an ambiguous durability outcome. Never remove payloads
+		// once the control record could reference them; transaction cleanup owns
+		// both this build and any older, now-unreferenced metadata staging.
+		keepBuild = true
+		if err := run.saveTransaction(txn); err != nil {
+			return result, err
+		}
+		if err := run.checkpoint("metadata-repair-adopted"); err != nil {
+			return result, err
+		}
 	}
 	result.TipCommit = selected.CommitID
 	result.ManifestHash = built.ManifestHash

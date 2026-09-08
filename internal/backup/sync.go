@@ -62,12 +62,12 @@ func Sync(ctx context.Context, options Options, sourceName, destinationName, rev
 	if err != nil {
 		return result, err
 	}
-	if err := run.auditMirror(ctx, sourcePin, history, selected); err != nil {
+	if err := run.auditMirror(ctx, sourcePin, history, selected, txn); err != nil {
 		return result, fmt.Errorf("source data catalog: %w", err)
 	}
 	// Observe destination loss before attempting immutable catch-up. Absence
 	// on an unacknowledged/lagging mirror is not an integrity incident.
-	if err := run.observeSyncDestination(ctx, destinationPin, history, selected); err != nil {
+	if err := run.observeSyncDestination(ctx, destinationPin, history, selected, txn); err != nil {
 		return result, err
 	}
 	copying := mirrorCopy{run: run, source: source, destination: destination, sourceName: sourceName, destinationName: destinationName}
@@ -142,7 +142,7 @@ func Sync(ctx context.Context, options Options, sourceName, destinationName, rev
 		}
 		return nil
 	}
-	if err := auditManifestChain(ctx, source, history, targetIndex, selected.State.Format.RepositoryUUID, copyMetadata); err != nil {
+	if err := auditManifestChain(ctx, source, history, targetIndex, selected.State.Format.RepositoryUUID, txn, copyMetadata); err != nil {
 		return result, fmt.Errorf("source metadata chain: %w", err)
 	}
 	before, err := run.loadLedger(selected.State.Format.RepositoryUUID)
@@ -150,7 +150,7 @@ func Sync(ctx context.Context, options Options, sourceName, destinationName, rev
 		return result, err
 	}
 	for _, pin := range []localconfig.Mirror{sourcePin, destinationPin} {
-		if err := run.auditMirror(ctx, pin, history, selected); err != nil {
+		if err := run.auditMirror(ctx, pin, history, selected, txn); err != nil {
 			return result, err
 		}
 	}

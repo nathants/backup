@@ -68,6 +68,19 @@ export GIT_REMOTE_AWS_SECRETKEY_FILE=/private/keys/alice.secret
 ./backup restore --root /data --target /safe/restore '^\./' HEAD
 ```
 
+Protocol `verify` checks object availability, checksums, and declared metadata-chain
+relationships without downloading encrypted bodies. It does not prove that an
+unfamiliar historical bundle reconstructs its claimed Git revision. A false manifest
+can mask a missing genuine edge in this audit, but cannot destroy an existing healthy
+immutable chain. Retain external revision anchors and periodically exercise actual
+metadata recovery, which decrypts/imports bundles and rejects false representations.
+
+Pending publication is stricter: verification and finalization require the exact
+metadata representation recorded in the transaction. `repair metadata` can validate,
+publish, and atomically adopt a replacement for that pending edge. A completion-ledger
+commit ID alone never authorizes discarding pending staging. No additional keys or
+permanent local provenance database are needed for restore.
+
 For loss of the primary metadata service, follow
 [recovery and restore](docs/recovery-restore.md). Recovery reconstructs metadata;
 restore reconstructs files.
