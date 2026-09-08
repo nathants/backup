@@ -187,7 +187,7 @@ func newFetchTestHarness(t *testing.T) *integrationHarness {
 	t.Helper()
 	h := newIntegrationHarness(t)
 	h.options.MetadataPartSize = 1 << 20
-	if _, err := Init(context.Background(), h.options, InitRequest{RecoveryPublicKey: h.publicKey}); err != nil {
+	if _, err := initializePublished(context.Background(), h.options, InitRequest{RecoveryPublicKey: h.publicKey}); err != nil {
 		t.Fatal(err)
 	}
 	return h

@@ -21,7 +21,7 @@ func incidentHarness(t *testing.T) (*integrationHarness, format.PackEntry, strin
 	h := newIntegrationHarness(t)
 	h.options.PartSize, h.options.MetadataPartSize = 1<<20, 1<<20
 	ctx := context.Background()
-	if _, err := Init(ctx, h.options, InitRequest{RecoveryPublicKey: h.publicKey}); err != nil {
+	if _, err := initializePublished(ctx, h.options, InitRequest{RecoveryPublicKey: h.publicKey}); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(h.root, "old"), []byte("old data"), 0600); err != nil {
@@ -271,7 +271,7 @@ func TestIntegrityIncidentHealthyMirrorCanResumeWhileDamagedMirrorStaysExcluded(
 		return localFactory(ctx, pin)
 	}
 	ctx := context.Background()
-	if _, err := Init(ctx, h.options, InitRequest{RecoveryPublicKey: h.publicKey}); err != nil {
+	if _, err := initializePublished(ctx, h.options, InitRequest{RecoveryPublicKey: h.publicKey}); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(h.root, "old"), []byte("old data"), 0600); err != nil {
@@ -655,7 +655,7 @@ func TestIntegrityIncidentPendingGenesisCannotReuseDamagedMetadata(t *testing.T)
 		}
 		return nil
 	}
-	if _, err := Init(ctx, interrupted, InitRequest{RecoveryPublicKey: h.publicKey}); err == nil {
+	if _, err := initializePublished(ctx, interrupted, InitRequest{RecoveryPublicKey: h.publicKey}); err == nil {
 		t.Fatal("genesis not interrupted")
 	}
 	run, err := openRuntime(h.options, true)
@@ -677,7 +677,7 @@ func TestIntegrityIncidentPendingGenesisCannotReuseDamagedMetadata(t *testing.T)
 	if _, err := Verify(ctx, h.options, 1, "HEAD"); err == nil {
 		t.Fatal("corruption missed")
 	}
-	if _, err := Init(ctx, h.options, InitRequest{RecoveryPublicKey: h.publicKey}); err == nil {
+	if _, err := Commit(ctx, h.options); err == nil {
 		t.Fatal("genesis ignored integrity incident")
 	}
 	if _, err := RepairMetadataEdge(ctx, h.options, "local", "HEAD"); err != nil {
@@ -686,7 +686,7 @@ func TestIntegrityIncidentPendingGenesisCannotReuseDamagedMetadata(t *testing.T)
 	if _, err := Verify(ctx, h.options, 1, "HEAD"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Init(ctx, h.options, InitRequest{RecoveryPublicKey: h.publicKey}); err != nil {
+	if _, err := Commit(ctx, h.options); err != nil {
 		t.Fatal(err)
 	}
 }

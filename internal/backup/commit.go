@@ -24,6 +24,15 @@ func Commit(ctx context.Context, options Options) (SnapshotResult, error) {
 	if err != nil {
 		return SnapshotResult{}, err
 	}
+	if txn != nil && (txn.Kind == "initial" || txn.Kind == "genesis") && run.preparation == nil {
+		return SnapshotResult{}, fmt.Errorf("initial publication lacks its local preparation record; preserve state for diagnosis")
+	}
+	if run.preparation != nil {
+		txn, err = run.commitInitial(ctx, txn)
+		if err != nil {
+			return SnapshotResult{}, err
+		}
+	}
 	if txn == nil {
 		head, history, err := run.validatedHead(false)
 		if err != nil {
@@ -57,7 +66,19 @@ func Commit(ctx context.Context, options Options) (SnapshotResult, error) {
 			if err := run.clearTransactionFiles(); err != nil {
 				return SnapshotResult{}, err
 			}
-			return SnapshotResult{CommitID: txn.BaseCommit, NoChanges: true}, nil
+			ledger, err := run.loadLedger(base.State.Format.RepositoryUUID)
+			if err != nil {
+				return SnapshotResult{}, err
+			}
+			result := SnapshotResult{CommitID: txn.BaseCommit, NoChanges: true}
+			for _, mirror := range run.config.Mirrors {
+				if ledger.eligible(mirror.Canonical.Name, txn.BaseCommit) {
+					result.CompleteMirrors = append(result.CompleteMirrors, mirror.Canonical.Name)
+				} else {
+					result.LaggingMirrors = append(result.LaggingMirrors, mirror.Canonical.Name)
+				}
+			}
+			return result, nil
 		}
 	}
 	return run.commitTransaction(ctx, txn)
@@ -332,6 +353,19 @@ func (run *runtime) finishSnapshot(txn *transaction, ledger completionLedger) (S
 		if err := run.checkpoint("forward-repair-completed"); err != nil {
 			return SnapshotResult{}, err
 		}
+	}
+	if txn.Kind == "genesis" && txn.Plan != nil {
+		next := newTransaction("ordinary", txn.LocalCommit, run.options.Now().UTC())
+		next.Plan = txn.Plan
+		if err := run.saveTransaction(&next); err != nil {
+			return SnapshotResult{}, err
+		}
+		// Save the first data plan before retiring bootstrap state. A crash at
+		// either boundary resumes capture, never reports only genesis success.
+		if err := run.checkpoint("genesis-plan-handed-off"); err != nil {
+			return SnapshotResult{}, err
+		}
+		return result, nil
 	}
 	if err := run.clearTransactionFiles(); err != nil {
 		return SnapshotResult{}, err

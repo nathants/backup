@@ -21,6 +21,11 @@ func Reset(options Options) error {
 	if err != nil || txn == nil {
 		return err
 	}
+	if run.preparation != nil && txn.Kind == "ordinary" {
+		if err := run.finishPreparation(); err != nil {
+			return err
+		}
+	}
 	if err := run.cleanupInterruptedPlaintextSpool(txn); err != nil {
 		return fmt.Errorf("clean interrupted plaintext spool: %w", err)
 	}
@@ -75,7 +80,35 @@ func Reset(options Options) error {
 			return err
 		}
 	}
+	if run.preparation != nil && txn.Kind == "genesis" {
+		return run.resetInitialGenesis(txn)
+	}
 	return run.finishReset(txn)
+}
+
+func (run *runtime) resetInitialGenesis(txn *transaction) error {
+	if !txn.Resetting || txn.PushAttempted || txn.PushConfirmed {
+		return fmt.Errorf("initial publication cannot be safely reset")
+	}
+	head, exists, err := run.repo.HeadIfExists()
+	if err != nil {
+		return err
+	}
+	if exists {
+		if head != txn.LocalCommit {
+			return fmt.Errorf("local history changed during initial reset")
+		}
+		if err := run.repo.DeleteHead(head); err != nil {
+			return err
+		}
+	}
+	// Unlike resetting a published repository, returning to local preparation
+	// must retain FORMAT, recipients, ignore, and topology rather than remove
+	// all seven worktree files for an empty base.
+	if err := run.checkpoint("initial-reset-head-cleared"); err != nil {
+		return err
+	}
+	return run.clearTransactionFiles()
 }
 
 func (run *runtime) finishReset(txn *transaction) error {

@@ -18,7 +18,7 @@ import (
 type ClientFactory func(context.Context, localconfig.Mirror) (*objectstore.Client, error)
 
 const (
-	stateVersion             = 3
+	stateVersion             = 4
 	transactionFilename      = "transaction.json"
 	ledgerFilename           = "completion-ledger.json"
 	validatedAncestorFile    = "validated-ancestor.json"
@@ -109,6 +109,10 @@ func (options Options) transactionFilesPath() string {
 type InitRequest struct {
 	PublicKeys        [][]byte
 	RecoveryPublicKey []byte
+}
+
+type InitResult struct {
+	RepositoryUUID string
 }
 
 type SnapshotResult struct {

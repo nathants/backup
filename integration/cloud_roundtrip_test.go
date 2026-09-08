@@ -67,7 +67,12 @@ func runCloudRoundTrip(t *testing.T, config cloudContractConfig) {
 		t.Logf("%s %s:\n%s", config.name, name, output)
 		return output
 	}
-	genesis := outputField(t, command("init", "--recovery-public-key", hex.EncodeToString(public)), "commit")
+	if output := command("init", "--recovery-public-key", hex.EncodeToString(public)); outputField(t, output, "publication") != "local-only" || strings.Contains(output, "commit\t") {
+		t.Fatalf("initialization claimed publication: %s", output)
+	}
+	if refs := strings.TrimSpace(run(t, "", "git", "--git-dir", remote, "for-each-ref", "--format=%(objectname)")); refs != "" {
+		t.Fatalf("initialization changed the remote: %s", refs)
+	}
 	mtime := time.Unix(1_700_000_000, 123_456_789)
 	for _, name := range []string{"file with spaces", "duplicate"} {
 		path := filepath.Join(source, name)
@@ -82,6 +87,10 @@ func runCloudRoundTrip(t *testing.T, config cloudContractConfig) {
 	}
 	command("add")
 	first := outputField(t, command("commit"), "commit")
+	genesis := strings.TrimSpace(run(t, "", "git", "--git-dir", remote, "rev-list", "--max-parents=0", first))
+	if len(genesis) != 64 {
+		t.Fatalf("first publication lacks a single genesis: %s", genesis)
+	}
 	writeFile(t, filepath.Join(source, "later"), []byte("second revision\n"), 0o600)
 	command("add")
 	latest := outputField(t, command("commit"), "commit")

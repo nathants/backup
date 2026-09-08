@@ -28,7 +28,7 @@ import (
 const usageText = `usage: backup COMMAND [OPTIONS]
 
 commands:
-  init       initialize and publish a new repository
+  init       prepare a new local repository (no network publication)
   add        scan and stage a snapshot
   diff       show the staged snapshot diff
   commit    publish the staged transaction
@@ -173,7 +173,8 @@ func runInit(ctx context.Context, arguments []string, stdout, stderr io.Writer) 
 	if err != nil {
 		return err
 	}
-	return printSnapshotResult(stdout, result)
+	_, err = fmt.Fprintf(stdout, "initialized\t%s\npublication\tlocal-only\n", result.RepositoryUUID)
+	return err
 }
 
 func runAdd(ctx context.Context, arguments []string, stdout, stderr io.Writer) error {

@@ -33,8 +33,20 @@ type WorktreeStatus struct {
 }
 
 func Initialize(directory, remote, branch string) (*Managed, error) {
-	if directory == "" || remote == "" || branch == "" || strings.HasPrefix(branch, "-") || strings.ContainsAny(branch, "\x00\r\n") {
-		return nil, fmt.Errorf("metadata directory, remote, and branch are required")
+	if remote == "" {
+		return nil, fmt.Errorf("metadata remote is required")
+	}
+	return initialize(directory, remote, branch)
+}
+
+// InitializeLocal prepares an unborn SHA-256 repository without a remote.
+func InitializeLocal(directory string) (*Managed, error) {
+	return initialize(directory, "", "main")
+}
+
+func initialize(directory, remote, branch string) (*Managed, error) {
+	if directory == "" || branch == "" || strings.HasPrefix(branch, "-") || strings.ContainsAny(branch, "\x00\r\n") {
+		return nil, fmt.Errorf("metadata directory and branch are required")
 	}
 	if err := os.MkdirAll(filepath.Dir(directory), 0o700); err != nil {
 		return nil, err
@@ -79,7 +91,9 @@ func Initialize(directory, remote, branch string) (*Managed, error) {
 		{"config", "core.symlinks", "true"},
 		{"config", "advice.detachedHead", "false"},
 		{"config", "status.showUntrackedFiles", "no"},
-		{"remote", "add", "origin", remote},
+	}
+	if remote != "" {
+		settings = append(settings, []string{"remote", "add", "origin", remote})
 	}
 	for _, arguments := range settings {
 		if _, err := repo.run(nil, 64<<10, arguments...); err != nil {
@@ -90,10 +104,28 @@ func Initialize(directory, remote, branch string) (*Managed, error) {
 	if err := atomicWriteFile(excludePath, []byte("/"+stateDirectoryName+"/\n"), 0o600); err != nil {
 		return nil, err
 	}
+	if err := repo.syncSetup(); err != nil {
+		return nil, err
+	}
 	return repo, nil
 }
 
 func OpenManaged(directory, remote, branch string) (*Managed, error) {
+	repo, err := OpenLocal(directory, branch)
+	if err != nil {
+		return nil, err
+	}
+	configured, err := repo.run(nil, 64<<10, "remote", "get-url", "origin")
+	if err != nil || strings.TrimSpace(string(configured)) != remote {
+		return nil, fmt.Errorf("metadata Git remote does not match its trusted pin")
+	}
+	repo.Remote = remote
+	return repo, nil
+}
+
+// OpenLocal checks the local repository without accepting any network authority.
+// Only unpublished preparation may use this in place of OpenManaged.
+func OpenLocal(directory, branch string) (*Managed, error) {
 	fd, err := unix.Open(directory, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
 	if err != nil {
 		return nil, fmt.Errorf("open metadata directory without following symlinks: %w", err)
@@ -101,7 +133,7 @@ func OpenManaged(directory, remote, branch string) (*Managed, error) {
 	if err := unix.Close(fd); err != nil {
 		return nil, err
 	}
-	repo := &Managed{Directory: directory, Remote: remote, Branch: branch}
+	repo := &Managed{Directory: directory, Branch: branch}
 	objectFormat, err := repo.run(nil, 1024, "rev-parse", "--show-object-format")
 	if err != nil {
 		return nil, fmt.Errorf("inspect metadata Git object format: %w", err)
@@ -109,11 +141,44 @@ func OpenManaged(directory, remote, branch string) (*Managed, error) {
 	if strings.TrimSpace(string(objectFormat)) != "sha256" {
 		return nil, fmt.Errorf("metadata repository is not Git SHA-256")
 	}
-	configured, err := repo.run(nil, 64<<10, "remote", "get-url", "origin")
-	if err != nil || strings.TrimSpace(string(configured)) != remote {
-		return nil, fmt.Errorf("metadata Git remote does not match its trusted pin")
-	}
 	return repo, nil
+}
+
+// BindInitialRemote completes local configuration after the caller durably pins
+// the first publication destination. It never replaces an existing origin.
+func (repo *Managed) BindInitialRemote(remote, branch string) error {
+	if remote == "" || branch == "" {
+		return fmt.Errorf("initial remote and branch are required")
+	}
+	remotes, err := repo.run(nil, 64<<10, "remote")
+	if err != nil {
+		return err
+	}
+	switch strings.TrimSpace(string(remotes)) {
+	case "":
+		refs, err := repo.run(nil, 64<<10, "for-each-ref", "--format=%(refname)", "refs/heads/")
+		if err != nil {
+			return err
+		}
+		if len(bytes.TrimSpace(refs)) != 0 {
+			return fmt.Errorf("cannot bind a remote to existing local history")
+		}
+		if _, err := repo.run(nil, 1024, "remote", "add", "origin", remote); err != nil {
+			return err
+		}
+	case "origin":
+		configured, err := repo.run(nil, 64<<10, "remote", "get-url", "origin")
+		if err != nil || strings.TrimSpace(string(configured)) != remote {
+			return fmt.Errorf("metadata Git remote does not match its trusted pin")
+		}
+	default:
+		return fmt.Errorf("unexpected remotes in initial repository")
+	}
+	if _, err := repo.run(nil, 1024, "symbolic-ref", "HEAD", "refs/heads/"+branch); err != nil {
+		return err
+	}
+	repo.Remote, repo.Branch = remote, branch
+	return repo.syncSetup()
 }
 
 func (repo *Managed) CreateCommit(base string, blobs map[string][]byte, message string) (string, error) {
@@ -734,4 +799,23 @@ func (repo *Managed) runReader(input io.Reader, limit int64, identity bool, argu
 		return nil, fmt.Errorf("git %s output exceeded %d bytes", arguments[0], limit)
 	}
 	return append([]byte(nil), stdout.buffer.Bytes()...), nil
+}
+
+// Git's core.fsync covers objects/references, not initial config or the unborn
+// symbolic HEAD. Flush the small setup we create before durable state relies on
+// it. This is not a recursive fsync of repository history.
+func (repo *Managed) syncSetup() error {
+	for _, name := range []string{"HEAD", "config", "info/exclude", "info", "objects/info", "objects/pack", "objects", "refs/heads", "refs/tags", "refs", "."} {
+		path := filepath.Join(repo.Directory, ".git", name)
+		fd, err := unix.Open(path, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
+		if err != nil {
+			return fmt.Errorf("open Git setup %q for fsync: %w", name, err)
+		}
+		err = unix.Fsync(fd)
+		closeErr := unix.Close(fd)
+		if err != nil || closeErr != nil {
+			return fmt.Errorf("fsync Git setup %q: %w", name, errors.Join(err, closeErr))
+		}
+	}
+	return syncDirectory(repo.Directory)
 }

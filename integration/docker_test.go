@@ -296,9 +296,11 @@ func TestDockerRealClientTwoMirrorBackupSyncRestoreAndRecover(t *testing.T) {
 	}
 
 	initOutput := backupCommand("init", "--recovery-public-key", hex.EncodeToString(publicKey))
-	genesis := outputField(t, initOutput, "commit")
-	if len(genesis) != 64 || !strings.Contains(initOutput, "complete-mirror\ta\n") || !strings.Contains(initOutput, "complete-mirror\tb\n") {
-		t.Fatalf("unexpected init output:\n%s", initOutput)
+	if outputField(t, initOutput, "publication") != "local-only" || strings.Contains(initOutput, "complete-mirror\t") || strings.Contains(initOutput, "commit\t") {
+		t.Fatalf("init claimed remote publication:\n%s", initOutput)
+	}
+	if refs := strings.TrimSpace(run(t, "", "git", "--git-dir", remote, "for-each-ref", "--format=%(objectname)")); refs != "" {
+		t.Fatalf("init created remote history: %s", refs)
 	}
 	writeFile(t, filepath.Join(source, ".backup", "ignore"), []byte("^\\./\\.backup-config$\n"), 0o644)
 	if err := os.Mkdir(filepath.Join(source, "dir"), 0o700); err != nil {
@@ -328,7 +330,8 @@ func TestDockerRealClientTwoMirrorBackupSyncRestoreAndRecover(t *testing.T) {
 	secondMirror.stop()
 	commitOutput := backupCommand("commit")
 	firstCommit := outputField(t, commitOutput, "commit")
-	if firstCommit == genesis || !strings.Contains(commitOutput, "complete-mirror\ta\n") || !strings.Contains(commitOutput, "lagging-mirror\tb\n") {
+	genesis := strings.TrimSpace(run(t, "", "git", "--git-dir", remote, "rev-list", "--max-parents=0", firstCommit))
+	if len(genesis) != 64 || firstCommit == genesis || !strings.Contains(commitOutput, "complete-mirror\ta\n") || !strings.Contains(commitOutput, "lagging-mirror\tb\n") {
 		t.Fatalf("unexpected one-mirror commit output:\n%s", commitOutput)
 	}
 	secondMirror.start()
@@ -574,7 +577,7 @@ func TestDockerWholeRootClientContainerAgainstSeparateServer(t *testing.T) {
 	}
 
 	initOutput := runClient(withCommon("init", "--recovery-public-key", hex.EncodeToString(publicKey))...)
-	if len(outputField(t, initOutput, "commit")) != 64 {
+	if outputField(t, initOutput, "publication") != "local-only" || strings.Contains(initOutput, "commit\t") {
 		t.Fatalf("unexpected whole-root init output:\n%s", initOutput)
 	}
 	ignore := `printf '%s\n' '^\./(\.dockerenv|etc|go|metadata\.git|out|restore|src|test-config|usr|var)(/|$)' > /.backup/ignore && chmod 0644 /.backup/ignore`

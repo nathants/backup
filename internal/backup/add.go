@@ -30,6 +30,9 @@ func Add(ctx context.Context, options Options, allowEmpty bool) (AddResult, erro
 		return AddResult{}, err
 	}
 	defer func() { _ = run.close() }()
+	if run.preparation != nil {
+		return run.addInitial(ctx, allowEmpty)
+	}
 	if err := run.cleanupAddBuilds(); err != nil {
 		return AddResult{}, fmt.Errorf("clean stale add workspace: %w", err)
 	}
@@ -390,6 +393,10 @@ func configurationLimits(name string) format.Limits {
 }
 
 func readRegularNoFollow(path string, maximum int64) ([]byte, error) {
+	return readRegularMode(path, maximum, 0o644)
+}
+
+func readRegularMode(path string, maximum int64, mode os.FileMode) ([]byte, error) {
 	if maximum <= 0 {
 		return nil, fmt.Errorf("invalid regular-file byte limit")
 	}
@@ -400,8 +407,8 @@ func readRegularNoFollow(path string, maximum int64) ([]byte, error) {
 	file := os.NewFile(uintptr(fd), path)
 	defer func() { _ = file.Close() }()
 	info, err := file.Stat()
-	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0o644 || info.Size() < 0 || info.Size() > maximum {
-		return nil, fmt.Errorf("file must be a regular mode-0644 blob of at most %d bytes", maximum)
+	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != mode || info.Size() < 0 || info.Size() > maximum {
+		return nil, fmt.Errorf("file must be a regular mode-%04o blob of at most %d bytes", mode, maximum)
 	}
 	reader := io.LimitReader(file, info.Size()+1)
 	data, err := io.ReadAll(reader)
@@ -435,6 +442,9 @@ func DiffCandidate(options Options, visit func(Diff) error) (uint64, error) {
 	txn, err := run.loadTransaction()
 	if err != nil || txn == nil {
 		return 0, err
+	}
+	if run.preparation != nil && (txn.Kind == "initial" || txn.Kind == "genesis") {
+		return run.diffInitial(txn, visit)
 	}
 	history, err := (repository.Validator{Repo: run.repo.Directory, Limits: format.DefaultLimits()}).ValidateHistory(txn.BaseCommit)
 	if err != nil {

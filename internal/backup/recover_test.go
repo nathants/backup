@@ -54,7 +54,7 @@ func recoveryTestChain(t *testing.T, length int) (*integrationHarness, [][]manif
 	// Small multipart fixtures exercise part accounting without hundreds of PUTs.
 	harness.options.MetadataPartSize = 1024
 	ctx := context.Background()
-	genesis, err := Init(ctx, harness.options, InitRequest{RecoveryPublicKey: harness.publicKey})
+	genesis, err := initializePublished(ctx, harness.options, InitRequest{RecoveryPublicKey: harness.publicKey})
 	if err != nil {
 		t.Fatal(err)
 	}

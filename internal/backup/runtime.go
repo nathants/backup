@@ -31,6 +31,7 @@ type runtime struct {
 	clients                    map[string]*objectstore.Client
 	candidateState             *repository.State
 	capturedCandidateValidated bool
+	preparation                *preparation
 }
 
 func openRuntime(options Options, requireRepository bool) (*runtime, error) {
@@ -38,13 +39,31 @@ func openRuntime(options Options, requireRepository bool) (*runtime, error) {
 	if err != nil {
 		return nil, err
 	}
-	config, err := localconfig.Load(normalized.ConfigPath)
-	if err != nil {
-		return nil, err
-	}
-	run := &runtime{options: normalized, config: config}
+	var preparation *preparation
 	if requireRepository {
-		repo, err := repository.OpenManaged(normalized.repositoryPath(), config.GitRemote, config.Branch)
+		preparation, err = readPreparation(normalized)
+		if err != nil {
+			return nil, err
+		}
+	}
+	config := localconfig.Config{Branch: "main"}
+	if preparation == nil || preparation.GitRemote != "" {
+		config, err = localconfig.Load(normalized.ConfigPath)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if preparation != nil && preparation.GitRemote != "" && (preparation.GitRemote != config.GitRemote || preparation.Branch != config.Branch) {
+		return nil, fmt.Errorf("first publication remote does not match its durable pin")
+	}
+	run := &runtime{options: normalized, config: config, preparation: preparation}
+	if requireRepository {
+		var repo *repository.Managed
+		if preparation != nil {
+			repo, err = repository.OpenLocal(normalized.repositoryPath(), config.Branch)
+		} else {
+			repo, err = repository.OpenManaged(normalized.repositoryPath(), config.GitRemote, config.Branch)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -53,6 +72,17 @@ func openRuntime(options Options, requireRepository bool) (*runtime, error) {
 		run.repo.ValidationCache = filepath.Join(run.options.statePath(), validatedAncestorFile)
 		if err := run.openStateAndLock(); err != nil {
 			return nil, err
+		}
+		current, err := readPreparation(normalized)
+		if err != nil || (current == nil) != (preparation == nil) || current != nil && *current != *preparation {
+			_ = run.close()
+			return nil, fmt.Errorf("local preparation changed while acquiring the lock; retry: %v", err)
+		}
+		if preparation != nil && preparation.GitRemote != "" {
+			if err := run.repo.BindInitialRemote(config.GitRemote, config.Branch); err != nil {
+				_ = run.close()
+				return nil, err
+			}
 		}
 	}
 	return run, nil
@@ -196,20 +226,23 @@ func validateTransaction(txn transaction, candidate *repository.State) error {
 	if txn.Version != stateVersion {
 		return fmt.Errorf("unsupported state version %d", txn.Version)
 	}
-	if txn.Kind != "genesis" && txn.Kind != "ordinary" && txn.Kind != "repair" {
+	if txn.Kind != "initial" && txn.Kind != "genesis" && txn.Kind != "ordinary" && txn.Kind != "repair" {
 		return fmt.Errorf("invalid transaction kind %q", txn.Kind)
 	}
-	if txn.Kind == "genesis" {
+	if txn.Kind == "genesis" && (txn.Plan == nil || txn.Capture != nil) {
+		return fmt.Errorf("genesis publication must retain the initial add plan")
+	}
+	if txn.Kind == "initial" && (txn.Plan == nil || txn.Capture != nil || len(txn.CandidateFiles) != 0) {
+		return fmt.Errorf("initial preparation contains publication progress")
+	}
+	if txn.Kind == "initial" || txn.Kind == "genesis" {
 		if txn.BaseCommit != "" {
 			return fmt.Errorf("genesis transaction has a base commit")
 		}
 	} else if !isCommitID(txn.BaseCommit) {
 		return fmt.Errorf("transaction has invalid base commit")
 	}
-	if txn.Plan != nil && len(txn.CandidateFiles) == 0 {
-		if txn.Kind != "ordinary" || len(txn.DataParts) != 0 || txn.LocalCommit != "" || txn.LocalAccepted || txn.Metadata != nil || txn.PushAttempted || txn.PushConfirmed || len(txn.Mirrors) != 0 {
-			return fmt.Errorf("add plan contains commit progress")
-		}
+	if txn.Plan != nil {
 		if txn.Plan.Entries < 0 || txn.Plan.Entries == 0 && !txn.Plan.AllowEmpty || txn.Plan.IndexFile.RelativePath == "" {
 			return fmt.Errorf("invalid or unexpectedly empty add plan")
 		}
@@ -220,6 +253,11 @@ func validateTransaction(txn transaction, candidate *repository.State) error {
 			if txn.Plan.ConfigFiles[name].RelativePath == "" {
 				return fmt.Errorf("add plan lacks configuration %q", name)
 			}
+		}
+	}
+	if txn.Plan != nil && len(txn.CandidateFiles) == 0 {
+		if txn.Kind != "ordinary" && txn.Kind != "initial" || len(txn.DataParts) != 0 || txn.LocalCommit != "" || txn.LocalAccepted || txn.Metadata != nil || txn.PushAttempted || txn.PushConfirmed || len(txn.Mirrors) != 0 {
+			return fmt.Errorf("add plan contains commit progress")
 		}
 		if txn.Capture != nil {
 			if txn.Capture.NextPlan < 0 || txn.Capture.NextPlan > txn.Plan.Entries || txn.Capture.Mirrors == nil || txn.Capture.WarningSummary && txn.Capture.Warnings <= txn.Capture.WarningsShown {
@@ -584,6 +622,13 @@ func (run *runtime) historyValidator() repository.Validator {
 }
 
 func (run *runtime) validatedHead(fetch bool) (repository.ValidatedCommit, *repository.History, error) {
+	if run.preparation != nil && run.preparation.GitRemote == "" {
+		return repository.ValidatedCommit{}, nil, fmt.Errorf("repository is local-only; run add and commit to publish the first backup")
+	}
+	if run.preparation != nil {
+		// First publication never adopts an unrelated remote's history.
+		fetch = false
+	}
 	if fetch {
 		if err := run.repo.Fetch(); err != nil {
 			return repository.ValidatedCommit{}, nil, fmt.Errorf("fetch metadata: %w", err)

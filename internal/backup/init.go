@@ -4,66 +4,29 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"sort"
 
 	"backup/internal/format"
-	"backup/internal/localconfig"
+	"backup/internal/objectstore"
 	"backup/internal/repository"
 	"golang.org/x/sys/unix"
 )
 
-func Init(ctx context.Context, options Options, request InitRequest) (SnapshotResult, error) {
+func Init(ctx context.Context, options Options, request InitRequest) (InitResult, error) {
 	normalized, err := options.normalized()
 	if err != nil {
-		return SnapshotResult{}, err
+		return InitResult{}, err
 	}
 	initializationLock, err := acquireInitializationLock(normalized.Root)
 	if err != nil {
-		return SnapshotResult{}, err
+		return InitResult{}, err
 	}
 	defer func() { _ = initializationLock.Close() }()
-	config, err := localconfig.Load(normalized.ConfigPath)
-	if err != nil {
-		return SnapshotResult{}, err
-	}
-	repositoryPath := normalized.repositoryPath()
-initialize:
-	if _, statErr := os.Stat(filepath.Join(repositoryPath, ".git")); statErr == nil {
-		run, err := openRuntime(normalized, true)
-		if err != nil {
-			return SnapshotResult{}, err
-		}
-		defer func() { _ = run.close() }()
-		txn, err := run.loadTransaction()
-		if err != nil {
-			return SnapshotResult{}, err
-		}
-		if txn == nil {
-			_, exists, headErr := run.repo.HeadIfExists()
-			if headErr != nil {
-				return SnapshotResult{}, headErr
-			}
-			if exists {
-				return SnapshotResult{}, fmt.Errorf("metadata repository already exists")
-			}
-			if err := run.close(); err != nil {
-				return SnapshotResult{}, err
-			}
-			if err := removeTreeNoFollow(repositoryPath); err != nil {
-				return SnapshotResult{}, fmt.Errorf("remove incomplete empty metadata repository: %w", err)
-			}
-			goto initialize
-		}
-		if txn.Kind != "genesis" {
-			return SnapshotResult{}, fmt.Errorf("metadata repository already exists")
-		}
-		return run.commitTransaction(ctx, txn)
-	} else if !os.IsNotExist(statErr) {
-		return SnapshotResult{}, statErr
+	if err := ctx.Err(); err != nil {
+		return InitResult{}, err
 	}
 	if len(request.RecoveryPublicKey) != 32 {
-		return SnapshotResult{}, fmt.Errorf("a 32-byte permanent recovery public key is required")
+		return InitResult{}, fmt.Errorf("a 32-byte permanent recovery public key is required")
 	}
 	keys := cloneKeys(request.PublicKeys)
 	found := false
@@ -78,24 +41,16 @@ initialize:
 	sort.Slice(keys, func(left, right int) bool { return string(keys[left]) < string(keys[right]) })
 	publicKeyBytes, err := format.MarshalPublicKeys(keys)
 	if err != nil {
-		return SnapshotResult{}, err
+		return InitResult{}, err
 	}
 	uuid, err := randomUUID()
 	if err != nil {
-		return SnapshotResult{}, err
+		return InitResult{}, err
 	}
 	repositoryFormat := format.NewRepositoryFormat(uuid, format.RecoveryFingerprint(request.RecoveryPublicKey))
 	formatBytes, err := repositoryFormat.MarshalText()
 	if err != nil {
-		return SnapshotResult{}, err
-	}
-	mirrors := make([]format.Mirror, len(config.Mirrors))
-	for index, mirror := range config.Mirrors {
-		mirrors[index] = mirror.Canonical
-	}
-	mirrorBytes, err := format.MarshalMirrors(mirrors)
-	if err != nil {
-		return SnapshotResult{}, err
+		return InitResult{}, err
 	}
 	blobs := map[string][]byte{
 		"FORMAT":      formatBytes,
@@ -104,31 +59,33 @@ initialize:
 		"packs.tsv":   {},
 		"ignore":      {},
 		".publickeys": publicKeyBytes,
-		"mirrors.tsv": mirrorBytes,
+		"mirrors.tsv": {},
 	}
-	repo, err := repository.Initialize(repositoryPath, config.GitRemote, config.Branch)
+	// InitializeLocal requires an absent or empty real directory. On failure,
+	// preserve setup residue for diagnosis; never remove ambiguous local state.
+	repo, err := repository.InitializeLocal(normalized.repositoryPath())
 	if err != nil {
-		return SnapshotResult{}, err
+		return InitResult{}, err
 	}
-	run := &runtime{options: normalized, config: config, repo: repo}
+	run := &runtime{options: normalized, repo: repo}
 	if err := run.openStateAndLock(); err != nil {
-		return SnapshotResult{}, err
+		return InitResult{}, err
 	}
 	defer func() { _ = run.close() }()
-	if err := run.prepareTransactionFiles(); err != nil {
-		return SnapshotResult{}, err
+	if err := repo.Materialize(blobs); err != nil {
+		return InitResult{}, err
 	}
-	txn := newTransaction("genesis", "", normalized.Now().UTC())
-	if err := run.stageCandidateBlobs(&txn, blobs); err != nil {
-		return SnapshotResult{}, err
+	if err := run.checkpoint("initialization-prepared"); err != nil {
+		return InitResult{}, err
 	}
-	if err := run.saveTransaction(&txn); err != nil {
-		return SnapshotResult{}, err
+	preparation := preparation{Version: 1, FormatHash: objectstore.HashBytes(formatBytes).BLAKE2b}
+	if err := run.store.Write(preparationFilename, &preparation); err != nil {
+		return InitResult{}, err
 	}
-	if err := run.checkpoint("genesis-transaction-recorded"); err != nil {
-		return SnapshotResult{}, err
+	if err := run.checkpoint("initialization-completed"); err != nil {
+		return InitResult{}, err
 	}
-	return run.commitTransaction(ctx, &txn)
+	return InitResult{RepositoryUUID: uuid}, nil
 }
 
 func acquireInitializationLock(root string) (*os.File, error) {
