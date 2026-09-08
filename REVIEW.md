@@ -102,17 +102,19 @@ Admin explicitly chose configuration-only local crash-resumability hardening and
 
 **Validation:** `internal/repository/durability_test.go` first reproduced disabled settings and absent Git hardware-flush events, then passed with the fix. Real Git 2.55.0 Trace2 confirms flush calls for newly written loose objects and references despite repository-local disabling settings; configuration tests also cover hostile ambient overrides. Compatibility tests use version-response fixtures for minimum/vendor/future versions, old/malformed/missing Git, bounded output, warning/nonzero-exit failures, and refusal before bare initialization. A real Git lock conflict remains a nonzero write error and leaves the reference unpublished. The full repository package and `make check` (all mandatory linters, vet, coverage, and race tests) passed on 2026-09-05; final check evidence is `shell/f414b927d452d1bca3b442301ea903ba/stdout` beneath the evidence directory above. No fsync-error injection or power-loss experiment is claimed.
 
-### 5. Recovery's resource bounds stop at the Git subprocess boundary
+### 5. [done] Recovery's resource bounds stop at the Git subprocess boundary
 
 **Location:** `internal/backup/recover.go:51-79,573-585`; `internal/backup/metadata.go:269-298,406-421`; `internal/repository/git.go:215-229`.
 
 Manifest sizes and encrypted/plaintext bundle bytes are bounded, but the decrypted Git pack is passed to `git fetch` and `git fsck` before canonical blob/tree/history validation. The runner uses `exec.Command` without a context deadline or subprocess memory/disk/CPU enforcement. Bounding captured stdout is not a bound on Git's object inflation, delta reconstruction, object counts, or internal allocations.
 
-`recoveryWorkspaceRequirement` also estimates quarantine storage from encrypted bundle sizes and part counts. Those quantities do not conservatively bound the work/inodes needed to unpack and inspect arbitrary compressed Git objects. A public recipient key is enough for a compromised writer to construct decryptable hostile input; authenticated encryption alone does not make the pack trustworthy.
+`recoveryWorkspaceRequirement` estimates quarantine storage from encrypted bundle sizes and part counts, not enforced capacity. Git's bundle transport retains compressed packs rather than extracting every object uncompressed; indexes, thin-pack reconstruction, temporary copies, and history-validation files still consume additional storage. Memory/CPU exhaustion is the clearest hostile-input risk. A compromised writer with a recipient public key can construct decryptable hostile input without the recovery secret. Checksums and encryption authentication reject ordinary corruption but do not prove benign intent.
 
-**Evidence:** static boundary analysis; no resource-exhaustion payload was executed. Existing manifest/parser limits remain useful but do not cover this earlier stage.
+**Accepted operational responsibility (2026-09-05):** Admin explicitly assigns aggregate resource containment to the operator. `NINA.md` now requires an appropriately resource-bounded environment when restoring potentially malicious backups or recovering/importing suspect metadata, including `backup recover --list`, which imports candidate chains. The environment must cover the whole command and descendants, temporary work, and destination storage; `--tip`, private directories, and free-space estimates do not substitute for enforced limits. Existing integrity validation and safe-publication requirements remain unchanged.
 
-**Direction:** enforce explicit resource budgets for untrusted Git import/fsck and cancellation of their descendants, including a bounded/quota-controlled quarantine. Validate resource-relevant object properties as early as practical. Add a safely bounded compressed-pack/delta stress fixture proving rejection before resource exhaustion.
+`[done]` records this accepted responsibility, **not implementation or proof of binary-enforced containment**. No built-in sandbox, runtime containment enforcement, automatic provisioning, or installation is added. The implementation limitation remains; operational budgets must accommodate legitimate large histories. The original suggestion to add internal resource enforcement and a stress framework is superseded by this decision.
+
+**Evidence:** read-only call-path review and Git/Linux source/documentation cross-checks; no resource-exhaustion payload or containment acceptance test was executed. This resolution changes governing documentation and review status only.
 
 ### 6. The R2 lock contract checks the probe prefix, not the backup namespace
 
