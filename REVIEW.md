@@ -48,7 +48,7 @@ A process with write access to that parent can replace the temporary entry while
 
 **Validation:** `TestRestoreRegularPublicationRejectsChangedTemporaryEntry` first reproduced publication of substituted symlinks/regular files and outside timestamp modification. All eight cases now pass, including positive controls and both overwrite modes; ten race-detector repetitions also pass. `TestRestoreHelpStatesExclusiveDestinationRequirement` and the actual `go run ./cmd/backup restore --help` output confirm the visible safety requirement. Full `make check` passed on 2026-09-04; evidence is `shell/befc54689178ebfda051dd54c7284255/stdout` beneath the evidence directory above.
 
-### 2. Fetching a newer revision silently destroys local configuration edits
+### 2. [done] Fetching a newer revision silently destroys local configuration edits
 
 **Location:** `internal/backup/runtime.go:578-613`; `internal/backup/add.go:41-61`.
 
@@ -59,6 +59,10 @@ This is more than an editor inconvenience: a locally added exclusion can disappe
 **Reproduced:** `TestReviewFetchPreservesIgnore` advances the remote through a valid descendant, locally writes `^\./secret$`, and runs `Add`. It succeeds, replaces the local ignore file with the remote version, and includes `./secret` in `DiffCandidate`.
 
 **Direction:** inspect and preserve/refuse dirty state against the current local revision before materializing fetched metadata. Do not silently merge security-sensitive configuration or restore remote bytes over operator edits. Test remote advancement together with mutable and unrelated dirty files.
+
+**Resolution:** the shared fetched-tip path now checks the existing validated local-head worktree status before calling `ApplyCommit`. Dirty paths are reported with escaped quoting, with no materialization intent or local branch update. This protects all callers of that path without changing commit/reset materialization or the normal mutable-configuration workflow when the remote is unchanged.
+
+**Validation:** regressions in `internal/backup/fetch_test.go` first reproduced the overwrite and now pass for each mutable configuration file, a catalog edit, missing/type/mode changes, and an unrelated untracked file. Actual `Add` coverage preserves an existing plan and exclusion after refusal; actual `Find` coverage rejects dirty state and accepts a clean retry against a differing remote tree. Full `make check` passed on 2026-09-05, including the new tests under the race detector; evidence is `shell/ae56881c609b2ffa1170bd53316d40fc/stdout` beneath the evidence directory above.
 
 ### 3. A mirror proven corrupt remains eligible for later successful backups
 

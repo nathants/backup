@@ -605,6 +605,17 @@ func (run *runtime) validatedHead(fetch bool) (repository.ValidatedCommit, *repo
 				_ = history.Close()
 				return repository.ValidatedCommit{}, nil, fmt.Errorf("local metadata head %s is not an ancestor of validated remote head %s", localHead, remote.CommitID)
 			}
+			// Compare with the local base, not the fetched tree: a clean local
+			// checkout can legitimately differ from the newer remote revision.
+			status, err := run.repo.Status()
+			if err != nil {
+				_ = history.Close()
+				return repository.ValidatedCommit{}, nil, fmt.Errorf("inspect local metadata before fast-forward: %w", err)
+			}
+			if !status.Clean {
+				_ = history.Close()
+				return repository.ValidatedCommit{}, nil, fmt.Errorf("cannot fast-forward metadata over local changes %q; save edits separately and restore a clean local worktree before retrying", status.Paths)
+			}
 			if err := run.repo.ApplyCommit(remote.CommitID, localHead); err != nil {
 				_ = history.Close()
 				return repository.ValidatedCommit{}, nil, err
