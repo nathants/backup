@@ -17,11 +17,12 @@ import (
 type EventKind string
 
 const (
-	EventMountEntered   EventKind = "mount-entered"
-	EventGitIgnored     EventKind = "git-ignored"
-	EventSpecialSkipped EventKind = "special-skipped"
-	EventBrokenSymlink  EventKind = "broken-symlink-skipped"
-	EventOutsideSymlink EventKind = "outside-symlink-skipped"
+	EventMountEntered      EventKind = "mount-entered"
+	EventGitIgnored        EventKind = "git-ignored"
+	EventGitIgnoreFallback EventKind = "git-ignore-untracked-fallback"
+	EventSpecialSkipped    EventKind = "special-skipped"
+	EventBrokenSymlink     EventKind = "broken-symlink-skipped"
+	EventOutsideSymlink    EventKind = "outside-symlink-skipped"
 )
 
 type Event struct {
@@ -121,7 +122,7 @@ func (root *Root) Walk(ignore format.Ignore, reporter Reporter, visit func(*File
 	return root.walk(ignore, reporter, visit)
 }
 
-func (root *Root) walk(ignore format.Ignore, reporter Reporter, visit func(*File, format.IndexEntry) error) (Result, error) {
+func (root *Root) walk(ignore format.Ignore, reporter Reporter, visit func(*File, format.IndexEntry) error) (_ Result, returnErr error) {
 	if root == nil || root.fd < 0 {
 		return Result{}, fmt.Errorf("backup root is closed")
 	}
@@ -129,7 +130,10 @@ func (root *Root) walk(ignore format.Ignore, reporter Reporter, visit func(*File
 	if err != nil {
 		return Result{}, err
 	}
-	defer gitIgnore.close()
+	defer func() { returnErr = errors.Join(returnErr, gitIgnore.close()) }()
+	if gitIgnore != nil && gitIgnore.fallback {
+		report(reporter, Event{Kind: EventGitIgnoreFallback, Path: "./"})
+	}
 	result := Result{}
 	if err := root.scanDirectory(root.fd, "", 0, ignore, gitIgnore, reporter, &result, visit); err != nil {
 		return Result{}, err
@@ -159,12 +163,20 @@ func (root *Root) scanDirectory(directoryFD int, relative string, parentMount ui
 		if err != nil {
 			return err
 		}
-		if found {
+		if found || gitRules == nil {
+			previous := gitRules
 			gitRules, err = startGitIgnore(directoryFD, absolute)
 			if err != nil {
 				return err
 			}
-			defer gitRules.close()
+			gitRules.parent = previous
+			defer func() { returnErr = errors.Join(returnErr, gitRules.close()) }()
+			if gitRules.fallback {
+				report(reporter, Event{Kind: EventGitIgnoreFallback, Path: displayPath(relative)})
+			}
+		}
+		if err := checkDirectoryIgnore(directoryFD); err != nil {
+			return fmt.Errorf("read .gitignore in %q: %w", absolute, err)
 		}
 	}
 	// Dup shares the directory offset and would exhaust later walks of root.fd.
@@ -201,6 +213,9 @@ func (root *Root) scanDirectory(directoryFD int, relative string, parentMount ui
 				return fmt.Errorf("stat source %q: %w", indexPath, err)
 			}
 			isDirectory := stat.Mode&unix.S_IFMT == unix.S_IFDIR
+			if gitRules.ownsWorkspace(filepath.Join(root.Path, childRelative)) {
+				continue
+			}
 			gitIgnored, err := gitRules.match(filepath.Join(root.Path, childRelative), isDirectory)
 			if err != nil {
 				return err

@@ -34,9 +34,11 @@ cat /private/keys/alice.public > /data/.backup/.publickeys
 ./backup commit --root /data
 ```
 
-`add` fixes the selected paths; `commit` captures their current content. Git-ignored
-files are skipped, but non-ignored untracked work is included. The backup ignore
-file contains Go regular expressions, not Git patterns.
+`add` fixes the selected paths; `commit` captures their current content. Git ignore
+rules apply even outside repositories. Incomplete Git metadata produces a warning
+and pattern-only matching, without tracked-file exceptions. Non-ignored untracked
+work is included. The backup ignore file contains Go regular expressions, not Git
+patterns.
 
 Configure the trusted remote and mirrors before the first commit. Fields below are
 separated by literal tabs; credentials stay in local AWS shared-credential profiles.

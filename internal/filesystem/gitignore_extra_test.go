@@ -54,15 +54,11 @@ func TestWalkGitIgnoreGitfileAndLiteralNames(t *testing.T) {
 }
 
 func TestWalkGitIgnoreFailuresAndCleanup(t *testing.T) {
-	for _, kind := range []string{"corrupt-marker", "marker-symlink", "bad-config", "oversized-pattern", "callback-error"} {
+	for _, kind := range []string{"marker-symlink", "bad-config", "oversized-pattern", "callback-error"} {
 		t.Run(kind, func(t *testing.T) {
 			dir := t.TempDir()
 			gitFixture(t, dir, "init", "-q")
 			switch kind {
-			case "corrupt-marker":
-				if err := os.Remove(filepath.Join(dir, ".git", "HEAD")); err != nil {
-					t.Fatal(err)
-				}
 			case "marker-symlink":
 				if err := os.Rename(filepath.Join(dir, ".git"), filepath.Join(dir, "actual")); err != nil {
 					t.Fatal(err)

@@ -18,18 +18,25 @@ import (
 // matcher in Git, without a process per path or an in-memory path catalog.
 // Unlike metadata Git commands, this intentionally honors user ignore config.
 type gitIgnore struct {
-	command *exec.Cmd
-	input   io.WriteCloser
-	output  *bufio.Reader
-	base    string
-	stderr  *gitIgnoreDiagnostic
+	command   *exec.Cmd
+	input     io.WriteCloser
+	output    *bufio.Reader
+	base      string
+	stderr    *gitIgnoreDiagnostic
+	workspace string
+	parent    *gitIgnore
+	fallback  bool
 }
 
-type gitIgnoreDiagnostic struct{ data []byte }
+type gitIgnoreDiagnostic struct {
+	data     []byte
+	overflow bool
+}
 
 func (diagnostic *gitIgnoreDiagnostic) Write(data []byte) (int, error) {
 	count := min(len(data), (4<<10)-len(diagnostic.data))
 	diagnostic.data = append(diagnostic.data, data[:count]...)
+	diagnostic.overflow = diagnostic.overflow || count < len(data)
 	return len(data), nil
 }
 
@@ -73,7 +80,10 @@ func inheritedGitIgnore(directoryFD int, path string) (*gitIgnore, error) {
 		found, err := hasGitMarker(fd, parent)
 		var ignore *gitIgnore
 		if found && err == nil {
-			ignore, err = startGitIgnore(fd, parent)
+			err = checkInheritedGitIgnores(parent, path)
+			if err == nil {
+				ignore, err = startGitIgnore(fd, parent)
+			}
 		}
 		_ = unix.Close(fd)
 		if found || err != nil {
@@ -85,27 +95,72 @@ func inheritedGitIgnore(directoryFD int, path string) (*gitIgnore, error) {
 	}
 }
 
-func startGitIgnore(directoryFD int, path string) (*gitIgnore, error) {
+func startGitIgnore(directoryFD int, path string) (_ *gitIgnore, returnErr error) {
+	defer func() {
+		if returnErr != nil {
+			returnErr = fmt.Errorf("source Git ignore setup in %q: %w", path, returnErr)
+		}
+	}()
 	fd, err := unix.Openat(directoryFD, ".", unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
 	if err != nil {
 		return nil, err
 	}
 	dir := os.NewFile(uintptr(fd), path)
 	defer func() { _ = dir.Close() }()
-	command := exec.Command("git", "--no-pager", "--no-replace-objects",
-		"-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false",
-		"-c", "core.untrackedCache=false", "-c", "core.attributesFile=/dev/null",
-		"-c", "core.fsync=objects,reference", "-c", "core.fsyncMethod=fsync",
-		"-C", "/proc/self/fd/3", "--git-dir=.git", "--work-tree=.",
-		"check-ignore", "--stdin", "-z", "--verbose", "--non-matching")
-	command.ExtraFiles = []*os.File{dir}
-	command.Env = []string{"LC_ALL=C", "LANG=C", "GIT_FLUSH=1", "GIT_OPTIONAL_LOCKS=0", "GIT_TERMINAL_PROMPT=0", "GIT_NO_LAZY_FETCH=1", "GIT_ALLOW_PROTOCOL="}
-	for _, item := range os.Environ() {
-		name, _, _ := strings.Cut(item, "=")
-		switch name {
-		case "HOME", "PATH", "XDG_CONFIG_HOME", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM", "GIT_CONFIG_NOSYSTEM":
-			command.Env = append(command.Env, item)
+	metadata, err := sourceGitMetadata(dir)
+	if err != nil {
+		return nil, fmt.Errorf("inspect source Git metadata in %q: %w", path, err)
+	}
+	gitDirectory := ".git"
+	valid := false
+	if metadata != "" {
+		_, code, err := sourceGitOutput(dir, "", "rev-parse", "--resolve-git-dir", ".git")
+		if err != nil && code != 128 {
+			return nil, err
 		}
+		valid = code == 0
+	}
+	ignore := &gitIgnore{base: path}
+	defer func() {
+		if returnErr != nil {
+			returnErr = errors.Join(returnErr, ignore.close())
+		}
+	}()
+	if !valid {
+		ignore.workspace, err = makeIgnoreWorkspace()
+		if err != nil {
+			return nil, err
+		}
+		gitDirectory = ignore.workspace
+		ignore.fallback, err = hasGitMarker(directoryFD, path)
+		if err != nil {
+			return nil, err
+		}
+		if metadata != "" {
+			output, err := os.OpenFile(filepath.Join(ignore.workspace, "info", "exclude"), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+			if err != nil {
+				return nil, err
+			}
+			copyErr := copyIgnoreFile(metadata+"/info/exclude", output, maxGitIgnoreFileBytes)
+			if err := errors.Join(copyErr, output.Close()); err != nil {
+				return nil, err
+			}
+		}
+	} else {
+		exclude, _, err := sourceGitOutput(dir, gitDirectory, "rev-parse", "--path-format=absolute", "--git-path", "info/exclude")
+		if err != nil {
+			return nil, err
+		}
+		if err := copyIgnoreFile(exclude, io.Discard, maxGitIgnoreFileBytes); err != nil {
+			return nil, err
+		}
+	}
+	if err := checkGlobalIgnore(dir, gitDirectory); err != nil {
+		return nil, err
+	}
+	command := sourceGitCommand(dir, gitDirectory, "check-ignore", "--stdin", "-z", "--verbose", "--non-matching")
+	if !valid {
+		command.Args = append(command.Args, "--no-index")
 	}
 	stderr := &gitIgnoreDiagnostic{}
 	command.Stderr = stderr
@@ -123,31 +178,46 @@ func startGitIgnore(directoryFD int, path string) (*gitIgnore, error) {
 		_ = output.Close()
 		return nil, err
 	}
-	ignore := &gitIgnore{command: command, input: input, output: bufio.NewReaderSize(output, 64<<10), base: path, stderr: stderr}
-	// Probe even an empty worktree so corrupt Git metadata never silently
-	// disables ignore handling simply because no source paths are visited.
+	ignore.command, ignore.input, ignore.output, ignore.stderr = command, input, bufio.NewReaderSize(output, 64<<10), stderr
+	// Probe even an empty worktree. Ordinary Git/configuration errors are fatal,
+	// not a reason to retry with different exclusion semantics.
 	if _, err := ignore.match(path, false); err != nil {
-		ignore.close()
 		return nil, err
 	}
 	return ignore, nil
 }
 
-func (ignore *gitIgnore) close() {
-	if ignore == nil || ignore.command == nil {
-		return
+func (ignore *gitIgnore) close() error {
+	if ignore == nil {
+		return nil
 	}
-	// The stream was checked response-by-response. Termination avoids waiting on
-	// a damaged or stuck child during cleanup, including after a protocol error.
-	_ = ignore.input.Close()
-	_ = ignore.command.Process.Kill()
-	_ = ignore.command.Wait()
-	ignore.command = nil
+	if ignore.command != nil {
+		_ = ignore.input.Close()
+		_ = ignore.command.Process.Kill()
+		_ = ignore.command.Wait()
+		ignore.command = nil
+	}
+	if ignore.workspace != "" {
+		if err := os.RemoveAll(ignore.workspace); err != nil {
+			return err
+		}
+		ignore.workspace = ""
+	}
+	return nil
+}
+
+func (ignore *gitIgnore) ownsWorkspace(path string) bool {
+	for current := ignore; current != nil; current = current.parent {
+		if path == current.workspace {
+			return true
+		}
+	}
+	return false
 }
 
 func (ignore *gitIgnore) failure(err error) error {
-	ignore.close() // Wait joins the bounded stderr writer before reading it.
-	return fmt.Errorf("source Git ignore check in %q: %w: %s", ignore.base, err, strings.TrimSpace(string(ignore.stderr.data)))
+	closeErr := ignore.close() // Wait joins the bounded stderr writer before reading it.
+	return errors.Join(fmt.Errorf("source Git ignore check in %q: %w: %s", ignore.base, err, strings.TrimSpace(string(ignore.stderr.data))), closeErr)
 }
 
 func (ignore *gitIgnore) match(path string, directory bool) (bool, error) {
