@@ -669,19 +669,7 @@ func TestMetadataBundleRejectsUnreachableObjects(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	repoPath := filepath.Join(harness.root, ".backup")
-	genesisHistory, err := (repository.Validator{Repo: repoPath, Limits: format.DefaultLimits()}).ValidateHistory(genesis.CommitID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	blobs := testStateBlobs(t, testHistoryTip(t, genesisHistory).State)
-	blobs["ignore"] = []byte("^\\./unreachable$\n")
-	repo := &repository.Managed{Directory: repoPath}
-	forkTip, err := repo.CreateCommit(genesis.CommitID, blobs, "unreachable fork")
-	if err != nil {
-		t.Fatal(err)
-	}
-
+	repo := &repository.Managed{Directory: filepath.Join(harness.root, ".backup")}
 	stage := t.TempDir()
 	fullBundle := filepath.Join(stage, "full.bundle")
 	if err := repo.CreateBundle("", genesis.CommitID, fullBundle); err != nil {
@@ -696,16 +684,18 @@ func TestMetadataBundleRejectsUnreachableObjects(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	tipRef := "refs/backup/bundle-tip"
-	extraRef := "refs/backup/unreachable-extra"
-	runGit(t, "-C", repoPath, "update-ref", tipRef, latest.CommitID)
-	runGit(t, "-C", repoPath, "update-ref", extraRef, forkTip)
-	defer runGit(t, "-C", repoPath, "update-ref", "-d", tipRef)
-	defer runGit(t, "-C", repoPath, "update-ref", "-d", extraRef)
 	maliciousBundle := filepath.Join(stage, "extra.bundle")
-	runGit(t, "-C", repoPath, "bundle", "create", maliciousBundle, tipRef, extraRef, "^"+genesis.CommitID)
-	if err := applyMetadataBundle(quarantine, maliciousBundle, format.MetadataManifest{Kind: format.BundleIncremental, BaseCommit: genesis.CommitID, TipCommit: latest.CommitID}, genesis.CommitID); err == nil {
-		t.Fatal("metadata bundle with unreachable objects was accepted")
+	data, extra := recoveryBundleWithExtraObject(t, repo, genesis.CommitID, latest.CommitID)
+	if err := os.WriteFile(maliciousBundle, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	manifest := format.MetadataManifest{Kind: format.BundleIncremental, BaseCommit: genesis.CommitID, TipCommit: latest.CommitID}
+	assertValidRecoveryBundleHeader(t, maliciousBundle, manifest)
+	if err := applyMetadataBundle(quarantine, maliciousBundle, manifest, genesis.CommitID); err == nil || !strings.Contains(err.Error(), "outside its declared tip graph") {
+		t.Fatalf("metadata bundle did not reach unreachable-object rejection: %v", err)
+	}
+	if _, err := quarantine.RunGit(nil, 1024, "cat-file", "-e", extra); err != nil {
+		t.Fatalf("fixture's unreachable object was not imported: %v", err)
 	}
 }
 
@@ -752,7 +742,7 @@ func TestMetadataRecoveryTriesAlternatePhysicalRepresentations(t *testing.T) {
 	}
 }
 
-func TestMetadataRecoveryCleansFailedPhysicalRepresentationObjects(t *testing.T) {
+func TestMetadataRecoveryTriesAlternativeAfterDeclaredTipMismatch(t *testing.T) {
 	harness := newIntegrationHarness(t)
 	ctx := context.Background()
 	genesis, err := Init(ctx, harness.options, InitRequest{RecoveryPublicKey: harness.publicKey})
@@ -778,9 +768,9 @@ func TestMetadataRecoveryCleansFailedPhysicalRepresentationObjects(t *testing.T)
 		t.Fatal(err)
 	}
 	bad := uploadTestMetadataBundle(t, ctx, writer, repo, testHistoryGenesisFormat(t, history).RepositoryUUID, "", fork, 0, harness.publicKey, harness.options.MetadataPartSize)
-	// The ciphertext is a valid full bundle for fork, but this malicious
-	// completion marker claims it reconstructs genesis. Fetching it imports the
-	// genesis object before the declared-tip mismatch is detected.
+	// The ciphertext is a valid full bundle for fork, but its completion marker
+	// claims genesis. Header validation rejects this before importing objects;
+	// actual post-import cleanup is covered by the unreachable-object fixture.
 	bad.Manifest.TipCommit = genesis.CommitID
 
 	root := t.TempDir()
@@ -790,7 +780,7 @@ func TestMetadataRecoveryCleansFailedPhysicalRepresentationObjects(t *testing.T)
 	}
 	quarantine := filepath.Join(root, "recovered.git")
 	if _, err := materializeMetadataChain(ctx, reader, [][]manifestRepresentation{{bad, valid[0]}}, harness.secretKey, quarantine, stage); err != nil {
-		t.Fatalf("failed alternate contaminated the healthy retry: %v", err)
+		t.Fatalf("declared-tip mismatch prevented the healthy retry: %v", err)
 	}
 }
 

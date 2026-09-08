@@ -229,6 +229,9 @@ func validateRebuiltMetadataEdge(source *repository.Managed, built metadatachain
 	if err := applyMetadataBundle(quarantine, bundlePath, built.Manifest, priorTip); err != nil {
 		return err
 	}
+	if err := validateMetadataGraph(quarantine, tip, false); err != nil {
+		return err
+	}
 	history, err := (repository.Validator{Repo: quarantine.Directory, Limits: format.DefaultLimits()}).ValidateHistory("refs/backup/recovered-tip")
 	if err != nil {
 		return err

@@ -44,7 +44,7 @@ func RemoveTree(root string) error {
 		return err
 	}
 	if err := unix.Unlinkat(parentFD, name, unix.AT_REMOVEDIR); err != nil {
-		return err
+		return fmt.Errorf("remove emptied operational-state directory %q: %w", clean, err)
 	}
 	return unix.Fsync(parentFD)
 }
@@ -89,7 +89,7 @@ func removeDirectoryContents(directoryFD int, displayPath string) error {
 				}
 				if err := unix.Unlinkat(directoryFD, entry.Name(), unix.AT_REMOVEDIR); err != nil {
 					_ = directory.Close()
-					return err
+					return fmt.Errorf("remove emptied operational-state directory %q: %w", entryPath, err)
 				}
 			case unix.S_IFREG, unix.S_IFLNK:
 				if err := unix.Unlinkat(directoryFD, entry.Name(), 0); err != nil {

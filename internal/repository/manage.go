@@ -673,6 +673,25 @@ func (repo *Managed) VerifyBundle(filename string) error {
 	return nil
 }
 
+// ImportPack streams a Git pack through strict object/link validation. It may
+// leave objects behind on failure; callers own quarantine disposal and must
+// separately validate reachability from the declared tip and canonical history.
+func (repo *Managed) ImportPack(input io.Reader) error {
+	if input == nil {
+		return fmt.Errorf("git pack input is required")
+	}
+	output, err := repo.runReader(input, 1024, false, "index-pack", "--stdin", "--fix-thin", "--strict")
+	if err != nil {
+		return err
+	}
+	// index-pack emits its pack ID, then any input buffered beyond the pack.
+	// Do not accept trailing data or unexpected diagnostics as a normal import.
+	if len(output) != 70 || string(output[:5]) != "pack\t" || output[69] != '\n' || !isGitOID(string(output[5:69])) {
+		return fmt.Errorf("git pack import returned unexpected output")
+	}
+	return nil
+}
+
 func (repo *Managed) RunGit(input []byte, limit int64, arguments ...string) ([]byte, error) {
 	return repo.run(input, limit, arguments...)
 }

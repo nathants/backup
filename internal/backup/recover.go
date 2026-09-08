@@ -70,9 +70,9 @@ func recoveryWorkspaceRequirement(path recoveryPath) (uint64, uint64, error) {
 			maximum = edgeBytes
 		}
 	}
-	// Recovery briefly retains the prior and next Git quarantine plus one
-	// ciphertext and plaintext bundle. Encrypted bundle sizes conservatively
-	// bound the corresponding plaintext bundle bytes.
+	// Allow Git import/index workspace plus one ciphertext and plaintext
+	// bundle. Encrypted sizes bound plaintext bundle bytes, not Git's possible
+	// object expansion; enforced aggregate resource bounds remain operator-owned.
 	if total > ^uint64(0)/2 || maximum > (^uint64(0)-total*2)/2 {
 		return 0, 0, fmt.Errorf("recovery workspace requirement overflows")
 	}
@@ -80,9 +80,9 @@ func recoveryWorkspaceRequirement(path recoveryPath) (uint64, uint64, error) {
 }
 
 type verifiedRecovery struct {
-	Tip           string
-	Path          recoveryPath
-	CommitIDsPath string
+	Tip            string
+	RepositoryPath string
+	CommitIDsPath  string
 }
 
 func Recover(ctx context.Context, options Options, request RecoverRequest) (RecoverResult, error) {
@@ -118,7 +118,29 @@ func Recover(ctx context.Context, options Options, request RecoverRequest) (Reco
 	if err != nil {
 		return result, err
 	}
-	verificationWorkspace, err := os.MkdirTemp("", ".backup-recovery-index-*")
+	// Build retained candidates on the destination filesystem so publication
+	// renames the exact verified repository, including when TMPDIR is elsewhere.
+	// Listing needs no destination and retains only the verified commit IDs.
+	destination, parent := "", ""
+	if !request.ListOnly {
+		if request.Destination == "" {
+			return result, fmt.Errorf("recovery destination is required")
+		}
+		destination, err = filepath.Abs(request.Destination)
+		if err != nil {
+			return result, err
+		}
+		if _, err := os.Lstat(destination); err == nil {
+			return result, fmt.Errorf("recovery destination already exists")
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return result, err
+		}
+		parent = filepath.Dir(destination)
+		if err := os.MkdirAll(parent, 0o700); err != nil {
+			return result, err
+		}
+	}
+	verificationWorkspace, err := os.MkdirTemp(parent, ".backup-recover-*")
 	if err != nil {
 		return result, err
 	}
@@ -127,7 +149,7 @@ func Recover(ctx context.Context, options Options, request RecoverRequest) (Reco
 		return result, err
 	}
 	defer func() { _ = removeTreeNoFollow(verificationWorkspace) }()
-	verified, failures, err := verifyRecoveryCandidates(ctx, client, candidates, request.Tip, secretKey, verificationWorkspace, normalized.SpaceReserveBytes)
+	verified, failures, err := verifyRecoveryCandidates(ctx, client, candidates, request.Tip, secretKey, verificationWorkspace, normalized.SpaceReserveBytes, !request.ListOnly)
 	if err != nil {
 		return result, err
 	}
@@ -166,56 +188,18 @@ func Recover(ctx context.Context, options Options, request RecoverRequest) (Reco
 		}
 		selected = maximal[0]
 	}
-	if request.Destination == "" {
-		return result, fmt.Errorf("recovery destination is required")
+	if selected.RepositoryPath == "" {
+		return result, fmt.Errorf("selected verified repository was not retained")
 	}
-	destination, err := filepath.Abs(request.Destination)
-	if err != nil {
+	if err := ctx.Err(); err != nil {
 		return result, err
 	}
-	if _, err := os.Lstat(destination); err == nil {
-		return result, fmt.Errorf("recovery destination already exists")
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return result, err
-	}
-	parent := filepath.Dir(destination)
-	if err := os.MkdirAll(parent, 0o700); err != nil {
-		return result, err
-	}
-	stage, err := os.MkdirTemp(parent, ".backup-recover-*")
-	if err != nil {
-		return result, err
-	}
-	if err := os.Chmod(stage, 0o700); err != nil {
-		_ = removeTreeNoFollow(stage)
-		return result, err
-	}
-	requiredBytes, requiredInodes, err := recoveryWorkspaceRequirement(selected.Path)
-	if err != nil {
-		return result, err
-	}
-	if err := requireWorkspaceCapacity(stage, requiredBytes, requiredInodes, normalized.SpaceReserveBytes); err != nil {
-		return result, fmt.Errorf("selected recovery workspace: %w", err)
-	}
-	published := false
-	defer func() {
-		if !published {
-			_ = removeTreeNoFollow(stage)
-		}
-	}()
-	quarantine, selectedHistory, err := materializeAndValidateRecoveryPath(ctx, client, selected.Path, secretKey, stage, selected.Tip)
-	if err != nil {
-		return result, fmt.Errorf("revalidate selected metadata chain: %w", err)
-	}
-	_ = selectedHistory.Close()
-	if err := os.Rename(quarantine, destination); err != nil {
+	if err := os.Rename(selected.RepositoryPath, destination); err != nil {
 		return result, err
 	}
 	if err := syncDirectory(parent); err != nil {
 		return result, err
 	}
-	published = true
-	_ = removeTreeNoFollow(stage)
 	result.RecoveredTip, result.Destination = selected.Tip, destination
 	return result, nil
 }
@@ -375,7 +359,7 @@ func recoveryLogicalEdgeLess(left, right *recoveryLogicalEdge) bool {
 	return leftKey < rightKey
 }
 
-func verifyRecoveryCandidates(ctx context.Context, client *objectstore.Client, candidates []recoveryCandidate, exactTip string, secretKey []byte, workspace string, reserveBytes uint64) ([]verifiedRecovery, []string, error) {
+func verifyRecoveryCandidates(ctx context.Context, client *objectstore.Client, candidates []recoveryCandidate, exactTip string, secretKey []byte, workspace string, reserveBytes uint64, retainRepository bool) ([]verifiedRecovery, []string, error) {
 	candidateTips := make(map[string]bool)
 	for _, candidate := range candidates {
 		candidateTips[candidate.TipCommit] = true
@@ -407,6 +391,8 @@ func verifyRecoveryCandidates(ctx context.Context, client *objectstore.Client, c
 	var commitRecords uint64
 	var verified []verifiedRecovery
 	var failures []string
+	retained := -1
+	ambiguous := false
 	for _, tip := range tips {
 		if exactTip == "" && covered[tip] {
 			continue
@@ -428,7 +414,7 @@ func verifyRecoveryCandidates(ctx context.Context, client *objectstore.Client, c
 			if err := ctx.Err(); err != nil {
 				return nil, failures, err
 			}
-			attemptRoot, err := os.MkdirTemp("", ".backup-recovery-verify-*")
+			attemptRoot, err := os.MkdirTemp(workspace, "candidate-*")
 			if err != nil {
 				return nil, failures, err
 			}
@@ -445,19 +431,45 @@ func verifyRecoveryCandidates(ctx context.Context, client *objectstore.Client, c
 				_ = removeTreeNoFollow(attemptRoot)
 				return nil, failures, fmt.Errorf("recovery verification workspace: %w", err)
 			}
-			_, history, attemptErr := materializeAndValidateRecoveryPath(ctx, client, path, secretKey, attemptRoot, tip)
-			_ = removeTreeNoFollow(attemptRoot)
+			quarantine, history, attemptErr := materializeAndValidateRecoveryPath(ctx, client, path, secretKey, attemptRoot, tip)
 			if attemptErr != nil {
+				if err := removeTreeNoFollow(attemptRoot); err != nil {
+					return nil, failures, err
+				}
 				failures = appendRecoveryFailure(failures, fmt.Sprintf("tip %s path %d: %v", tip, pathIndex, attemptErr))
 				continue
 			}
 			commitIDsPath := filepath.Join(workspace, fmt.Sprintf("verified-%08d.ids", len(verified)))
 			walkErr := writeRecoveryCommitIDs(history, commitIDsPath, candidateTips, covered, &commitRecords)
-			_ = history.Close()
+			// Retain at most one verified repository, not one per candidate tip.
+			// Valid histories are linear: a second independent maximal tip cannot
+			// later be joined by an accepted merge, so ambiguity needs only IDs.
+			if walkErr == nil && retainRepository && !ambiguous && retained >= 0 {
+				_, contains, err := history.IndexOf(verified[retained].Tip)
+				walkErr = err
+				if walkErr == nil {
+					ambiguous = !contains
+					walkErr = removeTreeNoFollow(filepath.Dir(verified[retained].RepositoryPath))
+					verified[retained].RepositoryPath = ""
+					retained = -1
+				}
+			}
+			closeErr := history.Close()
 			if walkErr != nil {
 				return nil, failures, walkErr
 			}
-			verified = append(verified, verifiedRecovery{Tip: tip, Path: path, CommitIDsPath: commitIDsPath})
+			if closeErr != nil {
+				return nil, failures, closeErr
+			}
+			if retainRepository && !ambiguous {
+				retained = len(verified)
+			} else {
+				if err := removeTreeNoFollow(attemptRoot); err != nil {
+					return nil, failures, err
+				}
+				quarantine = ""
+			}
+			verified = append(verified, verifiedRecovery{Tip: tip, RepositoryPath: quarantine, CommitIDsPath: commitIDsPath})
 			accepted = true
 			break
 		}

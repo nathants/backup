@@ -286,11 +286,23 @@ func initializeMetadataQuarantine(quarantine string) (*repository.Managed, error
 	if err := repository.InitializeBareSHA256(quarantine); err != nil {
 		return nil, fmt.Errorf("initialize quarantine repository: %w", err)
 	}
-	return &repository.Managed{Directory: quarantine}, nil
+	repo := &repository.Managed{Directory: quarantine}
+	// Fetch must not leave detached writers repacking objects while validation
+	// or failed-attempt cleanup inspects this private repository.
+	if _, err := repo.RunGit(nil, 1024, "config", "maintenance.auto", "false"); err != nil {
+		return nil, fmt.Errorf("disable quarantine automatic maintenance: %w", err)
+	}
+	return repo, nil
 }
 
 func applyMetadataBundle(repo *repository.Managed, bundlePath string, manifest format.MetadataManifest, priorTip string) error {
-	if err := validateMetadataBundleHeader(bundlePath, manifest); err != nil {
+	file, err := os.Open(bundlePath)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = file.Close() }()
+	reader := bufio.NewReaderSize(file, 4096)
+	if err := readMetadataBundleHeader(reader, manifest); err != nil {
 		return err
 	}
 	_, _ = repo.RunGit(nil, 1024, "update-ref", "-d", metadataCandidateRef)
@@ -300,20 +312,25 @@ func applyMetadataBundle(repo *repository.Managed, bundlePath string, manifest f
 	if output, err := repo.RunGit(nil, 64<<10, "bundle", "verify", bundlePath); err != nil {
 		return fmt.Errorf("verify bundle: %w: %s", err, output)
 	}
-	refspec := "refs/backup/bundle-tip:" + metadataCandidateRef
-	if output, err := repo.RunGit(nil, 64<<10, "fetch", bundlePath, refspec); err != nil {
-		return fmt.Errorf("apply bundle: %w: %s", err, output)
+	// Bundle fetch did not honor fetch.fsckObjects in Git 2.36. Use the native
+	// strict indexer explicitly on the pack following the validated header,
+	// rather than depending on newer bundle-transport configuration behavior.
+	if err := repo.ImportPack(reader); err != nil {
+		return fmt.Errorf("apply bundle with strict pack validation: %w", err)
+	}
+	if _, err := repo.RunGit(nil, 1024, "update-ref", metadataCandidateRef, manifest.TipCommit); err != nil {
+		return fmt.Errorf("record imported bundle tip: %w", err)
 	}
 	resolved, err := repo.RunGit(nil, 1024, "rev-parse", "--verify", metadataCandidateRef)
 	if err != nil || strings.TrimSpace(string(resolved)) != manifest.TipCommit {
 		return fmt.Errorf("bundle reconstructed the wrong tip")
 	}
-	fsck, err := repo.RunGit(nil, 64<<10, "fsck", "--strict", "--no-reflogs", "--unreachable", "--no-progress", manifest.TipCommit)
-	if err != nil {
-		return fmt.Errorf("validate bundle object graph: %w", err)
-	}
-	if detail := strings.TrimSpace(string(fsck)); detail != "" {
-		return fmt.Errorf("bundle contains objects outside its declared tip graph: %s", detail)
+	// Reject missing/wrong-type links and every extra object at this exact
+	// edge. Deferring reachability until the last tip could let a later bundle
+	// conceal objects injected early. New object bytes were checked on import;
+	// a final full fsck rechecks all stored bytes before accepting the chain.
+	if err := validateMetadataGraph(repo, manifest.TipCommit, true); err != nil {
+		return err
 	}
 	if _, err := repo.RunGit(nil, 1024, "update-ref", "refs/backup/recovered-tip", manifest.TipCommit, priorTip); err != nil {
 		return fmt.Errorf("advance recovered metadata tip: %w", err)
@@ -321,13 +338,23 @@ func applyMetadataBundle(repo *repository.Managed, bundlePath string, manifest f
 	return nil
 }
 
-func validateMetadataBundleHeader(bundlePath string, manifest format.MetadataManifest) error {
-	file, err := os.Open(bundlePath)
-	if err != nil {
-		return err
+func validateMetadataGraph(repo *repository.Managed, tip string, connectivityOnly bool) error {
+	arguments := []string{"fsck", "--strict", "--no-reflogs", "--unreachable", "--no-progress"}
+	if connectivityOnly {
+		arguments = append(arguments, "--connectivity-only")
 	}
-	defer func() { _ = file.Close() }()
-	reader := bufio.NewReaderSize(file, 4096)
+	arguments = append(arguments, tip)
+	output, err := repo.RunGit(nil, 64<<10, arguments...)
+	if err != nil {
+		return fmt.Errorf("validate bundle object graph: %w", err)
+	}
+	if detail := strings.TrimSpace(string(output)); detail != "" {
+		return fmt.Errorf("bundle contains objects outside its declared tip graph: %s", detail)
+	}
+	return nil
+}
+
+func readMetadataBundleHeader(reader *bufio.Reader, manifest format.MetadataManifest) error {
 	readLine := func() (string, error) {
 		line, readErr := reader.ReadSlice('\n')
 		if readErr != nil {
@@ -400,84 +427,92 @@ func materializeMetadataChain(ctx context.Context, client *objectstore.Client, c
 	if len(chain) == 0 {
 		return nil, fmt.Errorf("metadata chain is empty")
 	}
-	var chosen []manifestRepresentation
-	acceptedRoot := ""
-	defer func() {
-		if acceptedRoot != "" {
-			_ = removeTreeNoFollow(acceptedRoot)
-		}
-	}()
-	priorTip := strings.Repeat("0", 64)
 	for edgeIndex, alternatives := range chain {
 		if len(alternatives) == 0 {
 			return nil, fmt.Errorf("metadata edge %d has no physical representations", edgeIndex)
 		}
-		var failures []string
-		accepted := false
-		for representationIndex, representation := range alternatives {
+	}
+	// Extend one private repository on the healthy path. Failed imports can
+	// leave objects behind even without advancing a ref: discard the whole
+	// attempt, remember the rejected representation, and replay from scratch.
+	// Equivalent representations reconstruct the same commits, so changing an
+	// earlier choice never makes a rejected later representation eligible again.
+	choices := make([]int, len(chain))
+	attemptRoot := ""
+	defer func() {
+		if attemptRoot != "" {
+			_ = removeTreeNoFollow(attemptRoot)
+		}
+	}()
+	var failures []string
+	for attempt := 0; attempt < maximumRecoveryMaterializations; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		var err error
+		attemptRoot, err = os.MkdirTemp(stage, "quarantine-*")
+		if err != nil {
+			return nil, err
+		}
+		attemptRepository := filepath.Join(attemptRoot, "repository.git")
+		repo, err := initializeMetadataQuarantine(attemptRepository)
+		if err != nil {
+			return nil, err
+		}
+		chosen := make([]manifestRepresentation, 0, len(chain))
+		priorTip := strings.Repeat("0", 64)
+		for edgeIndex, alternatives := range chain {
 			if err := ctx.Err(); err != nil {
 				return nil, err
 			}
-			ciphertextPath := filepath.Join(stage, fmt.Sprintf("metadata-%08d-%08d.ciphertext", edgeIndex, representationIndex))
-			bundlePath := filepath.Join(stage, fmt.Sprintf("metadata-%08d-%08d.bundle", edgeIndex, representationIndex))
-			attemptRoot := filepath.Join(stage, fmt.Sprintf("quarantine-%08d-%08d", edgeIndex, representationIndex))
-			if err := os.Mkdir(attemptRoot, 0o700); err != nil {
-				return nil, err
-			}
-			attemptRepository := filepath.Join(attemptRoot, "repository.git")
-			attempt := func() error {
-				attemptRepo, err := initializeMetadataQuarantine(attemptRepository)
-				if err != nil {
-					return err
-				}
-				if acceptedRoot != "" {
-					if _, err := attemptRepo.RunGit(nil, 64<<10, "fetch", filepath.Join(acceptedRoot, "repository.git"), "refs/backup/recovered-tip:refs/backup/recovered-tip"); err != nil {
-						return fmt.Errorf("seed metadata quarantine: %w", err)
-					}
-				}
-				if err := fetchMetadataBundle(ctx, client, representation, ciphertextPath, stage); err != nil {
+			representation := alternatives[choices[edgeIndex]]
+			ciphertextPath := filepath.Join(attemptRoot, "metadata.ciphertext")
+			bundlePath := filepath.Join(attemptRoot, "metadata.bundle")
+			importErr := func() error {
+				if err := fetchMetadataBundle(ctx, client, representation, ciphertextPath, attemptRoot); err != nil {
 					return err
 				}
 				if err := decryptMetadataBundle(ciphertextPath, bundlePath, representation.Manifest, secretKey); err != nil {
 					return err
 				}
-				if err := applyMetadataBundle(attemptRepo, bundlePath, representation.Manifest, priorTip); err != nil {
-					return err
-				}
-				return nil
+				return applyMetadataBundle(repo, bundlePath, representation.Manifest, priorTip)
 			}()
-			_ = os.Remove(ciphertextPath)
-			_ = os.Remove(bundlePath)
-			if attempt != nil {
-				_ = removeTreeNoFollow(attemptRoot)
-				failures = appendRecoveryFailure(failures, fmt.Sprintf("%s: %v", representation.Key, attempt))
-				continue
-			}
-			if acceptedRoot != "" {
-				if err := removeTreeNoFollow(acceptedRoot); err != nil {
-					_ = removeTreeNoFollow(attemptRoot)
-					return nil, err
+			if importErr != nil {
+				failures = appendRecoveryFailure(failures, fmt.Sprintf("edge %d %s: %v", edgeIndex, representation.Key, importErr))
+				choices[edgeIndex]++
+				if choices[edgeIndex] == len(alternatives) {
+					return nil, fmt.Errorf("no usable physical representation for metadata edge %d (%s)", edgeIndex, strings.Join(failures, "; "))
 				}
+				break
 			}
-			acceptedRoot = attemptRoot
+			if err := os.Remove(ciphertextPath); err != nil {
+				return nil, err
+			}
+			if err := os.Remove(bundlePath); err != nil {
+				return nil, err
+			}
 			chosen = append(chosen, representation)
 			priorTip = representation.Manifest.TipCommit
-			accepted = true
-			break
 		}
-		if !accepted {
-			return nil, fmt.Errorf("no usable physical representation for metadata edge %d (%s)", edgeIndex, strings.Join(failures, "; "))
+		if len(chosen) == len(chain) {
+			if err := validateMetadataGraph(repo, priorTip, false); err != nil {
+				return nil, err
+			}
+			if err := os.Rename(attemptRepository, quarantine); err != nil {
+				return nil, fmt.Errorf("retain reconstructed metadata repository: %w", err)
+			}
+			if err := syncDirectory(filepath.Dir(quarantine)); err != nil {
+				return nil, err
+			}
+			if err := removeTreeNoFollow(attemptRoot); err != nil {
+				return nil, err
+			}
+			return chosen, nil
 		}
+		if err := removeTreeNoFollow(attemptRoot); err != nil {
+			return nil, fmt.Errorf("discard failed metadata import: %w", err)
+		}
+		attemptRoot = ""
 	}
-	if err := os.Rename(filepath.Join(acceptedRoot, "repository.git"), quarantine); err != nil {
-		return nil, err
-	}
-	if err := syncDirectory(filepath.Dir(quarantine)); err != nil {
-		return nil, err
-	}
-	if err := removeTreeNoFollow(acceptedRoot); err != nil {
-		return nil, err
-	}
-	acceptedRoot = ""
-	return chosen, nil
+	return nil, fmt.Errorf("metadata chain exceeds %d recovery attempts (%s)", maximumRecoveryMaterializations, strings.Join(failures, "; "))
 }
