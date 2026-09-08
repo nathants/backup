@@ -1,4 +1,8 @@
-.PHONY: check check-deps check-lint integration fuzz
+.DEFAULT_GOAL := build
+.PHONY: build check check-deps check-lint integration fuzz
+
+build:
+	go build -o backup ./cmd/backup
 
 FUZZ_TARGETS := \
 	./internal/format:FuzzCanonicalMetadataParsers \

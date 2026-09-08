@@ -123,18 +123,29 @@ func (root *Root) walk(ignore format.Ignore, reporter Reporter, visit func(*File
 	if root == nil || root.fd < 0 {
 		return Result{}, fmt.Errorf("backup root is closed")
 	}
-	var rootStat unix.Stat_t
-	if err := unix.Fstat(root.fd, &rootStat); err != nil {
-		return Result{}, fmt.Errorf("stat backup root descriptor: %w", err)
-	}
 	result := Result{}
-	if err := root.scanDirectory(root.fd, "", uint64(rootStat.Dev), ignore, reporter, &result, visit); err != nil {
+	if err := root.scanDirectory(root.fd, "", 0, ignore, reporter, &result, visit); err != nil {
 		return Result{}, err
 	}
 	return result, nil
 }
 
-func (root *Root) scanDirectory(directoryFD int, relative string, parentDevice uint64, ignore format.Ignore, reporter Reporter, result *Result, visit func(*File, format.IndexEntry) error) (returnErr error) {
+func (root *Root) scanDirectory(directoryFD int, relative string, parentMount uint64, ignore format.Ignore, reporter Reporter, result *Result, visit func(*File, format.IndexEntry) error) (returnErr error) {
+	// Mount IDs distinguish same-device bind mounts. Query the opened descriptor,
+	// not a pathname that could now name a different directory. STATX_MNT_ID is
+	// available since Linux 5.8; do not silently fall back to device numbers.
+	var stat unix.Statx_t
+	if err := unix.Statx(directoryFD, "", unix.AT_EMPTY_PATH, unix.STATX_MNT_ID, &stat); err != nil {
+		return fmt.Errorf("stat source directory mount %q: %w", displayPath(relative), err)
+	}
+	if stat.Mask&unix.STATX_MNT_ID == 0 {
+		return fmt.Errorf("statx mount ID is required for source directory %q", displayPath(relative))
+	}
+	if relative != "" && stat.Mnt_id != parentMount {
+		result.MountsEntered++
+		report(reporter, Event{Kind: EventMountEntered, Path: displayPath(relative)})
+	}
+	mountID := stat.Mnt_id
 	// Dup shares the directory offset and would exhaust later walks of root.fd.
 	copyFD, err := unix.Openat(directoryFD, ".", unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
 	if err != nil {
@@ -174,11 +185,7 @@ func (root *Root) scanDirectory(directoryFD int, relative string, parentDevice u
 				if err != nil {
 					return fmt.Errorf("open source directory %q: %w", indexPath, err)
 				}
-				if uint64(stat.Dev) != parentDevice {
-					result.MountsEntered++
-					report(reporter, Event{Kind: EventMountEntered, Path: indexPath})
-				}
-				err = root.scanDirectory(childFD, childRelative, uint64(stat.Dev), ignore, reporter, result, visit)
+				err = root.scanDirectory(childFD, childRelative, mountID, ignore, reporter, result, visit)
 				_ = unix.Close(childFD)
 				if err != nil {
 					return err

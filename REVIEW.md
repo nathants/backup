@@ -308,15 +308,17 @@ The same shared-offset pattern appears in `filesystem.Root.scanDirectory` (`inte
 
 **Validation:** before the fix, actual-system regressions reproduced a reused root returning zero entries on its second walk, spool final cleanup missing 300 files created after initial preparation, and a new stale symlink reaching only `ENOTEMPTY` instead of the required type check (`shell/c429ab710bdf59102f76e3a12f376b36/stdout` beneath the evidence directory above). Fixed tests cover three walks of one root with creation/deletion between passes, multi-batch spool cleanup, and rejecting a newly introduced symlink without changing its target. Focused normal/race tests and lint passed, followed by full `make check`, all ten fuzz campaigns, and Docker integration normally and under the race detector (`scratch/finding16-check.log`, `scratch/finding16-fuzz.log`, and `scratch/finding16-docker.log`). Real CLI backup/reset/restore/recovery paths, including the recovery-to-restore runbook with primary outage, passed. Independent inventory confirmed no run-owned Docker containers, volumes, or image tags remained (`scratch/finding16-docker-cleanup.json`). No cloud resources were changed.
 
-### 17. Mount reporting detects device changes, not every mount boundary
+### 17. [done] Mount reporting detects device changes, not every mount boundary
 
 **Location:** `internal/filesystem/scan.go:130,175-179`.
 
 The scanner compares `st_dev` with the parent device. A bind mount of another directory on the same filesystem has the same device number, so traversal proceeds without the required `mount-entered` diagnostic. This does not omit content, but it makes whole-root traversal less auditable than the design promises.
 
-**Evidence:** static comparison logic and Linux bind-mount semantics; no mount was created on the host during this review.
+**Original evidence:** static comparison logic and Linux bind-mount semantics; no mount was created on the host during the initial review.
 
-**Direction:** use Linux mount identity, such as a suitable `statx` mount ID or a descriptor-consistent mount map, and cover same-device bind mounts in the isolated container test. Do not silently change traversal defaults.
+**Resolution (2026-09-06):** directory scanning now compares `statx(STATX_MNT_ID)` identities obtained from the actual opened directory descriptors. It requires the returned capability bit and propagates syscall failures, rather than falling back to device numbers. This uses the existing Linux 5.8 minimum and x/sys dependency, with one query per entered directory and no mount-table cache. The backup root is not a boundary event. Cross-mount traversal, exclusions, no-follow safety, and canonical formats are unchanged. Admin also requested `make build` as the default: both `make` and `make build` now produce the ignored `./backup` executable.
+
+**Validation:** the expanded real whole-root Docker test first reproduced the missing nested-bind event while still backing up its content (`scratch/finding17-repro-docker.log`). An independent `stat` check establishes equal device numbers for the mounted parent and child; the fixed test requires exactly one event for each, no event for an ordinary nested directory, and successful backup/restore of both paths' content, modes, and nanosecond mtimes. Focused filesystem tests also cover no false root/directory events and fatal descriptor-query errors. Focused Docker replay passed, followed by full `make check`, all ten fuzz campaigns, and all Docker contracts normally and under the race detector (`scratch/finding17-check.log`, `scratch/finding17-fuzz.log`, `scratch/finding17-docker.log`). Both build invocations and executable help passed. Independent inventory confirmed all three test runs left no containers, volumes, or image tags (`scratch/finding17-docker-cleanup.json`). No host-namespace mounts or cloud mutations were performed.
 
 ## Design assessment and ordering
 

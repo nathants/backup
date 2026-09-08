@@ -530,10 +530,29 @@ func TestDockerWholeRootClientContainerAgainstSeparateServer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Two Docker bind mounts of the same filesystem: st_dev cannot identify
+	// the boundary at bind, while an ordinary nested directory is not a mount.
+	mountSource := filepath.Join(workspace, "mount-source")
+	if err := os.MkdirAll(filepath.Join(mountSource, "nested"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(mountSource, "bind"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(mountSource, "nested", "content"), []byte("bind mount fixture\n"), 0o600)
+	devices := strings.Fields(run(t, "", "docker", "run", "--rm", "--label", dockerRunLabel,
+		"-v", mountSource+":/fixture-mounted:ro",
+		"-v", filepath.Join(mountSource, "nested")+":/fixture-mounted/bind:ro",
+		"--entrypoint", "stat", dockerClientImage, "-c", "%d", "/fixture-mounted", "/fixture-mounted/bind"))
+	if len(devices) != 2 || devices[0] != devices[1] {
+		t.Fatalf("bind-mount fixture must share st_dev: %v", devices)
+	}
 	runClient := func(arguments ...string) string {
 		t.Helper()
 		dockerArguments := []string{
 			"run", "--rm", "--label", dockerRunLabel, "--network", "host",
+			"-v", mountSource + ":/fixture-mounted:ro",
+			"-v", filepath.Join(mountSource, "nested") + ":/fixture-mounted/bind:ro",
 			"-v", stateVolume + ":/.backup",
 			"-v", remote + ":/metadata.git",
 			"-v", configDirectory + ":/test-config:ro",
@@ -561,8 +580,22 @@ func TestDockerWholeRootClientContainerAgainstSeparateServer(t *testing.T) {
 	ignore := `printf '%s\n' '^\./(\.dockerenv|etc|go|metadata\.git|out|restore|src|test-config|usr|var)(/|$)' > /.backup/ignore && chmod 0644 /.backup/ignore`
 	run(t, "", "docker", "run", "--rm", "--label", dockerRunLabel, "-v", stateVolume+":/.backup", "--entrypoint", "/bin/sh", dockerClientImage, "-c", ignore)
 	addOutput := runClient(withCommon("add")...)
-	if !strings.Contains(addOutput, "entries\t") || !strings.Contains(runClient(withCommon("diff")...), "./fixture/root-only\tfile\t") {
-		t.Fatalf("whole-root fixture was not staged:\n%s", addOutput)
+	if !strings.Contains(addOutput, "entries\t") {
+		t.Fatalf("whole-root scan did not report entries:\n%s", addOutput)
+	}
+	for _, path := range []string{"./fixture-mounted", "./fixture-mounted/bind"} {
+		if strings.Count(addOutput, "mount-entered\t"+path+"\n") != 1 {
+			t.Errorf("mount %s was not reported exactly once:\n%s", path, addOutput)
+		}
+	}
+	if strings.Contains(addOutput, "mount-entered\t./fixture-mounted/nested\n") {
+		t.Errorf("ordinary directory reported as a mount:\n%s", addOutput)
+	}
+	diffOutput := runClient(withCommon("diff")...)
+	for _, path := range []string{"./fixture/root-only", "./fixture-mounted/nested/content", "./fixture-mounted/bind/content"} {
+		if !strings.Contains(diffOutput, path+"\tfile\t") {
+			t.Fatalf("whole-root fixture %s was not staged:\n%s", path, diffOutput)
+		}
 	}
 	commitOutput := runClient(withCommon("commit")...)
 	commit := outputField(t, commitOutput, "commit")
@@ -572,9 +605,16 @@ func TestDockerWholeRootClientContainerAgainstSeparateServer(t *testing.T) {
 	if output := runClient(withCommon("verify", "--minimum-mirrors", "1")...); !strings.Contains(output, "passed\t1\n") {
 		t.Fatalf("whole-root verify failed:\n%s", output)
 	}
-	restoreOutput := runClient(withCommon("restore", "--target", "/restore", "^\\./fixture/", commit)...)
+	restoreOutput := runClient(withCommon("restore", "--target", "/restore", "^\\./fixture(/|-mounted/)", commit)...)
 	if !strings.Contains(restoreOutput, "published\t./fixture/root-only\n") || !strings.Contains(restoreOutput, "published\t./fixture/root-link\n") {
 		t.Fatalf("whole-root restore failed:\n%s", restoreOutput)
+	}
+	fixtureInfo, err := os.Stat(filepath.Join(mountSource, "nested", "content"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, directory := range []string{"nested", "bind"} {
+		assertFile(t, filepath.Join(restoreRoot, "fixture-mounted", directory, "content"), []byte("bind mount fixture\n"), 0o600, fixtureInfo.ModTime().UnixNano())
 	}
 	assertFile(t, filepath.Join(restoreRoot, "fixture", "root-only"), []byte("whole-root fixture\n"), 0o600, 1_700_000_000_000_000_000)
 	link, err := os.Readlink(filepath.Join(restoreRoot, "fixture", "root-link"))

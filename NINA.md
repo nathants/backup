@@ -60,10 +60,10 @@ A replacement machine may take over explicitly: retire/revoke the old writer, re
 
 ## Build and trusted local configuration
 
-Build with:
+Build `./backup` with either `make` (the default target) or:
 
 ```sh
-go build ./cmd/backup
+make build
 ```
 
 Linux 5.8 or newer, Git 2.36 or newer with SHA-256 support, and libsodium are required. Every hardened Git invocation pins `core.fsync=objects,reference` and `core.fsyncMethod=fsync`, overriding repository and ambient settings. A bounded version preflight rejects unsupported/unrecognized Git before running repository commands and retains the checked executable path for the process. This hardens local crash resumability at the cost of storage-dependent metadata sync latency; it relies on Git and the filesystem/hardware honoring fsync, not custom journaling or a universal power-loss guarantee. Restore uses `utimensat` with `AT_EMPTY_PATH` to apply nanosecond timestamps through the verified file descriptor, never through a mutable temporary filename. Production metadata hosting uses `git-remote-aws`.
@@ -236,6 +236,8 @@ Supported:
 - `BACKUP_ROOT=/` when the process already has required privileges;
 - paths containing spaces;
 - traversal across mounted filesystems by default, with every entered mount visibly reported.
+
+Directory mount diagnostics compare Linux `statx(STATX_MNT_ID)` identities from opened descriptors, including same-device bind mounts; the backup root itself and ordinary subdirectories do not produce boundary events. Linux 5.8 supplies this capability; a missing/blocked mount-ID query fails the scan rather than silently substituting device numbers. This adds one descriptor query per entered directory, no mount table or new dependency. Reporting does not restrict cross-mount traversal, bypass exclusions, or affect canonical metadata.
 
 Supported file fidelity is content, permission bits `0000` through `0777`, nanosecond modification time, and symlink topology. Setuid, setgid, and sticky bits are not recorded for regular files; restoring privilege bits without ownership fidelity would be unsafe. Whole-root support is explicitly a content archive, not a bootable or full-fidelity system image.
 
