@@ -114,9 +114,8 @@ shared-profile/credential-process configuration.
 
 ## Compatibility
 
-Backup FORMAT version 2 removes the former recovery-recipient field; version 1
-is rejected without migration. No production Go backup data existed at this
-cutover. Retained old test fixtures require their original binary.
+Backup supports FORMAT version 2. Version 1 is rejected without migration;
+retained version 1 test fixtures require their original binary.
 
 Existing git-remote-aws S3/DynamoDB layouts, SHA-1/SHA-256 histories, box keypairs,
 and ciphertext remain readable. The recipient-stream wire format is unchanged. Strict
@@ -129,7 +128,3 @@ has no `.publickeys` entry. A present empty, malformed, or non-regular historica
 entry is not absence and fails. This permits old untracked-policy histories to
 advance without rewriting them; every new pushed tip must track its policy.
 Backup's stricter canonical history always requires the recipient blob.
-
-The shared recipient decryption API is `Keyring.Decrypt`; the unused single-secret
-wrapper is removed. Parsing and in-memory key-chain operations share native
-validation, and rotation returns independent buffers for retained generations.

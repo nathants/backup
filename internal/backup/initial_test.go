@@ -105,8 +105,8 @@ func TestInitialLocalWorkflowWithoutRemotes(t *testing.T) {
 	}
 }
 
-// Unrelated history/repair tests need a completed empty base. Exercise the real
-// public lifecycle with an explicit empty plan, not the old init publication.
+// History/repair tests need a completed empty base. Exercise the public
+// init/add/commit lifecycle with an explicit empty plan.
 func initializePublished(ctx context.Context, options Options, publicKey []byte) (result SnapshotResult, returnErr error) {
 	if _, err := initWithKeys(ctx, options, publicKey); err != nil {
 		return SnapshotResult{}, err
