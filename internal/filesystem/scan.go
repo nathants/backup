@@ -70,6 +70,7 @@ type Root struct {
 	err               error
 	captureBeforeOpen func(string) error
 	captureOpened     func(string) error
+	symlinkOpened     func() error
 }
 
 func OpenRoot(path string) (*Root, error) {
@@ -278,6 +279,14 @@ func (root *Root) scanSymlink(directoryFD int, name, indexPath string, before un
 	}
 	how := &unix.OpenHow{Flags: unix.O_PATH | unix.O_CLOEXEC, Resolve: unix.RESOLVE_NO_MAGICLINKS}
 	fd, resolveErr := unix.Openat2(directoryFD, name, how)
+	if resolveErr == nil {
+		defer func() { _ = unix.Close(fd) }()
+		if root.symlinkOpened != nil {
+			if err := root.symlinkOpened(); err != nil {
+				return nil, "", err
+			}
+		}
+	}
 
 	targetAfter, readErr := readSymlinkAt(directoryFD, name)
 	var after unix.Stat_t
@@ -300,7 +309,6 @@ func (root *Root) scanSymlink(directoryFD int, name, indexPath string, before un
 			return nil, "", fmt.Errorf("resolve source symlink %q: %w", indexPath, resolveErr)
 		}
 	}
-	defer func() { _ = unix.Close(fd) }()
 	var stat unix.Stat_t
 	if err := unix.Fstat(fd, &stat); err != nil {
 		return nil, "", fmt.Errorf("stat source symlink target %q: %w", indexPath, err)
@@ -312,7 +320,30 @@ func (root *Root) scanSymlink(directoryFD int, name, indexPath string, before un
 	if err != nil {
 		return nil, "", fmt.Errorf("read resolved source symlink %q: %w", indexPath, err)
 	}
-	if strings.HasSuffix(resolved, " (deleted)") {
+	if stat.Nlink == 0 {
+		return nil, "", fmt.Errorf("source symlink %q changed during scan: %w", indexPath, errCaptureRace)
+	}
+	// /proc appends " (deleted)" to an unlinked dentry, but that is also a
+	// legal filename. Another hardlink can keep Nlink nonzero (even at that
+	// exact printable name). Re-resolve the original link and require both the
+	// same inode and descriptor path, rather than guessing from the suffix.
+	currentFD, err := unix.Openat2(directoryFD, name, how)
+	if err != nil {
+		if errors.Is(err, unix.ENOENT) || errors.Is(err, unix.ENOTDIR) || errors.Is(err, unix.ELOOP) {
+			return nil, "", fmt.Errorf("source symlink %q changed during scan: %w", indexPath, errCaptureRace)
+		}
+		return nil, "", fmt.Errorf("recheck source symlink %q: %w", indexPath, err)
+	}
+	defer func() { _ = unix.Close(currentFD) }()
+	var current unix.Stat_t
+	if err := unix.Fstat(currentFD, &current); err != nil {
+		return nil, "", fmt.Errorf("restat source symlink target %q: %w", indexPath, err)
+	}
+	currentPath, err := os.Readlink(fmt.Sprintf("/proc/self/fd/%d", currentFD))
+	if err != nil {
+		return nil, "", fmt.Errorf("reread resolved source symlink %q: %w", indexPath, err)
+	}
+	if current.Nlink == 0 || current.Dev != stat.Dev || current.Ino != stat.Ino || currentPath != resolved {
 		return nil, "", fmt.Errorf("source symlink %q changed during scan: %w", indexPath, errCaptureRace)
 	}
 	targetRelative, err := filepath.Rel(root.Path, resolved)
@@ -324,7 +355,7 @@ func (root *Root) scanSymlink(directoryFD int, name, indexPath string, before un
 		targetPath += filepath.ToSlash(targetRelative)
 	}
 	if err := format.ValidateSymlinkTarget(targetPath); err != nil {
-		return nil, EventBrokenSymlink, nil
+		return nil, "", fmt.Errorf("invalid source symlink target %q for %q: %w", targetPath, indexPath, err)
 	}
 	return &format.IndexEntry{Path: indexPath, Kind: format.KindSymlink, Ref: "target:" + targetPath}, "", nil
 }

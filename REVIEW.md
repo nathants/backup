@@ -158,7 +158,7 @@ The procedure stops competing operations, preserves all metadata/state, inspects
 
 `[done]` means **accepted manual intervention**, not automatic crash recovery. The code limitation remains and the earlier private-build/atomic-publication proposal is superseded. Validation for this documentation-only resolution was a current call-path review (`init.go:21-131`, `repository/manage.go:71-114`, `commit.go:191-299`) and inspection of the retained reproduction above; no new crash test, runtime change, or destructive recovery action was performed.
 
-### 9. Symlink race handling both rejects legal filenames and leaks descriptors
+### 9. [done] Symlink race handling both rejects legal filenames and leaks descriptors
 
 **Location:** `internal/filesystem/scan.go:279-303,311-327`.
 
@@ -170,7 +170,11 @@ b. A successful `Openat2` is followed by consistency checks that can return befo
 
 There is also a static policy mismatch at `326-327`: a resolved target failing canonical path validation is classified as a broken symlink rather than returning the required invalid-path error.
 
-**Direction:** install cleanup immediately after a successful open; use inode/link-state and consistency checks rather than an ambiguous printable suffix to identify deletion; preserve fatal validation errors for noncanonical paths. Test genuine unlinks separately from literal suffixes.
+**Approved resolution:** target-descriptor cleanup is registered immediately after a successful open, before every consistency/error return. Scanning now checks link counts and re-resolves the original symlink with the same no-magic-link constraints, requiring matching device/inode and descriptor paths. This preserves literal ` (deleted)` filenames without confusing an unlinked dentry with a surviving hardlink—even one whose name equals the misleading proc-fd text. It adds one descriptor-only target lookup, not content reads or a new dependency. Invalid canonical targets now return escaped fatal errors instead of broken-link skips. Runtime formats and the existing capture retry/omission rules are unchanged.
+
+**Focused validation:** `internal/filesystem/symlink_test.go` first reproduced live file/directory suffix rejection, three leaked descriptors after three classification races, and nonfatal omission of links to targets containing tab/LF/CR/invalid UTF-8 (`shell/7449b4d67067a4042754562357035533/stdout` beneath the evidence directory above). Those regressions now pass through actual `Walk`, `CapturePath`, and symlink classification. Deterministic post-open mutation tests additionally cover unlinks with/without a surviving hardlink, same-inode and different-inode replacement, directory removal, and capture retry outcomes. The full filesystem package and twenty focused race-detector repetitions passed (`shell/45f72cafa316b0299bca012f2529792d/stdout`, `shell/ed93b45dd308a9e473f67f57e504d29b/stdout`).
+
+Full `make check` passed on 2026-09-05, including every mandatory linter, vet, coverage tests, and race tests (`shell/c531a948fef5aca3e2a935a9b5838e60/stdout` beneath the evidence directory above). No cloud deployment or runtime-format change was involved.
 
 ### 10. Recovery repeatedly copies the entire growing Git graph, then repeats recovery again
 
