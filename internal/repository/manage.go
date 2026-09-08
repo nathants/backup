@@ -62,7 +62,7 @@ func Initialize(directory, remote, branch string) (*Managed, error) {
 		return nil, fmt.Errorf("open metadata directory without following symlinks: %w", err)
 	}
 	if err := unix.Fchmod(fd, 0o700); err != nil {
-		unix.Close(fd)
+		_ = unix.Close(fd)
 		return nil, err
 	}
 	if err := unix.Close(fd); err != nil {
@@ -139,7 +139,7 @@ func (repo *Managed) CreateCommitState(base string, candidate State, message str
 		if err != nil {
 			return "", err
 		}
-		defer history.Close()
+		defer func() { _ = history.Close() }()
 		tip, err := history.Tip()
 		if err != nil {
 			return "", err
@@ -347,7 +347,7 @@ func (repo *Managed) readMaterializationIntent() (materializationIntent, bool, e
 		return materializationIntent{}, false, err
 	}
 	file := os.NewFile(uintptr(fd), path)
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	info, err := file.Stat()
 	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 || info.Size() < 1 || info.Size() > 256 {
 		return materializationIntent{}, false, fmt.Errorf("metadata materialization intent is not a bounded private regular file")
@@ -421,7 +421,7 @@ func (repo *Managed) RecoverMaterialization() error {
 				}
 			}
 		}
-		history.Close()
+		_ = history.Close()
 		if tipErr != nil {
 			return tipErr
 		}
@@ -492,7 +492,7 @@ func (repo *Managed) Status() (WorktreeStatus, error) {
 	if err != nil {
 		return WorktreeStatus{}, err
 	}
-	defer history.Close()
+	defer func() { _ = history.Close() }()
 	tip, err := history.Tip()
 	if err != nil {
 		return WorktreeStatus{}, err
@@ -536,7 +536,7 @@ func checkStatusBlob(path string, expectedSize uint64, expectedHash string) erro
 		return err
 	}
 	file := os.NewFile(uintptr(fd), path)
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	var stat unix.Stat_t
 	if err := unix.Fstat(fd, &stat); err != nil {
 		return err
@@ -580,7 +580,7 @@ func (repo *Managed) HeadIfExists() (string, bool, error) {
 	}
 	head := strings.TrimSpace(string(output))
 	if !isGitOID(head) {
-		return "", false, fmt.Errorf("Git returned invalid branch head")
+		return "", false, fmt.Errorf("git returned invalid branch head")
 	}
 	return head, true, nil
 }
@@ -646,7 +646,7 @@ func (repo *Managed) CreateBundle(base, tip, destination string) error {
 		return err
 	}
 	if err := file.Sync(); err != nil {
-		file.Close()
+		_ = file.Close()
 		return err
 	}
 	if err := file.Close(); err != nil {

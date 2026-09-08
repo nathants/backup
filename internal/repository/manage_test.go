@@ -88,7 +88,7 @@ func TestManagedRepositoryCreatesValidCommitsWithoutUsingIndex(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer cachedHistory.Close()
+	defer func() { _ = cachedHistory.Close() }()
 	cachedTip, err := cachedHistory.Tip()
 	if err != nil || cachedTip.Transition != TransitionOrdinary {
 		t.Fatalf("cached transition=%v err=%v", cachedTip.Transition, err)

@@ -241,7 +241,7 @@ func (run *runtime) referenceStagedFile(relative string) (stagedFileRef, error) 
 	if err != nil {
 		return stagedFileRef{}, err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	identity, err := objectstore.HashReader(file)
 	if err != nil {
 		return stagedFileRef{}, err
@@ -284,26 +284,4 @@ func (run *runtime) captureSegmentInputPaths(txn *transaction, requireComplete b
 		return nil, nil, nil, fmt.Errorf("capture segments do not match the add-plan cursor")
 	}
 	return indexes, objects, packs, nil
-}
-
-func (run *runtime) walkCapturedPacks(txn *transaction, visit func(format.PackEntry) error) error {
-	_, _, paths, err := run.captureSegmentInputPaths(txn, true)
-	if err != nil {
-		return err
-	}
-	for _, path := range paths {
-		file, err := os.Open(path)
-		if err != nil {
-			return err
-		}
-		walkErr := format.WalkPacks(file, format.DefaultLimits(), visit)
-		closeErr := file.Close()
-		if walkErr != nil {
-			return walkErr
-		}
-		if closeErr != nil {
-			return closeErr
-		}
-	}
-	return nil
 }

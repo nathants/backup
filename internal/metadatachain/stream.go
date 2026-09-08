@@ -207,7 +207,7 @@ func (sink *metadataPartSink) finishPart() error {
 	file, path, size := sink.file, sink.path, sink.size
 	sink.file, sink.path, sink.size = nil, "", 0
 	if err := file.Sync(); err != nil {
-		file.Close()
+		_ = file.Close()
 		return err
 	}
 	if err := file.Close(); err != nil {

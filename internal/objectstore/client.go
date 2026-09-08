@@ -159,7 +159,6 @@ func New(ctx context.Context, options Options) (*Client, error) {
 		}
 		s3Options.EndpointOptions.UseFIPSEndpoint = aws.FIPSEndpointStateDisabled
 		s3Options.EndpointOptions.UseDualStackEndpoint = aws.DualStackEndpointStateDisabled
-		s3Options.UseDualstack = false
 		s3Options.UsePathStyle = options.Mirror.Kind != format.MirrorAWSS3
 		s3Options.APIOptions = append(s3Options.APIOptions, forceSignedPayload)
 	})
@@ -181,7 +180,7 @@ func (client *Client) PutFile(ctx context.Context, logicalKey, filename string, 
 	if err != nil {
 		return CreateResult{Disposition: CreateFailed, Err: err}
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	return client.PutOpenFile(ctx, logicalKey, file, expected)
 }
 
@@ -291,7 +290,7 @@ func (client *Client) GetVerified(ctx context.Context, logicalKey string, expect
 	if err != nil {
 		return err
 	}
-	defer response.Body.Close()
+	defer func() { _ = response.Body.Close() }()
 	blakeHash, _ := blake2b.New512(nil)
 	shaHash := sha256.New()
 	md5Hash := md5.New()
@@ -321,7 +320,7 @@ func (client *Client) GetManifest(ctx context.Context, logicalKey, expectedBLAKE
 	if err != nil {
 		return nil, err
 	}
-	defer response.Body.Close()
+	defer func() { _ = response.Body.Close() }()
 	if response.ContentLength != nil && (*response.ContentLength < 0 || *response.ContentLength > maximumManifestBytes) {
 		return nil, fmt.Errorf("metadata manifest exceeds %d bytes", maximumManifestBytes)
 	}
@@ -506,7 +505,7 @@ func readTrustedCAFile(filename string) ([]byte, error) {
 		return nil, fmt.Errorf("open mirror CA file as a regular no-follow file: %w", err)
 	}
 	file := os.NewFile(uintptr(fd), filename)
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	info, err := file.Stat()
 	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0o022 != 0 || info.Size() < 1 || info.Size() > maximumCAFileBytes {
 		return nil, fmt.Errorf("mirror CA file must be a nonempty bounded regular file without group/other write permissions")

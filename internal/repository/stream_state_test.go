@@ -270,7 +270,7 @@ func blobFilesFromDirectory(t *testing.T, directory string) map[string]BlobFile 
 		}
 		hash, err := blake2b.New512(nil)
 		if err != nil {
-			file.Close()
+			_ = file.Close()
 			t.Fatal(err)
 		}
 		size, copyErr := io.Copy(hash, file)
@@ -300,7 +300,7 @@ func writeLargeFileState(t *testing.T, directory string, records int) int64 {
 	}
 	packs, err := os.OpenFile(filepath.Join(directory, "packs.tsv"), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
-		objects.Close()
+		_ = objects.Close()
 		t.Fatal(err)
 	}
 	objectWriter := bufio.NewWriterSize(objects, 1<<20)

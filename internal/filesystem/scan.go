@@ -177,7 +177,7 @@ func (root *Root) scanDirectory(directoryFD int, relative string, parentDevice u
 					report(reporter, Event{Kind: EventMountEntered, Path: indexPath})
 				}
 				err = root.scanDirectory(childFD, childRelative, uint64(stat.Dev), ignore, reporter, result, visit)
-				unix.Close(childFD)
+				_ = unix.Close(childFD)
 				if err != nil {
 					return err
 				}
@@ -226,7 +226,7 @@ func (root *Root) scanRegular(directoryFD int, name, indexPath string, directory
 		return File{}, format.IndexEntry{}, fmt.Errorf("open source file %q: %w", indexPath, err)
 	}
 	file := os.NewFile(uintptr(fd), indexPath)
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	var before unix.Stat_t
 	if err := unix.Fstat(fd, &before); err != nil {
 		return File{}, format.IndexEntry{}, fmt.Errorf("stat open source file %q: %w", indexPath, err)
@@ -300,7 +300,7 @@ func (root *Root) scanSymlink(directoryFD int, name, indexPath string, before un
 			return nil, "", fmt.Errorf("resolve source symlink %q: %w", indexPath, resolveErr)
 		}
 	}
-	defer unix.Close(fd)
+	defer func() { _ = unix.Close(fd) }()
 	var stat unix.Stat_t
 	if err := unix.Fstat(fd, &stat); err != nil {
 		return nil, "", fmt.Errorf("stat source symlink target %q: %w", indexPath, err)
@@ -386,7 +386,7 @@ func (root *Root) capturePathOnce(planned format.IndexEntry, spool *Spool, reser
 		}
 		return CaptureResult{}, err
 	}
-	defer unix.Close(parentFD)
+	defer func() { _ = unix.Close(parentFD) }()
 	var pathStat unix.Stat_t
 	if err := unix.Fstatat(parentFD, name, &pathStat, unix.AT_SYMLINK_NOFOLLOW); err != nil {
 		if errors.Is(err, unix.ENOENT) {
@@ -433,7 +433,7 @@ func (root *Root) captureRegular(parentFD int, name string, planned format.Index
 		return CaptureResult{}, fmt.Errorf("open planned source %q: %w", planned.Path, err)
 	}
 	source := os.NewFile(uintptr(fd), planned.Path)
-	defer source.Close()
+	defer func() { _ = source.Close() }()
 	var before unix.Stat_t
 	if err := unix.Fstat(fd, &before); err != nil {
 		return CaptureResult{}, fmt.Errorf("stat open planned source %q: %w", planned.Path, err)
@@ -499,7 +499,7 @@ func (root *Root) openParent(indexPath string) (int, string, error) {
 	}
 	for _, component := range components[:len(components)-1] {
 		nextFD, openErr := unix.Openat(currentFD, component, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
-		unix.Close(currentFD)
+		_ = unix.Close(currentFD)
 		if openErr != nil {
 			return -1, "", fmt.Errorf("open source parent for %q: %w", indexPath, openErr)
 		}

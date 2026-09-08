@@ -35,7 +35,7 @@ func loadValidationCache(path string) (validationCache, error) {
 		return validationCache{}, err
 	}
 	file := os.NewFile(uintptr(fd), path)
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	info, err := file.Stat()
 	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0o077 != 0 || info.Size() < 1 || info.Size() > maximumValidationCacheBytes {
 		return validationCache{}, fmt.Errorf("validation cache has invalid type, mode, or size")
@@ -146,7 +146,7 @@ func writeValidationCache(path string, history *History) error {
 	if err != nil {
 		return err
 	}
-	defer dir.Close()
+	defer func() { _ = dir.Close() }()
 	return dir.Sync()
 }
 

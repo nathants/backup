@@ -20,7 +20,7 @@ func Find(options Options, pattern, revision string, resolved func(string) error
 	if err != nil {
 		return 0, err
 	}
-	defer run.close()
+	defer func() { _ = run.close() }()
 	if txn, err := run.loadTransaction(); err != nil {
 		return 0, err
 	} else if txn != nil && txn.PushAttempted {
@@ -30,7 +30,7 @@ func Find(options Options, pattern, revision string, resolved func(string) error
 	if err != nil {
 		return 0, err
 	}
-	defer history.Close()
+	defer func() { _ = history.Close() }()
 	if err := run.requirePinnedMirrors(head.State); err != nil {
 		return 0, err
 	}
@@ -73,7 +73,7 @@ func resolveHistoryRevision(repo *repository.Managed, history *repository.Histor
 	if err != nil {
 		return repository.ValidatedCommit{}, err
 	}
-	defer resolvedHistory.Close()
+	defer func() { _ = resolvedHistory.Close() }()
 	resolved, err := resolvedHistory.Tip()
 	if err != nil {
 		return repository.ValidatedCommit{}, err

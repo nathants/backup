@@ -506,7 +506,7 @@ func readTLSFile(path string, private bool) ([]byte, error) {
 		return nil, err
 	}
 	file := os.NewFile(uintptr(fd), path)
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	info, err := file.Stat()
 	if err != nil || !info.Mode().IsRegular() || info.Size() < 1 || info.Size() > maximumTLSFileBytes {
 		return nil, fmt.Errorf("file must be a nonempty bounded regular file")
@@ -561,12 +561,12 @@ func runServer(parent context.Context, arguments []string, stdout, stderr io.Wri
 	if err != nil {
 		return err
 	}
-	defer backend.Close()
+	defer func() { _ = backend.Close() }()
 	listener, err := net.Listen("tcp", *listen)
 	if err != nil {
 		return err
 	}
-	defer listener.Close()
+	defer func() { _ = listener.Close() }()
 	server := &http.Server{
 		Handler:           backend,
 		TLSConfig:         &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{tlsCertificate}},

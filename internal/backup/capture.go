@@ -87,7 +87,7 @@ func (run *runtime) capturePlan(ctx context.Context, txn *transaction, base repo
 	if err != nil {
 		return false, err
 	}
-	defer root.Close()
+	defer func() { _ = root.Close() }()
 	plainSpool, err := run.preparePlaintextSpool(root.Path, captureDirectory, base.Format.RepositoryUUID)
 	if err != nil {
 		return false, errors.Join(err, removeTreeIfPresent(captureDirectory))
@@ -103,7 +103,7 @@ func (run *runtime) capturePlan(ctx context.Context, txn *transaction, base repo
 	if err != nil {
 		return false, err
 	}
-	defer dedup.Close()
+	defer func() { _ = dedup.Close() }()
 	var pendingIndex []format.IndexEntry
 	var builder *pack.StreamBuilder
 	var builderSize uint64
@@ -297,7 +297,7 @@ func (run *runtime) uploadCapturedPart(ctx context.Context, part *pack.StreamPar
 		return err
 	}
 	file := os.NewFile(uintptr(fd), part.Path)
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	expected := objectstore.Object{Size: part.Size, BLAKE2b: part.Hash, SHA256: part.SHA256, MD5: part.MD5}
 	key, err := format.ObjectKey(part.Hash, part.ObjectID)
 	if err != nil {
@@ -376,7 +376,7 @@ func (run *runtime) cleanupInterruptedPlaintextSpool(txn *transaction) error {
 	if err != nil {
 		return err
 	}
-	defer history.Close()
+	defer func() { _ = history.Close() }()
 	tip, err := history.Tip()
 	if err != nil {
 		return err
@@ -385,7 +385,7 @@ func (run *runtime) cleanupInterruptedPlaintextSpool(txn *transaction) error {
 	if err != nil {
 		return err
 	}
-	defer root.Close()
+	defer func() { _ = root.Close() }()
 	spool, err := run.preparePlaintextSpool(root.Path, filepath.Join(run.options.transactionFilesPath(), "capture"), tip.State.Format.RepositoryUUID)
 	if err != nil {
 		return err

@@ -171,8 +171,8 @@ func validateTarHeader(header *tar.Header) error {
 	if header.Size < 0 || header.Mode != 0o600 || header.Uid != 0 || header.Gid != 0 || header.Uname != "" || header.Gname != "" || header.Linkname != "" || header.Devmajor != 0 || header.Devminor != 0 {
 		return fmt.Errorf("tar member %s has noncanonical metadata", header.Name)
 	}
-	if !header.ModTime.Equal(time.Unix(0, 0)) || !header.AccessTime.IsZero() || !header.ChangeTime.IsZero() || len(header.Xattrs) != 0 {
-		return fmt.Errorf("tar member %s has noncanonical timestamps or xattrs", header.Name)
+	if !header.ModTime.Equal(time.Unix(0, 0)) || !header.AccessTime.IsZero() || !header.ChangeTime.IsZero() {
+		return fmt.Errorf("tar member %s has noncanonical timestamps", header.Name)
 	}
 	expectedPAX := map[string]string{"path": header.Name}
 	if header.Size > 8_589_934_591 {
@@ -278,6 +278,6 @@ func syncDirectory(path string) error {
 	if err != nil {
 		return err
 	}
-	defer directory.Close()
+	defer func() { _ = directory.Close() }()
 	return directory.Sync()
 }

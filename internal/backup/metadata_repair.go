@@ -21,7 +21,7 @@ func RepairMetadataEdge(ctx context.Context, options Options, destinationMirror,
 	if err != nil {
 		return result, err
 	}
-	defer run.close()
+	defer func() { _ = run.close() }()
 	if txn, err := run.loadTransaction(); err != nil {
 		return result, err
 	} else if txn != nil {
@@ -31,7 +31,7 @@ func RepairMetadataEdge(ctx context.Context, options Options, destinationMirror,
 	if err != nil {
 		return result, err
 	}
-	defer history.Close()
+	defer func() { _ = history.Close() }()
 	if err := run.requirePinnedMirrors(head.State); err != nil {
 		return result, err
 	}
@@ -220,7 +220,7 @@ func validateRebuiltMetadataEdge(source *repository.Managed, built metadatachain
 	if err != nil {
 		return err
 	}
-	defer history.Close()
+	defer func() { _ = history.Close() }()
 	validatedTip, err := history.Tip()
 	if err != nil {
 		return err

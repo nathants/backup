@@ -37,7 +37,7 @@ func (validator Validator) ValidateHistory(revision string) (_ *History, returnE
 	}
 	tipID := strings.TrimSpace(string(resolved))
 	if !isGitOID(tipID) {
-		return nil, fmt.Errorf("Git returned invalid commit ID %q", tipID)
+		return nil, fmt.Errorf("git returned invalid commit ID %q", tipID)
 	}
 
 	workspace, err := os.MkdirTemp("", "backup-history-validation-")
@@ -225,7 +225,7 @@ func compactMirrorTopology(workspace, rawPath string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer input.Close()
+	defer func() { _ = input.Close() }()
 	uniquePath := filepath.Join(workspace, "mirror-topology")
 	output, err := os.OpenFile(uniquePath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {

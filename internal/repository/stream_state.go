@@ -57,7 +57,7 @@ func (source fileStateSource) withBlob(name string, visit func(io.Reader) error)
 		return fmt.Errorf("open metadata blob %q: %w", name, err)
 	}
 	file := os.NewFile(uintptr(fd), blob.Path)
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	var stat unix.Stat_t
 	if err := unix.Fstat(fd, &stat); err != nil {
 		return err
@@ -194,7 +194,7 @@ func parseStreamState(source stateSource, limits format.Limits) (State, error) {
 		_ = securefs.RemoveTree(workspace)
 		return State{}, err
 	}
-	defer securefs.RemoveTree(workspace)
+	defer func() { _ = securefs.RemoveTree(workspace) }()
 	if err := validateStreamCatalogs(&state, limits, workspace); err != nil {
 		return State{}, fmt.Errorf("metadata catalogs: %w", err)
 	}
@@ -462,7 +462,7 @@ func scanDerived(path string, maximumLine int, visit func([]string) error, finis
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	scanner := bufio.NewScanner(file)
 	scanner.Buffer(make([]byte, min(maximumLine, 64<<10)), maximumLine+1)
 	for scanner.Scan() {
@@ -481,12 +481,12 @@ func mergeIndexObjects(indexPath, objectsPath string, maximumLine int) error {
 	if err != nil {
 		return err
 	}
-	defer index.Close()
+	defer func() { _ = index.Close() }()
 	objects, err := newDerivedRows(objectsPath, maximumLine)
 	if err != nil {
 		return err
 	}
-	defer objects.Close()
+	defer func() { _ = objects.Close() }()
 	indexNext, objectNext := index.Next(), objects.Next()
 	for indexNext {
 		if len(index.Fields()) != 3 {
@@ -513,12 +513,12 @@ func mergeObjectPacks(objectsPath, packsPath string, maximumLine int) error {
 	if err != nil {
 		return err
 	}
-	defer objects.Close()
+	defer func() { _ = objects.Close() }()
 	packs, err := newDerivedRows(packsPath, maximumLine)
 	if err != nil {
 		return err
 	}
-	defer packs.Close()
+	defer func() { _ = packs.Close() }()
 	objectNext, packNext := objects.Next(), packs.Next()
 	for objectNext {
 		if len(objects.Fields()) != 2 {

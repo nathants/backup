@@ -29,7 +29,7 @@ func WalkChangedPacks(base, candidate State, transition TransitionKind, visit fu
 		_ = securefs.RemoveTree(workspace)
 		return err
 	}
-	defer securefs.RemoveTree(workspace)
+	defer func() { _ = securefs.RemoveTree(workspace) }()
 	oldPath, newPath := filepath.Join(workspace, "old"), filepath.Join(workspace, "new")
 	if err := materializeStateBlob(base, "packs.tsv", oldPath); err != nil {
 		return err
@@ -41,12 +41,12 @@ func WalkChangedPacks(base, candidate State, transition TransitionKind, visit fu
 	if err != nil {
 		return err
 	}
-	defer oldRows.Close()
+	defer func() { _ = oldRows.Close() }()
 	newRows, err := newDerivedRows(newPath, format.DefaultLimits().MaxLineBytes)
 	if err != nil {
 		return err
 	}
-	defer newRows.Close()
+	defer func() { _ = newRows.Close() }()
 	oldNext, newNext := oldRows.Next(), newRows.Next()
 	for oldNext || newNext {
 		if !newNext {
@@ -115,7 +115,7 @@ func ValidateCatalogStateForSnapshot(snapshot, alternate State) error {
 		_ = securefs.RemoveTree(workspace)
 		return err
 	}
-	defer securefs.RemoveTree(workspace)
+	defer func() { _ = securefs.RemoveTree(workspace) }()
 	snapshotPath, alternatePath := filepath.Join(workspace, "snapshot"), filepath.Join(workspace, "alternate")
 	if err := materializeStateBlob(snapshot, "packs.tsv", snapshotPath); err != nil {
 		return err
@@ -127,12 +127,12 @@ func ValidateCatalogStateForSnapshot(snapshot, alternate State) error {
 	if err != nil {
 		return err
 	}
-	defer left.Close()
+	defer func() { _ = left.Close() }()
 	right, err := newDerivedRows(alternatePath, format.DefaultLimits().MaxLineBytes)
 	if err != nil {
 		return err
 	}
-	defer right.Close()
+	defer func() { _ = right.Close() }()
 	leftNext, rightNext := left.Next(), right.Next()
 	for leftNext {
 		if len(left.Fields()) != 8 {

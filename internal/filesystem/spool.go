@@ -103,7 +103,7 @@ func DirectoryCapacity(path string) (uint64, uint64, error) {
 	if err != nil {
 		return 0, 0, err
 	}
-	defer unix.Close(fd)
+	defer func() { _ = unix.Close(fd) }()
 	return capacityForFD(fd)
 }
 

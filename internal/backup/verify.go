@@ -19,7 +19,7 @@ func Verify(ctx context.Context, options Options, minimumMirrors int, revision s
 	if err != nil {
 		return result, err
 	}
-	defer run.close()
+	defer func() { _ = run.close() }()
 	if txn, err := run.loadTransaction(); err != nil {
 		return result, err
 	} else if txn != nil && txn.PushAttempted {
@@ -29,7 +29,7 @@ func Verify(ctx context.Context, options Options, minimumMirrors int, revision s
 	if err != nil {
 		return result, err
 	}
-	defer history.Close()
+	defer func() { _ = history.Close() }()
 	if err := run.requirePinnedMirrors(head.State); err != nil {
 		return result, err
 	}

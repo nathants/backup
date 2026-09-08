@@ -184,7 +184,7 @@ func prepareRestoreCatalogs(snapshot repository.State, selection restoreSelectio
 	if err != nil {
 		return err
 	}
-	defer selected.Close()
+	defer func() { _ = selected.Close() }()
 	selectedNext := selected.Next()
 	allRaw, err := createRestoreOutput(filepath.Join(selection.directory, "all-objects-by-pack.raw"))
 	if err != nil {
@@ -247,7 +247,7 @@ func compactSelectedHashes(input, output string) error {
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	destination, err := createRestoreOutput(output)
 	if err != nil {
 		return err
@@ -287,7 +287,7 @@ func writeNeededPacks(input, output string) error {
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	destination, err := createRestoreOutput(output)
 	if err != nil {
 		return err
@@ -335,7 +335,7 @@ func openRestoreRows(path string, fieldCount int) (*restoreRows, error) {
 	file := os.NewFile(uintptr(fd), path)
 	info, err := file.Stat()
 	if err != nil || !info.Mode().IsRegular() {
-		file.Close()
+		_ = file.Close()
 		return nil, fmt.Errorf("derived restore file %q is not regular", path)
 	}
 	scanner := bufio.NewScanner(file)
@@ -394,13 +394,13 @@ func stageSelectedContentStream(ctx context.Context, run *runtime, catalog repos
 	}
 	selected, err := openRestoreRows(selection.selectedObjectsByPack, 3)
 	if err != nil {
-		all.Close()
+		_ = all.Close()
 		return err
 	}
 	needed, err := openRestoreRows(selection.neededPacks, 1)
 	if err != nil {
-		all.Close()
-		selected.Close()
+		_ = all.Close()
+		_ = selected.Close()
 		return err
 	}
 	stager := &restorePackStager{
@@ -608,20 +608,20 @@ func fetchPackPart(ctx context.Context, run *runtime, part format.PackEntry, out
 		return err
 	}
 	partPath := partFile.Name()
-	defer os.Remove(partPath)
+	defer func() { _ = os.Remove(partPath) }()
 	if err := partFile.Chmod(0o600); err != nil {
-		partFile.Close()
+		_ = partFile.Close()
 		return err
 	}
 	fetched := false
 	var failures []string
 	for _, mirror := range run.config.Mirrors {
 		if err := partFile.Truncate(0); err != nil {
-			partFile.Close()
+			_ = partFile.Close()
 			return err
 		}
 		if _, err := partFile.Seek(0, io.SeekStart); err != nil {
-			partFile.Close()
+			_ = partFile.Close()
 			return err
 		}
 		reader, err := run.reader(ctx, mirror)
@@ -635,15 +635,15 @@ func fetchPackPart(ctx context.Context, run *runtime, part format.PackEntry, out
 		failures = append(failures, mirror.Canonical.Name+": "+errorText(err))
 	}
 	if !fetched {
-		partFile.Close()
+		_ = partFile.Close()
 		return &packPartUnavailableError{packHash: part.PackHash, partNumber: part.PartNumber, failures: failures}
 	}
 	if err := partFile.Sync(); err != nil {
-		partFile.Close()
+		_ = partFile.Close()
 		return err
 	}
 	if _, err := partFile.Seek(0, io.SeekStart); err != nil {
-		partFile.Close()
+		_ = partFile.Close()
 		return err
 	}
 	written, copyErr := io.Copy(output, partFile)
@@ -665,7 +665,7 @@ func verifyAllStagedStream(selection restoreSelection) error {
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		hash := rows.Fields()[0]
 		expectedSize, err := strconv.ParseUint(rows.Fields()[1], 10, 64)
@@ -700,7 +700,7 @@ func walkSelectedIndex(path string, visit func(format.IndexEntry) error) error {
 		return err
 	}
 	file := os.NewFile(uintptr(fd), path)
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	return format.WalkIndex(file, format.DefaultLimits(), visit)
 }
 

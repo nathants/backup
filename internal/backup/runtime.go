@@ -82,18 +82,18 @@ func (run *runtime) openStateAndLock() error {
 	}
 	run.lock = os.NewFile(uintptr(fd), lockPath)
 	if err := unix.Flock(fd, unix.LOCK_EX|unix.LOCK_NB); err != nil {
-		run.lock.Close()
+		_ = run.lock.Close()
 		run.lock = nil
 		return fmt.Errorf("backup repository is locked by another operation: %w", err)
 	}
 	store, err := durable.Open(run.options.statePath())
 	if err != nil {
-		run.close()
+		_ = run.close()
 		return err
 	}
 	run.store = store
 	if err := run.repo.RecoverMaterialization(); err != nil {
-		run.close()
+		_ = run.close()
 		return fmt.Errorf("recover metadata worktree materialization: %w", err)
 	}
 	return nil
@@ -413,7 +413,7 @@ func (run *runtime) openStaged(relative string) (*os.File, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer unix.Close(rootFD)
+	defer func() { _ = unix.Close(rootFD) }()
 	fd, err := unix.Openat2(rootFD, relative, &unix.OpenHow{
 		Flags:   uint64(unix.O_RDONLY | unix.O_CLOEXEC | unix.O_NOFOLLOW),
 		Resolve: uint64(unix.RESOLVE_BENEATH | unix.RESOLVE_NO_SYMLINKS | unix.RESOLVE_NO_MAGICLINKS),
@@ -436,7 +436,7 @@ func (run *runtime) putStaged(ctx context.Context, writer *objectstore.Client, k
 	if err != nil {
 		return objectstore.CreateResult{Disposition: objectstore.CreateFailed, Err: err}
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	return writer.PutOpenFile(ctx, key, file, expected)
 }
 
@@ -448,7 +448,7 @@ func (run *runtime) readStaged(relative string, limit int64) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	reader := io.Reader(file)
 	if limit < int64(^uint64(0)>>1) {
 		reader = io.LimitReader(file, limit+1)
@@ -468,7 +468,7 @@ func (run *runtime) validateStagedObject(relative string, expected objectstore.O
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	actual, err := objectstore.HashReader(file)
 	if err != nil {
 		return err
@@ -587,26 +587,26 @@ func (run *runtime) validatedHead(fetch bool) (repository.ValidatedCommit, *repo
 		}
 		remote, err := history.Tip()
 		if err != nil {
-			history.Close()
+			_ = history.Close()
 			return repository.ValidatedCommit{}, nil, err
 		}
 		localHead, localErr := run.repo.Head()
 		if localErr != nil {
-			history.Close()
+			_ = history.Close()
 			return repository.ValidatedCommit{}, nil, fmt.Errorf("resolve local metadata head: %w", localErr)
 		}
 		if localHead != remote.CommitID {
 			_, found, findErr := history.IndexOf(localHead)
 			if findErr != nil {
-				history.Close()
+				_ = history.Close()
 				return repository.ValidatedCommit{}, nil, findErr
 			}
 			if !found {
-				history.Close()
+				_ = history.Close()
 				return repository.ValidatedCommit{}, nil, fmt.Errorf("local metadata head %s is not an ancestor of validated remote head %s", localHead, remote.CommitID)
 			}
 			if err := run.repo.ApplyCommit(remote.CommitID, localHead); err != nil {
-				history.Close()
+				_ = history.Close()
 				return repository.ValidatedCommit{}, nil, err
 			}
 		}
@@ -622,7 +622,7 @@ func (run *runtime) validatedHead(fetch bool) (repository.ValidatedCommit, *repo
 	}
 	tip, err := history.Tip()
 	if err != nil {
-		history.Close()
+		_ = history.Close()
 		return repository.ValidatedCommit{}, nil, err
 	}
 	return tip, history, nil
@@ -706,7 +706,7 @@ func (run *runtime) secretKey() ([]byte, error) {
 		return nil, fmt.Errorf("open secret-key file: %w", err)
 	}
 	file := os.NewFile(uintptr(fd), filename)
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	info, err := file.Stat()
 	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0o077 != 0 || info.Size() < 1 || info.Size() > maximumSecretKeyFileSize {
 		return nil, fmt.Errorf("secret-key file must be a small regular file with mode 0600 or stricter")
@@ -820,7 +820,7 @@ func syncDirectory(path string) error {
 	if err != nil {
 		return err
 	}
-	defer directory.Close()
+	defer func() { _ = directory.Close() }()
 	return directory.Sync()
 }
 

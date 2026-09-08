@@ -151,7 +151,7 @@ func TestDefaultObjectLimitMatchesClientPartLimit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer server.Close()
+	defer func() { _ = server.Close() }()
 	if server.config.MaximumObjectSize != 1<<30 {
 		t.Fatalf("default maximum object size=%d, want 1 GiB", server.config.MaximumObjectSize)
 	}
@@ -691,7 +691,7 @@ func TestDataRootSymlinkIsRejected(t *testing.T) {
 	}
 	server, err := Open(Config{Root: link, Bucket: testBucket, Region: testRegion, Credentials: map[string]Credential{writerKey: {SecretKey: writerSecret, Role: RoleWriter}}})
 	if server != nil {
-		server.Close()
+		_ = server.Close()
 	}
 	if err == nil {
 		t.Fatal("data-root symlink was accepted")

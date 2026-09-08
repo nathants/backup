@@ -140,16 +140,16 @@ func TestStreamingPackUploadsBoundedPartsAndAcceptsNonHashOrder(t *testing.T) {
 	}
 	var changed [1]byte
 	if _, err := catalog.ReadAt(changed[:], 4); err != nil {
-		catalog.Close()
+		_ = catalog.Close()
 		t.Fatal(err)
 	}
 	changed[0] ^= 1
 	if _, err := catalog.WriteAt(changed[:], 4); err != nil {
-		catalog.Close()
+		_ = catalog.Close()
 		t.Fatal(err)
 	}
 	if err := catalog.Sync(); err != nil {
-		catalog.Close()
+		_ = catalog.Close()
 		t.Fatal(err)
 	}
 	if err := catalog.Close(); err != nil {

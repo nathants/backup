@@ -20,7 +20,7 @@ func Sync(ctx context.Context, options Options, sourceName, destinationName, rev
 	if err != nil {
 		return result, err
 	}
-	defer run.close()
+	defer func() { _ = run.close() }()
 	if txn, err := run.loadTransaction(); err != nil {
 		return result, err
 	} else if txn != nil {
@@ -30,7 +30,7 @@ func Sync(ctx context.Context, options Options, sourceName, destinationName, rev
 	if err != nil {
 		return result, err
 	}
-	defer history.Close()
+	defer func() { _ = history.Close() }()
 	if err := run.requirePinnedMirrors(head.State); err != nil {
 		return result, err
 	}
@@ -205,11 +205,11 @@ func copyMirrorObject(ctx context.Context, source, destinationReader, destinatio
 		return false, err
 	}
 	if err := source.GetVerified(ctx, key, expected, file); err != nil {
-		file.Close()
+		_ = file.Close()
 		return false, err
 	}
 	if err := file.Sync(); err != nil {
-		file.Close()
+		_ = file.Close()
 		return false, err
 	}
 	if err := file.Close(); err != nil {

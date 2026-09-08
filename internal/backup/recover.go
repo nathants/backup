@@ -126,7 +126,7 @@ func Recover(ctx context.Context, options Options, request RecoverRequest) (Reco
 		_ = removeTreeNoFollow(verificationWorkspace)
 		return result, err
 	}
-	defer removeTreeNoFollow(verificationWorkspace)
+	defer func() { _ = removeTreeNoFollow(verificationWorkspace) }()
 	verified, failures, err := verifyRecoveryCandidates(ctx, client, candidates, request.Tip, secretKey, verificationWorkspace, normalized.SpaceReserveBytes)
 	if err != nil {
 		return result, err
@@ -207,7 +207,7 @@ func Recover(ctx context.Context, options Options, request RecoverRequest) (Reco
 	if err != nil {
 		return result, fmt.Errorf("revalidate selected metadata chain: %w", err)
 	}
-	selectedHistory.Close()
+	_ = selectedHistory.Close()
 	if err := os.Rename(quarantine, destination); err != nil {
 		return result, err
 	}
@@ -453,7 +453,7 @@ func verifyRecoveryCandidates(ctx context.Context, client *objectstore.Client, c
 			}
 			commitIDsPath := filepath.Join(workspace, fmt.Sprintf("verified-%08d.ids", len(verified)))
 			walkErr := writeRecoveryCommitIDs(history, commitIDsPath, candidateTips, covered, &commitRecords)
-			history.Close()
+			_ = history.Close()
 			if walkErr != nil {
 				return nil, failures, walkErr
 			}
@@ -526,7 +526,7 @@ func reportAvailableRecoveries(verified []verifiedRecovery, workspace string, re
 	if err != nil {
 		return 0, err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	scanner := bufio.NewScanner(file)
 	scanner.Buffer(make([]byte, 65), 65)
 	var count uint64
@@ -555,7 +555,7 @@ func walkRecoveryCommitIDs(path string, visit func(string) error) error {
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	scanner := bufio.NewScanner(file)
 	scanner.Buffer(make([]byte, 65), 65)
 	for scanner.Scan() {
@@ -585,7 +585,7 @@ func materializeAndValidateRecoveryPath(ctx context.Context, client *objectstore
 		return "", nil, fmt.Errorf("validate recovered metadata history: %w", err)
 	}
 	if err := validateRecoveredManifestPath(chosen, history, expectedTip); err != nil {
-		history.Close()
+		_ = history.Close()
 		return "", nil, err
 	}
 	return quarantine, history, nil

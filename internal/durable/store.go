@@ -99,7 +99,7 @@ func (store *Store) Read(name string, destination any) error {
 		return err
 	}
 	file := os.NewFile(uintptr(fd), name)
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	info, err := file.Stat()
 	if err != nil || !info.Mode().IsRegular() || info.Size() < 1 || info.Size() > maximumStateBytes {
 		return fmt.Errorf("durable state file has invalid type or size")

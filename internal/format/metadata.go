@@ -42,7 +42,6 @@ type RepositoryFormat struct {
 	EncryptionAlgorithm          string
 	FormatVersion                string
 	GitObjectFormat              string
-	ObjectNamespace              string
 	PackFormatVersion            string
 	PackHashAlgorithm            string
 	RecoveryRecipientFingerprint string
@@ -50,7 +49,7 @@ type RepositoryFormat struct {
 	TarAlgorithm                 string
 }
 
-func NewRepositoryFormat(repositoryUUID, objectNamespace, recoveryFingerprint string) RepositoryFormat {
+func NewRepositoryFormat(repositoryUUID, recoveryFingerprint string) RepositoryFormat {
 	return RepositoryFormat{
 		ChecksumAlgorithms:           "blake2b-512,sha256,md5",
 		CompressionAlgorithm:         "zstd",
@@ -58,7 +57,6 @@ func NewRepositoryFormat(repositoryUUID, objectNamespace, recoveryFingerprint st
 		EncryptionAlgorithm:          "go-libsodium-recipient-stream-v1",
 		FormatVersion:                "1",
 		GitObjectFormat:              "sha256",
-		ObjectNamespace:              objectNamespace,
 		PackFormatVersion:            "1",
 		PackHashAlgorithm:            "blake2b-512",
 		RecoveryRecipientFingerprint: recoveryFingerprint,
@@ -75,7 +73,6 @@ func (format RepositoryFormat) rows() [][]string {
 		{"encryption-algorithm", format.EncryptionAlgorithm},
 		{"format-version", format.FormatVersion},
 		{"git-object-format", format.GitObjectFormat},
-		{"object-namespace", format.ObjectNamespace},
 		{"pack-format-version", format.PackFormatVersion},
 		{"pack-hash-algorithm", format.PackHashAlgorithm},
 		{"recovery-recipient-fingerprint", format.RecoveryRecipientFingerprint},
@@ -96,7 +93,7 @@ func ParseRepositoryFormat(reader io.Reader, limits Limits) (RepositoryFormat, e
 	if err != nil {
 		return RepositoryFormat{}, fmt.Errorf("FORMAT: %w", err)
 	}
-	expected := NewRepositoryFormat("00000000-0000-4000-8000-000000000000", strings.Repeat("0", 32), "v1:blake2b-512:"+strings.Repeat("0", 128)).rows()
+	expected := NewRepositoryFormat("00000000-0000-4000-8000-000000000000", "v1:blake2b-512:"+strings.Repeat("0", 128)).rows()
 	if len(rows) != len(expected) {
 		return RepositoryFormat{}, fmt.Errorf("FORMAT has %d keys, expected %d", len(rows), len(expected))
 	}
@@ -117,7 +114,6 @@ func ParseRepositoryFormat(reader io.Reader, limits Limits) (RepositoryFormat, e
 		EncryptionAlgorithm:          values["encryption-algorithm"],
 		FormatVersion:                values["format-version"],
 		GitObjectFormat:              values["git-object-format"],
-		ObjectNamespace:              values["object-namespace"],
 		PackFormatVersion:            values["pack-format-version"],
 		PackHashAlgorithm:            values["pack-hash-algorithm"],
 		RecoveryRecipientFingerprint: values["recovery-recipient-fingerprint"],
@@ -160,9 +156,6 @@ func (format RepositoryFormat) validate() error {
 	}
 	if !uuidPattern.MatchString(format.RepositoryUUID) {
 		return fmt.Errorf("invalid repository UUID %q", format.RepositoryUUID)
-	}
-	if !objectIDPattern.MatchString(format.ObjectNamespace) {
-		return fmt.Errorf("invalid object namespace %q", format.ObjectNamespace)
 	}
 	if !fingerprintPattern.MatchString(format.RecoveryRecipientFingerprint) {
 		return fmt.Errorf("invalid recovery recipient fingerprint %q", format.RecoveryRecipientFingerprint)

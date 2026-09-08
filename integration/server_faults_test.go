@@ -449,7 +449,7 @@ func listAllPages(t *testing.T, h *dockerHarness, prefix string, maxKeys int) []
 func sendTruncatedRequest(t *testing.T, h *dockerHarness, request *http.Request, bodyBytes int) int {
 	t.Helper()
 	connection := writeRawRequest(t, h, request, bodyBytes)
-	defer connection.Close()
+	defer func() { _ = connection.Close() }()
 	response, err := http.ReadResponse(bufio.NewReader(connection), request)
 	if err != nil {
 		return 0
@@ -479,12 +479,12 @@ func writeRawRequest(t *testing.T, h *dockerHarness, request *http.Request, body
 	}
 	connection := dialRawTLS(t, h)
 	if _, err := connection.Write(wire); err != nil {
-		connection.Close()
+		_ = connection.Close()
 		t.Fatal(err)
 	}
 	if bodyBytes >= 0 {
 		if err := connection.CloseWrite(); err != nil {
-			connection.Close()
+			_ = connection.Close()
 			t.Fatal(err)
 		}
 	}
@@ -494,7 +494,7 @@ func writeRawRequest(t *testing.T, h *dockerHarness, request *http.Request, body
 func sendMalformedBytes(t *testing.T, h *dockerHarness, wire []byte) int {
 	t.Helper()
 	connection := dialRawTLS(t, h)
-	defer connection.Close()
+	defer func() { _ = connection.Close() }()
 	if _, err := connection.Write(wire); err != nil {
 		t.Fatal(err)
 	}

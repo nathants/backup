@@ -19,7 +19,6 @@ const (
 func TestFormatRoundTripAndExactKeys(t *testing.T) {
 	f := NewRepositoryFormat(
 		"123e4567-e89b-42d3-a456-426614174000",
-		"55555555555555555555555555555555",
 		"v1:blake2b-512:"+hashA,
 	)
 	data, err := f.MarshalText()
@@ -32,7 +31,6 @@ func TestFormatRoundTripAndExactKeys(t *testing.T) {
 		"encryption-algorithm\tgo-libsodium-recipient-stream-v1\n" +
 		"format-version\t1\n" +
 		"git-object-format\tsha256\n" +
-		"object-namespace\t55555555555555555555555555555555\n" +
 		"pack-format-version\t1\n" +
 		"pack-hash-algorithm\tblake2b-512\n" +
 		"recovery-recipient-fingerprint\tv1:blake2b-512:" + hashA + "\n" +
@@ -51,6 +49,7 @@ func TestFormatRoundTripAndExactKeys(t *testing.T) {
 	for _, mutation := range []string{
 		strings.Replace(want, "format-version\t1\n", "", 1),
 		want + "unknown\tvalue\n",
+		strings.Replace(want, "pack-format-version\t1\n", "object-namespace\t55555555555555555555555555555555\npack-format-version\t1\n", 1),
 		strings.Replace(want, "zstd", "gzip", 1),
 		strings.Replace(want, "checksum-algorithms", "tar-algorithm", 1),
 	} {

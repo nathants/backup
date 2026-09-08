@@ -22,7 +22,7 @@ func Init(ctx context.Context, options Options, request InitRequest) (SnapshotRe
 	if err != nil {
 		return SnapshotResult{}, err
 	}
-	defer initializationLock.Close()
+	defer func() { _ = initializationLock.Close() }()
 	config, err := localconfig.Load(normalized.ConfigPath)
 	if err != nil {
 		return SnapshotResult{}, err
@@ -34,7 +34,7 @@ initialize:
 		if err != nil {
 			return SnapshotResult{}, err
 		}
-		defer run.close()
+		defer func() { _ = run.close() }()
 		txn, err := run.loadTransaction()
 		if err != nil {
 			return SnapshotResult{}, err
@@ -84,11 +84,7 @@ initialize:
 	if err != nil {
 		return SnapshotResult{}, err
 	}
-	namespace, err := randomHex(16)
-	if err != nil {
-		return SnapshotResult{}, err
-	}
-	repositoryFormat := format.NewRepositoryFormat(uuid, namespace, format.RecoveryFingerprint(request.RecoveryPublicKey))
+	repositoryFormat := format.NewRepositoryFormat(uuid, format.RecoveryFingerprint(request.RecoveryPublicKey))
 	formatBytes, err := repositoryFormat.MarshalText()
 	if err != nil {
 		return SnapshotResult{}, err
@@ -118,7 +114,7 @@ initialize:
 	if err := run.openStateAndLock(); err != nil {
 		return SnapshotResult{}, err
 	}
-	defer run.close()
+	defer func() { _ = run.close() }()
 	if err := run.prepareTransactionFiles(); err != nil {
 		return SnapshotResult{}, err
 	}

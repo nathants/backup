@@ -125,7 +125,7 @@ func (source gitStateSource) withBlob(name string, visit func(io.Reader) error) 
 func parseRootTree(data []byte) (map[string]treeEntry, error) {
 	entries := make(map[string]treeEntry)
 	if len(data) == 0 || data[len(data)-1] != 0 {
-		return nil, fmt.Errorf("Git tree listing is empty or not NUL-terminated")
+		return nil, fmt.Errorf("git tree listing is empty or not NUL-terminated")
 	}
 	for _, record := range bytes.Split(data[:len(data)-1], []byte{0}) {
 		tab := bytes.IndexByte(record, '\t')
@@ -162,11 +162,11 @@ func (validator Validator) blobSize(objectID string) (int64, error) {
 	}
 	trimmed := strings.TrimSpace(string(sizeText))
 	if trimmed == "" || trimmed != "0" && strings.HasPrefix(trimmed, "0") {
-		return 0, fmt.Errorf("Git returned noncanonical blob size %q", trimmed)
+		return 0, fmt.Errorf("git returned noncanonical blob size %q", trimmed)
 	}
 	size, err := strconv.ParseInt(trimmed, 10, 64)
 	if err != nil || size < 0 {
-		return 0, fmt.Errorf("Git returned invalid blob size %q", trimmed)
+		return 0, fmt.Errorf("git returned invalid blob size %q", trimmed)
 	}
 	return size, nil
 }
@@ -302,7 +302,7 @@ func (validator Validator) withGitBlob(objectID string, declared int64, visit fu
 		return fmt.Errorf("wait for git cat-file: %w", waitErr)
 	}
 	if tracked.count != uint64(declared) || extraCount != 0 {
-		return fmt.Errorf("Git blob %s returned a size different from its declaration", objectID)
+		return fmt.Errorf("git blob %s returned a size different from its declaration", objectID)
 	}
 	return nil
 }
@@ -436,7 +436,7 @@ func syncDirectory(path string) error {
 	if err != nil {
 		return err
 	}
-	defer directory.Close()
+	defer func() { _ = directory.Close() }()
 	return directory.Sync()
 }
 

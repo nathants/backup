@@ -142,7 +142,7 @@ func TestHistoricalCatalogCompatibilityAllowsOnlyRelocation(t *testing.T) {
 func validGenesisBlobs(t *testing.T) map[string][]byte {
 	t.Helper()
 	key := make([]byte, 32)
-	repositoryFormat := format.NewRepositoryFormat("123e4567-e89b-42d3-a456-426614174000", "11111111111111111111111111111111", format.RecoveryFingerprint(key))
+	repositoryFormat := format.NewRepositoryFormat("123e4567-e89b-42d3-a456-426614174000", format.RecoveryFingerprint(key))
 	formatBytes, err := repositoryFormat.MarshalText()
 	if err != nil {
 		t.Fatal(err)

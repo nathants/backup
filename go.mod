@@ -10,7 +10,7 @@ require (
 	github.com/aws/smithy-go v1.27.3
 	github.com/klauspost/compress v1.19.0
 	github.com/nathants/go-libsodium v0.0.0-20260502104057-4e1a79aae4f3
-	golang.org/x/crypto v0.54.0
+	golang.org/x/crypto v0.55.0
 	golang.org/x/sys v0.47.0
 )
 

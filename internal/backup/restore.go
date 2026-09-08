@@ -60,7 +60,7 @@ func Restore(ctx context.Context, options Options, request RestoreRequest) (Rest
 	if err != nil {
 		return result, err
 	}
-	defer run.close()
+	defer func() { _ = run.close() }()
 	if txn, err := run.loadTransaction(); err != nil {
 		return result, err
 	} else if txn != nil && txn.PushAttempted {
@@ -70,7 +70,7 @@ func Restore(ctx context.Context, options Options, request RestoreRequest) (Rest
 	if err != nil {
 		return result, err
 	}
-	defer history.Close()
+	defer func() { _ = history.Close() }()
 	if err := run.requirePinnedMirrors(head.State); err != nil {
 		return result, err
 	}
@@ -109,7 +109,7 @@ func Restore(ctx context.Context, options Options, request RestoreRequest) (Rest
 	if err != nil {
 		return result, err
 	}
-	defer unix.Close(targetFD)
+	defer func() { _ = unix.Close(targetFD) }()
 	stage, err := os.MkdirTemp(run.options.statePath(), restoreTemporaryPrefix)
 	if err != nil {
 		return result, err
@@ -183,7 +183,7 @@ func destinationStatus(rootFD int, entry format.IndexEntry, overwrite bool) (str
 		if openErr != nil {
 			return "conflict", nil
 		}
-		unix.Close(current)
+		_ = unix.Close(current)
 		current = next
 	}
 	var stat unix.Stat_t
@@ -223,16 +223,16 @@ func openOrCreateDestinationParent(rootFD int, path string) (int, string, error)
 		next, openErr := unix.Openat(current, component, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
 		if errors.Is(openErr, unix.ENOENT) {
 			if mkdirErr := unix.Mkdirat(current, component, 0o700); mkdirErr != nil && !errors.Is(mkdirErr, unix.EEXIST) {
-				unix.Close(current)
+				_ = unix.Close(current)
 				return -1, "", mkdirErr
 			}
 			if syncErr := unix.Fsync(current); syncErr != nil {
-				unix.Close(current)
+				_ = unix.Close(current)
 				return -1, "", syncErr
 			}
 			next, openErr = unix.Openat(current, component, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
 		}
-		unix.Close(current)
+		_ = unix.Close(current)
 		if openErr != nil {
 			return -1, "", fmt.Errorf("destination parent %q is not a safe directory: %w", component, openErr)
 		}
@@ -246,7 +246,7 @@ func publishRegular(rootFD int, source string, entry format.IndexEntry, overwrit
 	if err != nil {
 		return err
 	}
-	defer unix.Close(parentFD)
+	defer func() { _ = unix.Close(parentFD) }()
 	status, err := destinationStatus(rootFD, entry, overwrite)
 	if err != nil || status == "conflict" {
 		if err != nil {
@@ -312,7 +312,7 @@ func publishSymlink(rootFD int, entry format.IndexEntry, overwrite bool) error {
 	if err != nil {
 		return err
 	}
-	defer unix.Close(parentFD)
+	defer func() { _ = unix.Close(parentFD) }()
 	status, err := destinationStatus(rootFD, entry, overwrite)
 	if err != nil || status == "conflict" {
 		if err != nil {

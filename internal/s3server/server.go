@@ -144,7 +144,7 @@ func Open(config Config) (*Server, error) {
 		return nil, fmt.Errorf("open data root: %w", err)
 	}
 	if err := unix.Fchmod(rootFD, 0o700); err != nil {
-		unix.Close(rootFD)
+		_ = unix.Close(rootFD)
 		return nil, fmt.Errorf("set data-root mode: %w", err)
 	}
 	server := &Server{
@@ -163,7 +163,7 @@ func Open(config Config) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open internal directory: %w", err)
 	}
-	defer unix.Close(internalFD)
+	defer func() { _ = unix.Close(internalFD) }()
 	lockFD, err := unix.Openat(internalFD, lockFilename, unix.O_RDWR|unix.O_CREAT|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("open server lock: %w", err)
@@ -488,7 +488,7 @@ func (server *Server) installTemporary(tempName, key string) error {
 	if err != nil {
 		return err
 	}
-	defer unix.Close(parentFD)
+	defer func() { _ = unix.Close(parentFD) }()
 	leaf := components[len(components)-1]
 	if err := unix.Linkat(server.tempFD, tempName, parentFD, leaf, 0); err != nil {
 		return err
@@ -507,7 +507,7 @@ func (server *Server) getObject(ctx context.Context, writer http.ResponseWriter,
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	writer.Header().Set("Content-Length", strconv.FormatInt(info.Size(), 10))
 	writer.Header().Set("Content-Type", "application/octet-stream")
 	writer.WriteHeader(http.StatusOK)
@@ -520,7 +520,7 @@ func (server *Server) headObject(ctx context.Context, writer http.ResponseWriter
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	mode := request.Header.Get("x-amz-checksum-mode")
 	if mode != "" && mode != "ENABLED" {
 		return requestFailure(http.StatusBadRequest, "InvalidRequest", "x-amz-checksum-mode must be ENABLED")
@@ -560,7 +560,7 @@ func (server *Server) openObject(key string) (*os.File, os.FileInfo, error) {
 	}
 	for _, component := range components[:len(components)-1] {
 		nextFD, openErr := unix.Openat(currentFD, component, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
-		unix.Close(currentFD)
+		_ = unix.Close(currentFD)
 		if openErr != nil {
 			if errors.Is(openErr, unix.ENOENT) {
 				return nil, nil, requestFailure(http.StatusNotFound, "NoSuchKey", "object does not exist")
@@ -571,7 +571,7 @@ func (server *Server) openObject(key string) (*os.File, os.FileInfo, error) {
 	}
 	leaf := components[len(components)-1]
 	objectFD, openErr := unix.Openat(currentFD, leaf, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
-	unix.Close(currentFD)
+	_ = unix.Close(currentFD)
 	if openErr != nil {
 		if errors.Is(openErr, unix.ENOENT) {
 			return nil, nil, requestFailure(http.StatusNotFound, "NoSuchKey", "object does not exist")
@@ -581,11 +581,11 @@ func (server *Server) openObject(key string) (*os.File, os.FileInfo, error) {
 	file := os.NewFile(uintptr(objectFD), leaf)
 	info, statErr := file.Stat()
 	if statErr != nil {
-		file.Close()
+		_ = file.Close()
 		return nil, nil, statErr
 	}
 	if !info.Mode().IsRegular() {
-		file.Close()
+		_ = file.Close()
 		return nil, nil, requestFailure(http.StatusInternalServerError, "InvalidObjectState", "stored object is not a regular file")
 	}
 	return file, info, nil
@@ -598,7 +598,7 @@ func (server *Server) ensureObjectParent(components []string) (int, error) {
 	}
 	for _, component := range components {
 		nextFD, openErr := openOrCreateDirectory(currentFD, component, 0o700)
-		unix.Close(currentFD)
+		_ = unix.Close(currentFD)
 		if openErr != nil {
 			return -1, openErr
 		}
@@ -1048,7 +1048,7 @@ func (server *Server) scanListingNamespace(namespace string) ([]listContent, uin
 		}
 		currentFD = nextFD
 	}
-	defer unix.Close(currentFD)
+	defer func() { _ = unix.Close(currentFD) }()
 	entries := make([]listContent, 0)
 	var inspections uint64
 	var walk func(int, string) error

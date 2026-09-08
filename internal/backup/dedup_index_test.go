@@ -22,7 +22,7 @@ func TestDedupIndexStoresAndChecksHashAndSize(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer index.Close()
+	defer func() { _ = index.Close() }()
 
 	first := strings.Repeat("01", 64)
 	second := strings.Repeat("ab", 64)

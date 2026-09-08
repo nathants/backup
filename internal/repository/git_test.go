@@ -48,7 +48,7 @@ func TestValidatorAcceptsLinearSHA256History(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer history.Close()
+	defer func() { _ = history.Close() }()
 	if history.Len() != 2 {
 		t.Fatalf("second history: len=%d", history.Len())
 	}
@@ -91,7 +91,7 @@ func TestValidatorCacheFallsBackSafelyAndValidatesDescendants(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer history.Close()
+	defer func() { _ = history.Close() }()
 	if history.Len() != 2 {
 		t.Fatalf("fallback validation history=%d", history.Len())
 	}
@@ -201,7 +201,7 @@ func TestValidatorIgnoresHostileGitEnvironment(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer history.Close()
+	defer func() { _ = history.Close() }()
 	validatedTip, err := history.Tip()
 	if err != nil || history.Len() != 1 || validatedTip.CommitID != tip {
 		t.Fatalf("hostile process Git environment affected validation: count=%d tip=%#v err=%v", history.Len(), validatedTip, err)

@@ -31,7 +31,7 @@ func TestClientAgainstProductionServerContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer server.Close()
+	defer func() { _ = server.Close() }()
 	httpServer := httptest.NewTLSServer(server)
 	defer httpServer.Close()
 	mirror := format.Mirror{Name: "local", Kind: format.MirrorBackupServer, S3URL: "s3://backup-test/repository", Endpoint: httpServer.URL, Region: "us-east-1"}
@@ -249,7 +249,11 @@ func TestTrustedHTTPClientBoundsHeaderAndBodyInactivity(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := client.Get(server.URL); err == nil {
+		response, err := client.Get(server.URL)
+		if response != nil {
+			defer func() { _ = response.Body.Close() }()
+		}
+		if err == nil {
 			t.Fatal("stalled response headers did not time out")
 		}
 	})

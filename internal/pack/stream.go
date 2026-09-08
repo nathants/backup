@@ -117,7 +117,7 @@ func (builder *StreamBuilder) Add(file StagedFile) error {
 		closeInput = true
 	}
 	if closeInput {
-		defer input.Close()
+		defer func() { _ = input.Close() }()
 	}
 	if _, err := input.Seek(0, io.SeekStart); err != nil {
 		return fmt.Errorf("rewind captured plaintext: %w", err)
@@ -404,8 +404,8 @@ func (sink *partSink) openPart() error {
 		return err
 	}
 	if err := file.Chmod(0o600); err != nil {
-		file.Close()
-		os.Remove(file.Name())
+		_ = file.Close()
+		_ = os.Remove(file.Name())
 		return err
 	}
 	sink.file, sink.path, sink.size = file, file.Name(), 0
@@ -421,9 +421,9 @@ func (sink *partSink) finishPart() error {
 	path := sink.path
 	file := sink.file
 	sink.file, sink.path = nil, ""
-	defer os.Remove(path)
+	defer func() { _ = os.Remove(path) }()
 	if err := file.Sync(); err != nil {
-		file.Close()
+		_ = file.Close()
 		return err
 	}
 	if err := file.Close(); err != nil {

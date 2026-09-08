@@ -9,7 +9,6 @@ import (
 func FuzzCanonicalMetadataParsers(f *testing.F) {
 	validFormat, err := NewRepositoryFormat(
 		"123e4567-e89b-42d3-a456-426614174000",
-		strings.Repeat("1", 32),
 		"v1:blake2b-512:"+strings.Repeat("0", 128),
 	).MarshalText()
 	if err != nil {

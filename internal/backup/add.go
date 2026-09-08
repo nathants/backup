@@ -22,11 +22,14 @@ import (
 )
 
 func Add(ctx context.Context, options Options, allowEmpty bool) (AddResult, error) {
+	if err := ctx.Err(); err != nil {
+		return AddResult{}, err
+	}
 	run, err := openRuntime(options, true)
 	if err != nil {
 		return AddResult{}, err
 	}
-	defer run.close()
+	defer func() { _ = run.close() }()
 	if err := run.cleanupAddBuilds(); err != nil {
 		return AddResult{}, fmt.Errorf("clean stale add workspace: %w", err)
 	}
@@ -39,7 +42,7 @@ func Add(ctx context.Context, options Options, allowEmpty bool) (AddResult, erro
 	if err != nil {
 		return AddResult{}, err
 	}
-	defer history.Close()
+	defer func() { _ = history.Close() }()
 	status, err := run.repo.StatusAgainst(head.State)
 	if err != nil {
 		return AddResult{}, err
@@ -82,7 +85,7 @@ func Add(ctx context.Context, options Options, allowEmpty bool) (AddResult, erro
 	if err != nil {
 		return AddResult{}, err
 	}
-	defer root.Close()
+	defer func() { _ = root.Close() }()
 	scan, plan, uniqueNew, newPacks, noChanges, err := run.buildAddPlan(root, ignore, configBlobs, head.State, allowEmpty)
 	if err != nil {
 		return AddResult{}, err
@@ -127,7 +130,7 @@ func (run *runtime) buildAddPlan(root *filesystem.Root, ignore format.Ignore, co
 	}
 	rawHashes, err := os.OpenFile(rawHashesPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
-		rawIndex.Close()
+		_ = rawIndex.Close()
 		return filesystem.Result{}, nil, 0, 0, false, err
 	}
 	indexWriter := bufio.NewWriterSize(rawIndex, 256<<10)
@@ -194,7 +197,7 @@ func (run *runtime) buildAddPlan(root *filesystem.Root, ignore format.Ignore, co
 	if err != nil {
 		return filesystem.Result{}, nil, 0, 0, false, err
 	}
-	defer dedup.Close()
+	defer func() { _ = dedup.Close() }()
 	if err := base.WalkObjects(format.DefaultLimits(), func(object format.ObjectEntry) error {
 		return dedup.Insert(object.PlaintextHash, object.PlaintextSize)
 	}); err != nil {
@@ -323,7 +326,7 @@ func countProvisionalObjects(path string, dedup *dedupIndex, target uint64) (int
 	if err != nil {
 		return 0, 0, err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	scanner := bufio.NewScanner(file)
 	scanner.Buffer(make([]byte, 512), 1024)
 	unique, packs := 0, 0
@@ -395,7 +398,7 @@ func readRegularNoFollow(path string, maximum int64) ([]byte, error) {
 		return nil, err
 	}
 	file := os.NewFile(uintptr(fd), path)
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	info, err := file.Stat()
 	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0o644 || info.Size() < 0 || info.Size() > maximum {
 		return nil, fmt.Errorf("file must be a regular mode-0644 blob of at most %d bytes", maximum)
@@ -428,7 +431,7 @@ func DiffCandidate(options Options, visit func(Diff) error) (uint64, error) {
 	if err != nil {
 		return 0, err
 	}
-	defer run.close()
+	defer func() { _ = run.close() }()
 	txn, err := run.loadTransaction()
 	if err != nil || txn == nil {
 		return 0, err
@@ -437,7 +440,7 @@ func DiffCandidate(options Options, visit func(Diff) error) (uint64, error) {
 	if err != nil {
 		return 0, err
 	}
-	defer history.Close()
+	defer func() { _ = history.Close() }()
 	tip, err := history.Tip()
 	if err != nil {
 		return 0, err
@@ -455,7 +458,7 @@ func DiffCandidate(options Options, visit func(Diff) error) (uint64, error) {
 	if err != nil {
 		return 0, err
 	}
-	defer indexFile.Close()
+	defer func() { _ = indexFile.Close() }()
 	return diffIndexReader(tip.State, indexFile, visit)
 }
 

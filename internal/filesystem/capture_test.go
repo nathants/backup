@@ -22,7 +22,7 @@ func TestCaptureRegularUsesOpenTimeBoundAcrossGrowthAndTruncation(t *testing.T) 
 			t.Fatal(err)
 		}
 		root, planned := openPlannedPath(t, rootPath, "./file")
-		defer root.Close()
+		defer func() { _ = root.Close() }()
 		root.captureOpened = func(string) error {
 			file, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0)
 			if err != nil {
@@ -46,7 +46,7 @@ func TestCaptureRegularUsesOpenTimeBoundAcrossGrowthAndTruncation(t *testing.T) 
 			t.Fatal(err)
 		}
 		root, planned := openPlannedPath(t, rootPath, "./file")
-		defer root.Close()
+		defer func() { _ = root.Close() }()
 		want := original[:8]
 		root.captureOpened = func(string) error { return os.Truncate(path, int64(len(want))) }
 		captured := capturePlanned(t, root, planned)
@@ -68,7 +68,7 @@ func TestCapturePathAcceptsSupportedTypeChangesAndOmitsSpecials(t *testing.T) {
 			t.Fatal(err)
 		}
 		root, planned := openPlannedPath(t, rootPath, "./changing")
-		defer root.Close()
+		defer func() { _ = root.Close() }()
 		if err := os.Remove(path); err != nil {
 			t.Fatal(err)
 		}
@@ -79,7 +79,7 @@ func TestCapturePathAcceptsSupportedTypeChangesAndOmitsSpecials(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer spool.CloseAndRemove()
+		defer func() { _ = spool.CloseAndRemove() }()
 		captured, err := root.CapturePath(planned, spool, 1)
 		if err != nil {
 			t.Fatal(err)
@@ -99,7 +99,7 @@ func TestCapturePathAcceptsSupportedTypeChangesAndOmitsSpecials(t *testing.T) {
 			t.Fatal(err)
 		}
 		root, planned := openPlannedPath(t, rootPath, "./changing")
-		defer root.Close()
+		defer func() { _ = root.Close() }()
 		if err := os.Remove(path); err != nil {
 			t.Fatal(err)
 		}
@@ -124,7 +124,7 @@ func TestCapturePathAcceptsSupportedTypeChangesAndOmitsSpecials(t *testing.T) {
 			t.Fatal(err)
 		}
 		root, planned := openPlannedPath(t, rootPath, "./changing")
-		defer root.Close()
+		defer func() { _ = root.Close() }()
 		want := []byte("replacement bytes")
 		root.captureBeforeOpen = func(string) error {
 			root.captureBeforeOpen = nil
@@ -150,7 +150,7 @@ func TestCapturePathAcceptsSupportedTypeChangesAndOmitsSpecials(t *testing.T) {
 			t.Fatal(err)
 		}
 		root, planned := openPlannedPath(t, rootPath, "./changing")
-		defer root.Close()
+		defer func() { _ = root.Close() }()
 		if err := os.Remove(path); err != nil {
 			t.Fatal(err)
 		}
@@ -161,7 +161,7 @@ func TestCapturePathAcceptsSupportedTypeChangesAndOmitsSpecials(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer spool.CloseAndRemove()
+		defer func() { _ = spool.CloseAndRemove() }()
 		captured, err := root.CapturePath(planned, spool, 1)
 		if err != nil {
 			t.Fatal(err)
@@ -180,7 +180,7 @@ func openPlannedPath(t *testing.T, rootPath, wanted string) (*Root, format.Index
 	}
 	result, err := scanForTest(root, format.Ignore{}, nil)
 	if err != nil {
-		root.Close()
+		_ = root.Close()
 		t.Fatal(err)
 	}
 	for _, entry := range result.Index {
@@ -188,7 +188,7 @@ func openPlannedPath(t *testing.T, rootPath, wanted string) (*Root, format.Index
 			return root, entry
 		}
 	}
-	root.Close()
+	_ = root.Close()
 	t.Fatalf("planned path %s not found in %#v", wanted, result.Index)
 	return nil, format.IndexEntry{}
 }
@@ -212,7 +212,7 @@ func assertCapturedBytes(t *testing.T, captured CaptureResult, want []byte) {
 	if captured.Entry == nil || captured.Plain == nil {
 		t.Fatalf("capture lacks regular bytes: %#v", captured)
 	}
-	defer captured.Plain.Remove()
+	defer func() { _ = captured.Plain.Remove() }()
 	if _, err := captured.Plain.File.Seek(0, io.SeekStart); err != nil {
 		t.Fatal(err)
 	}

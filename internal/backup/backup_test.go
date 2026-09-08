@@ -307,7 +307,7 @@ func TestRestorePublicationErrorReportsAlreadyRenamedPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer unix.Close(targetFD)
+	defer func() { _ = unix.Close(targetFD) }()
 	source := filepath.Join(t.TempDir(), "plain")
 	if err := os.WriteFile(source, []byte("payload"), 0o600); err != nil {
 		t.Fatal(err)
@@ -867,7 +867,7 @@ func TestAddRejectsOversizedMutableConfigurationBeforeAllocation(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := file.Truncate(format.MaximumIgnoreBytes + 1); err != nil {
-		file.Close()
+		_ = file.Close()
 		t.Fatal(err)
 	}
 	if err := file.Close(); err != nil {
@@ -1432,7 +1432,7 @@ func loadTestTransaction(t *testing.T, options Options) *transaction {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer run.close()
+	defer func() { _ = run.close() }()
 	txn, err := run.loadTransaction()
 	if err != nil || txn == nil {
 		t.Fatalf("load transaction: %#v %v", txn, err)
@@ -1515,14 +1515,14 @@ func TestDurableTransactionRejectsEscapingStagedPath(t *testing.T) {
 	}
 	txn, err := run.loadTransaction()
 	if err != nil {
-		run.close()
+		_ = run.close()
 		t.Fatal(err)
 	}
 	ref := txn.CandidateFiles["packs.tsv"]
 	ref.RelativePath = "../../outside"
 	txn.CandidateFiles["packs.tsv"] = ref
 	if err := run.store.Write(transactionFilename, txn); err != nil {
-		run.close()
+		_ = run.close()
 		t.Fatal(err)
 	}
 	if err := run.close(); err != nil {
@@ -1603,20 +1603,20 @@ func TestDurableTransactionRejectsMissingStagedCatalogPart(t *testing.T) {
 	}
 	txn, err := run.loadTransaction()
 	if err != nil {
-		run.close()
+		_ = run.close()
 		t.Fatal(err)
 	}
 	_, _, packPaths, err := run.captureSegmentInputPaths(txn, true)
 	if err != nil {
-		run.close()
+		_ = run.close()
 		t.Fatal(err)
 	}
 	if len(packPaths) == 0 {
-		run.close()
+		_ = run.close()
 		t.Fatal("expected captured pack progress")
 	}
 	if err := os.Remove(packPaths[0]); err != nil {
-		run.close()
+		_ = run.close()
 		t.Fatal(err)
 	}
 	if err := run.close(); err != nil {
@@ -1646,13 +1646,13 @@ func TestDurableTransactionRejectsForgedMirrorCompletion(t *testing.T) {
 	}
 	txn, err := run.loadTransaction()
 	if err != nil {
-		run.close()
+		_ = run.close()
 		t.Fatal(err)
 	}
 	progress := txn.progress("local")
 	progress.RevisionComplete = true
 	if err := run.store.Write(transactionFilename, txn); err != nil {
-		run.close()
+		_ = run.close()
 		t.Fatal(err)
 	}
 	if err := run.close(); err != nil {
@@ -1788,19 +1788,19 @@ func TestCommitConfirmsLostPushThroughValidatedRemoteDescendant(t *testing.T) {
 	}
 	txn, err := run.loadTransaction()
 	if err != nil {
-		run.close()
+		_ = run.close()
 		t.Fatal(err)
 	}
 	candidate, err := run.loadCandidateState(txn)
 	if err != nil {
-		run.close()
+		_ = run.close()
 		t.Fatal(err)
 	}
 	blobs := testStateBlobs(t, candidate)
 	blobs["ignore"] = []byte("^\\./descendant-only$\n")
 	descendant, err := run.repo.CreateCommit(txn.LocalCommit, blobs, "validated descendant")
 	if err != nil {
-		run.close()
+		_ = run.close()
 		t.Fatal(err)
 	}
 	runGit(t, "--git-dir", harness.bare, "fetch", filepath.Join(harness.root, ".backup"), descendant+":refs/heads/main")
@@ -1875,19 +1875,19 @@ func TestResetAllowsAbandonAfterCompetingRemoteAdvance(t *testing.T) {
 	}
 	txn, err := run.loadTransaction()
 	if err != nil {
-		run.close()
+		_ = run.close()
 		t.Fatal(err)
 	}
 	baseHistory, err := (repository.Validator{Repo: run.repo.Directory, Limits: format.DefaultLimits()}).ValidateHistory(txn.BaseCommit)
 	if err != nil {
-		run.close()
+		_ = run.close()
 		t.Fatal(err)
 	}
 	blobs := testStateBlobs(t, testHistoryTip(t, baseHistory).State)
 	blobs["ignore"] = []byte("^\\./competing-writer$\n")
 	competing, err := run.repo.CreateCommit(txn.BaseCommit, blobs, "competing writer")
 	if err != nil {
-		run.close()
+		_ = run.close()
 		t.Fatal(err)
 	}
 	runGit(t, "--git-dir", harness.bare, "fetch", filepath.Join(harness.root, ".backup"), competing+":refs/heads/main")
@@ -1981,25 +1981,25 @@ func TestDurableTransactionRejectsChangedStagedBytes(t *testing.T) {
 	}
 	txn, err := run.loadTransaction()
 	if err != nil {
-		run.close()
+		_ = run.close()
 		t.Fatal(err)
 	}
 	if txn.Metadata == nil || len(txn.Metadata.Manifest.Parts) == 0 {
-		run.close()
+		_ = run.close()
 		t.Fatal("expected staged metadata part")
 	}
 	relative, err := metadataPartRelative(txn.Metadata, 0)
 	if err != nil {
-		run.close()
+		_ = run.close()
 		t.Fatal(err)
 	}
 	path, err := run.stagedPath(relative)
 	if err != nil {
-		run.close()
+		_ = run.close()
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(path, []byte("corrupt"), 0o600); err != nil {
-		run.close()
+		_ = run.close()
 		t.Fatal(err)
 	}
 	if err := run.close(); err != nil {

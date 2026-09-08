@@ -21,6 +21,14 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials"
 )
 
+func TestAddRejectsCanceledContextBeforeFilesystemAccess(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := Add(ctx, Options{Root: filepath.Join(t.TempDir(), "missing")}, false); err != context.Canceled {
+		t.Fatalf("Add with canceled context returned %v", err)
+	}
+}
+
 func TestResetAbandonsAcceptedUnpublishedGenesis(t *testing.T) {
 	harness := newIntegrationHarness(t)
 	failed := false
@@ -391,7 +399,7 @@ func TestHistoricalRestoreReportsAndUsesExplicitRelocation(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := corrupt.Write([]byte("corrupt historical representation")); err != nil {
-		corrupt.Close()
+		_ = corrupt.Close()
 		t.Fatal(err)
 	}
 	if err := corrupt.Close(); err != nil {
@@ -691,7 +699,7 @@ func TestLargeFileStreamsAcrossMultipleCiphertextParts(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := io.CopyN(file, rand.Reader, 8<<20); err != nil {
-		file.Close()
+		_ = file.Close()
 		t.Fatal(err)
 	}
 	if err := file.Close(); err != nil {
@@ -734,7 +742,7 @@ func TestLargeFileStreamsAcrossMultipleCiphertextParts(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer file.Close()
+		defer func() { _ = file.Close() }()
 		identity, err := objectstore.HashReader(file)
 		if err != nil {
 			t.Fatal(err)

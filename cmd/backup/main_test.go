@@ -43,7 +43,7 @@ func TestInitPublicKeyFileIsBoundedBeforeParsing(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := file.Truncate(format.MaximumPublicKeysBytes + 1); err != nil {
-		file.Close()
+		_ = file.Close()
 		t.Fatal(err)
 	}
 	if err := file.Close(); err != nil {
@@ -118,10 +118,12 @@ func TestUnknownCommandAndMissingArgumentsAreErrors(t *testing.T) {
 
 func TestRecoverResultEscapesDestination(t *testing.T) {
 	var output bytes.Buffer
-	printRecoverResult(&output, backupapp.RecoverResult{
+	if err := printRecoverResult(&output, backupapp.RecoverResult{
 		RecoveredTip: strings.Repeat("b", 64),
 		Destination:  "/restore\ninjected\tpath",
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 	if strings.Contains(output.String(), "/restore\ninjected\tpath") || !strings.Contains(output.String(), "destination\t/restore\\x0ainjected\\x09path\n") {
 		t.Fatalf("recover output contains unescaped destination: %q", output.String())
 	}
@@ -129,7 +131,9 @@ func TestRecoverResultEscapesDestination(t *testing.T) {
 
 func TestSnapshotResultAndPublicKeyEncoding(t *testing.T) {
 	var output bytes.Buffer
-	printSnapshotResult(&output, backupapp.SnapshotResult{CommitID: strings.Repeat("a", 64), CompleteMirrors: []string{"a"}, LaggingMirrors: []string{"b"}})
+	if err := printSnapshotResult(&output, backupapp.SnapshotResult{CommitID: strings.Repeat("a", 64), CompleteMirrors: []string{"a"}, LaggingMirrors: []string{"b"}}); err != nil {
+		t.Fatal(err)
+	}
 	for _, want := range []string{"commit\t" + strings.Repeat("a", 64), "complete-mirror\ta", "lagging-mirror\tb"} {
 		if !strings.Contains(output.String(), want+"\n") {
 			t.Fatalf("snapshot output %q lacks %q", output.String(), want)

@@ -54,7 +54,7 @@ func SortFiles(workspace string, inputs []string, output string, options Options
 		_ = securefs.RemoveTree(stage)
 		return err
 	}
-	defer securefs.RemoveTree(stage)
+	defer func() { _ = securefs.RemoveTree(stage) }()
 
 	var runs []string
 	chunk := make([]record, 0, 1024)
@@ -95,18 +95,18 @@ func SortFiles(workspace string, inputs []string, output string, options Options
 			data := append([]byte(nil), reader.Bytes()...)
 			key, err := options.Key(data)
 			if err != nil {
-				reader.Close()
+				_ = reader.Close()
 				return fmt.Errorf("extract sort key from %q: %w", input, err)
 			}
 			key = append([]byte(nil), key...)
 			if len(key) == 0 {
-				reader.Close()
+				_ = reader.Close()
 				return fmt.Errorf("external sort key is empty")
 			}
 			cost := len(data) + len(key) + 64
 			if len(chunk) != 0 && used > options.MemoryBytes-cost {
 				if err := spill(); err != nil {
-					reader.Close()
+					_ = reader.Close()
 					return err
 				}
 			}
@@ -114,7 +114,7 @@ func SortFiles(workspace string, inputs []string, output string, options Options
 			used += cost
 		}
 		if err := reader.Err(); err != nil {
-			reader.Close()
+			_ = reader.Close()
 			return fmt.Errorf("read sort input %q: %w", input, err)
 		}
 		if err := reader.Close(); err != nil {
@@ -181,20 +181,20 @@ func writeRecords(path string, records []record) error {
 	writer := bufio.NewWriterSize(file, 256<<10)
 	for _, record := range records {
 		if _, err := writer.Write(record.data); err != nil {
-			file.Close()
+			_ = file.Close()
 			return err
 		}
 		if err := writer.WriteByte('\n'); err != nil {
-			file.Close()
+			_ = file.Close()
 			return err
 		}
 	}
 	if err := writer.Flush(); err != nil {
-		file.Close()
+		_ = file.Close()
 		return err
 	}
 	if err := file.Sync(); err != nil {
-		file.Close()
+		_ = file.Close()
 		return err
 	}
 	return file.Close()
@@ -213,22 +213,22 @@ func openLineReader(path string, maxLine int) (*lineReader, error) {
 	file := os.NewFile(uintptr(fd), path)
 	info, err := file.Stat()
 	if err != nil || !info.Mode().IsRegular() {
-		file.Close()
+		_ = file.Close()
 		return nil, fmt.Errorf("sort input %q is not a regular file", path)
 	}
 	if info.Size() > 0 {
 		var last [1]byte
 		if _, err := file.ReadAt(last[:], info.Size()-1); err != nil {
-			file.Close()
+			_ = file.Close()
 			return nil, err
 		}
 		if last[0] != '\n' {
-			file.Close()
+			_ = file.Close()
 			return nil, fmt.Errorf("sort input %q does not end in LF", path)
 		}
 	}
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
-		file.Close()
+		_ = file.Close()
 		return nil, err
 	}
 	scanner := bufio.NewScanner(file)
@@ -371,7 +371,7 @@ func publishFile(source, destination string) error {
 	if err != nil {
 		return err
 	}
-	defer dir.Close()
+	defer func() { _ = dir.Close() }()
 	return dir.Sync()
 }
 

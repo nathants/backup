@@ -42,7 +42,7 @@ func Load(path string) (Config, error) {
 		return Config{}, fmt.Errorf("open trusted config: %w", err)
 	}
 	file := os.NewFile(uintptr(fd), absolute)
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	info, err := file.Stat()
 	if err != nil {
 		return Config{}, err

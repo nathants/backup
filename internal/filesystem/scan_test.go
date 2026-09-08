@@ -21,7 +21,7 @@ func TestScanPreservesSymlinkToBackupRoot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer root.Close()
+	defer func() { _ = root.Close() }()
 	result, err := scanForTest(root, format.Ignore{}, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -74,7 +74,7 @@ func TestScanFilesSymlinksIgnoresAndSpecials(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer root.Close()
+	defer func() { _ = root.Close() }()
 	var events []Event
 	result, err := scanForTest(root, ignore, func(event Event) { events = append(events, event) })
 	if err != nil {
@@ -130,7 +130,7 @@ func TestScanUsesActualAbsoluteSymlinkSemantics(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer root.Close()
+	defer func() { _ = root.Close() }()
 	result, err := scanForTest(root, format.Ignore{}, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -159,7 +159,7 @@ func TestWalkReadsAllDirectoryBatches(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer root.Close()
+	defer func() { _ = root.Close() }()
 	result, err := scanForTest(root, format.Ignore{}, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -176,7 +176,7 @@ func TestScanRejectsInvalidPathAndReadFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer root.Close()
+	defer func() { _ = root.Close() }()
 	if _, err := scanForTest(root, format.Ignore{}, nil); err == nil {
 		t.Fatal("invalid path was silently omitted")
 	}

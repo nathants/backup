@@ -78,7 +78,7 @@ func TestRestorePlanningRSSHelper(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer unix.Close(targetFD)
+	defer func() { _ = unix.Close(targetFD) }()
 	var result RestoreResult
 	var reported uint64
 	_, conflicts, err := planRestoreSelection(state, regexp.MustCompile(`^\./item-`), targetFD, false, os.Getenv("BACKUP_RESTORE_RSS_STAGE"), func(event RestoreEvent) error {
@@ -131,7 +131,7 @@ func TestRestoreReportFailureCountsEveryUnpublishedPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer unix.Close(targetFD)
+	defer func() { _ = unix.Close(targetFD) }()
 	reportErr := errors.New("report output failed")
 	var result RestoreResult
 	err = publishRestoreSelection(targetFD, targetPath, restoreSelection{directory: stage, regularIndex: regular, symlinkIndex: symlinks}, false, func(event RestoreEvent) error {
@@ -151,7 +151,7 @@ func TestRestoreReportFailureCountsEveryUnpublishedPath(t *testing.T) {
 func writeLargeRestoreMetadata(t *testing.T, directory string, records int) {
 	t.Helper()
 	key := make([]byte, 32)
-	repositoryFormat := format.NewRepositoryFormat("123e4567-e89b-42d3-a456-426614174000", "11111111111111111111111111111111", format.RecoveryFingerprint(key))
+	repositoryFormat := format.NewRepositoryFormat("123e4567-e89b-42d3-a456-426614174000", format.RecoveryFingerprint(key))
 	formatBytes, err := repositoryFormat.MarshalText()
 	if err != nil {
 		t.Fatal(err)
@@ -179,16 +179,16 @@ func writeLargeRestoreMetadata(t *testing.T, directory string, records int) {
 	writer := bufio.NewWriterSize(index, 1<<20)
 	for number := 0; number < records; number++ {
 		if _, err := fmt.Fprintf(writer, "./item-%07d\tsymlink\ttarget:./\t0\t-\t-\n", number); err != nil {
-			index.Close()
+			_ = index.Close()
 			t.Fatal(err)
 		}
 	}
 	if err := writer.Flush(); err != nil {
-		index.Close()
+		_ = index.Close()
 		t.Fatal(err)
 	}
 	if err := index.Sync(); err != nil {
-		index.Close()
+		_ = index.Close()
 		t.Fatal(err)
 	}
 	if err := index.Close(); err != nil {

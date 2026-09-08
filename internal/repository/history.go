@@ -137,7 +137,7 @@ func (history *History) ValidateMirrorTopology(mirrors []format.Mirror) error {
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	limits := format.DefaultLimits()
 	scanner := bufio.NewScanner(file)
 	scanner.Buffer(make([]byte, min(limits.MaxLineBytes, 64<<10)), limits.MaxLineBytes+1)
@@ -162,7 +162,7 @@ func (history *History) topologySnapshot(maximum int64) ([]format.Mirror, bool, 
 	if err != nil {
 		return nil, false, err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	data, err := io.ReadAll(io.LimitReader(file, maximum+1))
 	if err != nil {
 		return nil, false, err

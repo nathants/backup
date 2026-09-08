@@ -17,7 +17,7 @@ func RepairDataPart(ctx context.Context, options Options, sourceMirror, packHash
 	if err != nil {
 		return result, err
 	}
-	defer run.close()
+	defer func() { _ = run.close() }()
 	if txn, err := run.loadTransaction(); err != nil {
 		return result, err
 	} else if txn != nil {
@@ -27,7 +27,7 @@ func RepairDataPart(ctx context.Context, options Options, sourceMirror, packHash
 	if err != nil {
 		return result, err
 	}
-	defer history.Close()
+	defer func() { _ = history.Close() }()
 	if err := run.requirePinnedMirrors(head.State); err != nil {
 		return result, err
 	}
@@ -61,11 +61,11 @@ func RepairDataPart(ctx context.Context, options Options, sourceMirror, packHash
 		return result, err
 	}
 	if err := source.GetVerified(ctx, oldKey, expected, file); err != nil {
-		file.Close()
+		_ = file.Close()
 		return result, fmt.Errorf("source mirror lacks healthy repair bytes: %w", err)
 	}
 	if err := file.Sync(); err != nil {
-		file.Close()
+		_ = file.Close()
 		return result, err
 	}
 	if err := file.Close(); err != nil {

@@ -16,7 +16,7 @@ func Reset(options Options) error {
 	if err != nil {
 		return err
 	}
-	defer run.close()
+	defer func() { _ = run.close() }()
 	txn, err := run.loadTransaction()
 	if err != nil || txn == nil {
 		return err
@@ -51,7 +51,7 @@ func Reset(options Options) error {
 		if err != nil {
 			return fmt.Errorf("validate competing metadata history: %w", err)
 		}
-		defer remoteHistory.Close()
+		defer func() { _ = remoteHistory.Close() }()
 		if _, found, err := remoteHistory.IndexOf(txn.LocalCommit); err != nil {
 			return err
 		} else if found {

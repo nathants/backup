@@ -232,7 +232,7 @@ func (run *runtime) validateStagedRef(ref stagedFileRef) error {
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	identity, err := objectstore.HashReader(file)
 	if err != nil {
 		return err
@@ -275,7 +275,7 @@ func (run *runtime) walkPlan(txn *transaction, start int, visit func(int, format
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	position := 0
 	if err := format.WalkIndex(file, format.DefaultLimits(), func(entry format.IndexEntry) error {
 		current := position

@@ -453,7 +453,7 @@ func doR2LockRequest(ctx context.Context, method, endpoint, token, jurisdiction 
 	if err != nil {
 		return 0, nil, err
 	}
-	defer response.Body.Close()
+	defer func() { _ = response.Body.Close() }()
 	const maximumResponse = 1 << 20
 	data, readErr := io.ReadAll(io.LimitReader(response.Body, maximumResponse+1))
 	if readErr != nil {
@@ -481,7 +481,6 @@ func directCloudClient(config cloudContractConfig, credential aws.Credentials) *
 		}
 		options.EndpointOptions.UseFIPSEndpoint = aws.FIPSEndpointStateDisabled
 		options.EndpointOptions.UseDualStackEndpoint = aws.DualStackEndpointStateDisabled
-		options.UseDualstack = false
 		options.UsePathStyle = config.kind != format.MirrorAWSS3
 	})
 }

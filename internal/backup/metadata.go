@@ -184,20 +184,20 @@ func fetchMetadataBundle(ctx context.Context, client *objectstore.Client, repres
 		}
 		temporaryPath := temporary.Name()
 		if err := temporary.Chmod(0o600); err != nil {
-			temporary.Close()
+			_ = temporary.Close()
 			return err
 		}
 		if err := client.GetVerified(ctx, key, expected, temporary); err != nil {
-			temporary.Close()
+			_ = temporary.Close()
 			_ = os.Remove(temporaryPath)
 			return err
 		}
 		if err := temporary.Sync(); err != nil {
-			temporary.Close()
+			_ = temporary.Close()
 			return err
 		}
 		if _, err := temporary.Seek(0, io.SeekStart); err != nil {
-			temporary.Close()
+			_ = temporary.Close()
 			return err
 		}
 		written, err := io.Copy(output, temporary)
@@ -225,7 +225,7 @@ func decryptMetadataBundle(ciphertextPath, bundlePath string, manifest format.Me
 	if err != nil {
 		return err
 	}
-	defer input.Close()
+	defer func() { _ = input.Close() }()
 	return decryptMetadataBundleReader(input, bundlePath, manifest, secretKey)
 }
 
@@ -303,25 +303,25 @@ func validateMetadataBundleHeader(bundlePath string, manifest format.MetadataMan
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	reader := bufio.NewReaderSize(file, 4096)
 	readLine := func() (string, error) {
 		line, readErr := reader.ReadSlice('\n')
 		if readErr != nil {
 			if readErr == bufio.ErrBufferFull {
-				return "", fmt.Errorf("Git bundle header line exceeds 4096 bytes")
+				return "", fmt.Errorf("git bundle header line exceeds 4096 bytes")
 			}
-			return "", fmt.Errorf("read Git bundle header: %w", readErr)
+			return "", fmt.Errorf("read git bundle header: %w", readErr)
 		}
 		return string(line), nil
 	}
 	line, err := readLine()
 	if err != nil || line != "# v3 git bundle\n" {
-		return fmt.Errorf("Git bundle must use exact version 3 framing")
+		return fmt.Errorf("git bundle must use exact version 3 framing")
 	}
 	line, err = readLine()
 	if err != nil || line != "@object-format=sha256\n" {
-		return fmt.Errorf("Git bundle must declare only SHA-256 object format")
+		return fmt.Errorf("git bundle must declare only SHA-256 object format")
 	}
 	var prerequisites []string
 	var advertised []string
@@ -334,41 +334,41 @@ func validateMetadataBundleHeader(bundlePath string, manifest format.MetadataMan
 			break
 		}
 		if strings.HasPrefix(line, "@") {
-			return fmt.Errorf("Git bundle contains an unexpected capability")
+			return fmt.Errorf("git bundle contains an unexpected capability")
 		}
 		trimmed := strings.TrimSuffix(line, "\n")
 		switch {
 		case strings.HasPrefix(trimmed, "-"):
 			fields := strings.SplitN(strings.TrimPrefix(trimmed, "-"), " ", 2)
 			if len(fields) != 2 || !isCommitID(fields[0]) || fields[1] == "" {
-				return fmt.Errorf("Git bundle contains a malformed prerequisite")
+				return fmt.Errorf("git bundle contains a malformed prerequisite")
 			}
 			prerequisites = append(prerequisites, fields[0])
 		default:
 			fields := strings.Split(trimmed, " ")
 			if len(fields) != 2 || !isCommitID(fields[0]) || fields[1] != "refs/backup/bundle-tip" {
-				return fmt.Errorf("Git bundle contains an unexpected advertised ref")
+				return fmt.Errorf("git bundle contains an unexpected advertised ref")
 			}
 			advertised = append(advertised, fields[0])
 		}
 		if len(prerequisites)+len(advertised) > 2 {
-			return fmt.Errorf("Git bundle header contains excessive records")
+			return fmt.Errorf("git bundle header contains excessive records")
 		}
 	}
 	if len(advertised) != 1 || advertised[0] != manifest.TipCommit {
-		return fmt.Errorf("Git bundle must advertise exactly its declared tip")
+		return fmt.Errorf("git bundle must advertise exactly its declared tip")
 	}
 	switch manifest.Kind {
 	case format.BundleFull:
 		if manifest.BaseCommit != "-" || len(prerequisites) != 0 {
-			return fmt.Errorf("full Git bundle must have no prerequisites")
+			return fmt.Errorf("full git bundle must have no prerequisites")
 		}
 	case format.BundleIncremental:
 		if !isCommitID(manifest.BaseCommit) || len(prerequisites) != 1 || prerequisites[0] != manifest.BaseCommit {
-			return fmt.Errorf("incremental Git bundle must require exactly its declared base")
+			return fmt.Errorf("incremental git bundle must require exactly its declared base")
 		}
 	default:
-		return fmt.Errorf("Git bundle manifest has an invalid kind")
+		return fmt.Errorf("git bundle manifest has an invalid kind")
 	}
 	return nil
 }

@@ -35,7 +35,7 @@ func validateStreamTransition(oldState, newState State) (TransitionKind, error) 
 		_ = securefs.RemoveTree(workspace)
 		return TransitionInvalid, err
 	}
-	defer securefs.RemoveTree(workspace)
+	defer func() { _ = securefs.RemoveTree(workspace) }()
 	if repair, err := isStreamRepairTransition(oldState, newState, workspace); repair || err != nil {
 		if err != nil {
 			return TransitionInvalid, err
@@ -96,12 +96,12 @@ func isStreamRepairTransition(oldState, newState State, workspace string) (bool,
 	if err != nil {
 		return false, err
 	}
-	defer oldRows.Close()
+	defer func() { _ = oldRows.Close() }()
 	newRows, err := newDerivedRows(newPath, format.DefaultLimits().MaxLineBytes)
 	if err != nil {
 		return false, err
 	}
-	defer newRows.Close()
+	defer func() { _ = newRows.Close() }()
 	changed := uint64(0)
 	for {
 		oldNext, newNext := oldRows.Next(), newRows.Next()
@@ -157,7 +157,7 @@ func validateStreamOrdinaryExtension(oldState, newState State, workspace string)
 		_, err := fmt.Fprintf(objectOutput, "%s\t%s\n", fields[2], fields[0])
 		return err
 	}, "object"); err != nil {
-		objectOutput.Close()
+		_ = objectOutput.Close()
 		return err
 	}
 	if err := objectOutput.Close(); err != nil {
@@ -170,25 +170,25 @@ func validateStreamOrdinaryExtension(oldState, newState State, workspace string)
 	}
 	oldRows, err := newDerivedRows(oldPacks, format.DefaultLimits().MaxLineBytes)
 	if err != nil {
-		packOutput.Close()
+		_ = packOutput.Close()
 		return err
 	}
-	defer oldRows.Close()
+	defer func() { _ = oldRows.Close() }()
 	newRows, err := newDerivedRows(newPacks, format.DefaultLimits().MaxLineBytes)
 	if err != nil {
-		packOutput.Close()
+		_ = packOutput.Close()
 		return err
 	}
-	defer newRows.Close()
+	defer func() { _ = newRows.Close() }()
 	oldNext, newNext := oldRows.Next(), newRows.Next()
 	var lastMatchedOldHash string
 	for oldNext || newNext {
 		if oldNext && len(oldRows.Fields()) != 8 || newNext && len(newRows.Fields()) != 8 {
-			packOutput.Close()
+			_ = packOutput.Close()
 			return fmt.Errorf("invalid validated pack row")
 		}
 		if !newNext {
-			packOutput.Close()
+			_ = packOutput.Close()
 			return fmt.Errorf("ordinary transition removed pack rows")
 		}
 		if oldNext {
@@ -196,25 +196,25 @@ func validateStreamOrdinaryExtension(oldState, newState State, workspace string)
 			switch {
 			case comparison == 0:
 				if !equalFields(oldRows.Fields(), newRows.Fields()) {
-					packOutput.Close()
+					_ = packOutput.Close()
 					return fmt.Errorf("ordinary transition altered pack row %s part %s", newRows.Fields()[0], newRows.Fields()[1])
 				}
 				lastMatchedOldHash = oldRows.Fields()[0]
 				oldNext, newNext = oldRows.Next(), newRows.Next()
 				continue
 			case comparison < 0:
-				packOutput.Close()
+				_ = packOutput.Close()
 				return fmt.Errorf("ordinary transition removed pack rows")
 			}
 		}
 		newFields := newRows.Fields()
 		if newFields[0] == lastMatchedOldHash || oldNext && newFields[0] == oldRows.Fields()[0] {
-			packOutput.Close()
+			_ = packOutput.Close()
 			return fmt.Errorf("ordinary transition added parts to an existing pack %s", newFields[0])
 		}
 		if newFields[1] == "0" {
 			if _, err := fmt.Fprintln(packOutput, newFields[0]); err != nil {
-				packOutput.Close()
+				_ = packOutput.Close()
 				return err
 			}
 		}
@@ -246,12 +246,12 @@ func mergeCatalogExtension(oldPath, newPath string, fieldCount int, added func([
 	if err != nil {
 		return err
 	}
-	defer oldRows.Close()
+	defer func() { _ = oldRows.Close() }()
 	newRows, err := newDerivedRows(newPath, format.DefaultLimits().MaxLineBytes)
 	if err != nil {
 		return err
 	}
-	defer newRows.Close()
+	defer func() { _ = newRows.Close() }()
 	oldNext, newNext := oldRows.Next(), newRows.Next()
 	for oldNext || newNext {
 		if oldNext && len(oldRows.Fields()) != fieldCount || newNext && len(newRows.Fields()) != fieldCount {
@@ -313,12 +313,12 @@ func requireNewPackReferences(objectPacksPath, packHashesPath string) error {
 	if err != nil {
 		return err
 	}
-	defer objects.Close()
+	defer func() { _ = objects.Close() }()
 	packs, err := newDerivedRows(packHashesPath, format.DefaultLimits().MaxLineBytes)
 	if err != nil {
 		return err
 	}
-	defer packs.Close()
+	defer func() { _ = packs.Close() }()
 	objectNext, packNext := objects.Next(), packs.Next()
 	for objectNext || packNext {
 		if objectNext && len(objects.Fields()) != 2 || packNext && len(packs.Fields()) != 1 {

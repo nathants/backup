@@ -326,14 +326,6 @@ func newCompletionLedger(repositoryUUID string) completionLedger {
 	return completionLedger{Version: stateVersion, RepositoryUUID: repositoryUUID, Mirrors: make(map[string]string)}
 }
 
-func cloneBlobs(blobs map[string][]byte) map[string][]byte {
-	result := make(map[string][]byte, len(blobs))
-	for name, data := range blobs {
-		result[name] = append([]byte(nil), data...)
-	}
-	return result
-}
-
 func ensurePrivateDirectory(path string) error {
 	if err := os.Mkdir(path, 0o700); err != nil && !os.IsExist(err) {
 		return err
@@ -343,7 +335,7 @@ func ensurePrivateDirectory(path string) error {
 		return fmt.Errorf("open private directory without following symlinks: %w", err)
 	}
 	directory := os.NewFile(uintptr(fd), path)
-	defer directory.Close()
+	defer func() { _ = directory.Close() }()
 	if err := unix.Fchmod(fd, 0o700); err != nil {
 		return err
 	}

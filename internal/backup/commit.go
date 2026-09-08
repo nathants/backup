@@ -19,7 +19,7 @@ func Commit(ctx context.Context, options Options) (SnapshotResult, error) {
 	if err != nil {
 		return SnapshotResult{}, err
 	}
-	defer run.close()
+	defer func() { _ = run.close() }()
 	txn, err := run.loadTransaction()
 	if err != nil {
 		return SnapshotResult{}, err
@@ -29,7 +29,7 @@ func Commit(ctx context.Context, options Options) (SnapshotResult, error) {
 		if err != nil {
 			return SnapshotResult{}, err
 		}
-		defer history.Close()
+		defer func() { _ = history.Close() }()
 		return SnapshotResult{CommitID: head.CommitID, NoChanges: true}, nil
 	}
 	if txn.Plan != nil && len(txn.CandidateFiles) == 0 {
@@ -38,7 +38,7 @@ func Commit(ctx context.Context, options Options) (SnapshotResult, error) {
 			return SnapshotResult{}, err
 		}
 		base, err := history.Tip()
-		history.Close()
+		_ = history.Close()
 		if err != nil {
 			return SnapshotResult{}, err
 		}
@@ -84,7 +84,7 @@ func (run *runtime) commitTransaction(ctx context.Context, txn *transaction) (Sn
 		}
 		base, tipErr := history.Tip()
 		sequence = uint64(history.Len())
-		history.Close()
+		_ = history.Close()
 		if tipErr != nil {
 			return SnapshotResult{}, tipErr
 		}
@@ -113,7 +113,7 @@ func (run *runtime) commitTransaction(ctx context.Context, txn *transaction) (Sn
 			return SnapshotResult{}, fmt.Errorf("validate recorded local commit: %w", err)
 		}
 		local, tipErr := validated.Tip()
-		validated.Close()
+		_ = validated.Close()
 		if tipErr != nil {
 			return SnapshotResult{}, tipErr
 		}
@@ -493,7 +493,7 @@ func (run *runtime) confirmOrPush(_ context.Context, txn *transaction) error {
 	if txn.PushAttempted {
 		if tip, history, err := run.remoteHistory(); err == nil {
 			_, published, findErr := history.IndexOf(txn.LocalCommit)
-			history.Close()
+			_ = history.Close()
 			if findErr != nil {
 				return findErr
 			}
@@ -548,7 +548,7 @@ func (run *runtime) remoteHistory() (string, *repository.History, error) {
 	}
 	tip, err := history.Tip()
 	if err != nil {
-		history.Close()
+		_ = history.Close()
 		return "", nil, err
 	}
 	return tip.CommitID, history, nil
@@ -557,7 +557,7 @@ func (run *runtime) remoteHistory() (string, *repository.History, error) {
 func (run *runtime) remoteTip() (string, error) {
 	tip, history, err := run.remoteHistory()
 	if history != nil {
-		history.Close()
+		_ = history.Close()
 	}
 	return tip, err
 }

@@ -102,7 +102,7 @@ func TestStoreResetRejectsUnexpectedEntryType(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 	fifo := filepath.Join(store.Directory(), "unexpected")
 	if err := unix.Mkfifo(fifo, 0o600); err != nil {
 		t.Fatal(err)

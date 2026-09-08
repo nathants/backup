@@ -41,11 +41,11 @@ func newDedupIndex(path string, maximumEntries uint64) (*dedupIndex, error) {
 	file := os.NewFile(uintptr(fd), path)
 	length := capacity * dedupSlotBytes
 	if length > uint64(^uint64(0)>>1) {
-		file.Close()
+		_ = file.Close()
 		return nil, fmt.Errorf("deduplication index length is not representable")
 	}
 	if err := file.Truncate(int64(length)); err != nil {
-		file.Close()
+		_ = file.Close()
 		return nil, err
 	}
 	return &dedupIndex{file: file, capacity: capacity}, nil
