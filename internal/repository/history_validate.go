@@ -273,7 +273,10 @@ func compactMirrorTopology(workspace, rawPath string) (string, error) {
 }
 
 func (validator Validator) enumerateHistoryIDs(tip string, destination *os.File) (count int, returnErr error) {
-	command := hardenedGitCommand(validator.Repo, "rev-list", "--reverse", "--topo-order", "--max-count="+strconv.Itoa(maximumCommitCount+1), tip)
+	command, err := hardenedGitCommand(validator.Repo, "rev-list", "--reverse", "--topo-order", "--max-count="+strconv.Itoa(maximumCommitCount+1), tip)
+	if err != nil {
+		return 0, err
+	}
 	stdout, err := command.StdoutPipe()
 	if err != nil {
 		return 0, err

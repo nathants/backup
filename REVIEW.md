@@ -84,19 +84,23 @@ Verification, restore, sync, and metadata repair remain usable during pending pu
 
 Full `make check` passed on 2026-09-05, including the final application code under coverage and the race detector (`shell/dcd90c0905d2a71f08575d2b77127ea9/stdout`). `make integration` passed Docker and scratch-account AWS contracts normally and under race, including the real two-mirror client and isolated whole-root client (`shell/60da116d0e272c37c2a0492d60950b25/stdout`). R2 was not enabled. Independent AWS/Docker checks confirmed cleanup of the run's bucket, users, containers, volumes, and image tags (`shell/414ed58849e9372309c587f4ea377d2d/stdout`, `shell/b0cc52d85a60bbff28e72e003f066311/stdout`). These paths are beneath the evidence directory above; no production deployment acceptance or storage power-loss test is claimed.
 
-### 4. The durable state machine relies on Git writes that are not durably configured
+### 4. [done] The durable state machine relies on Git writes that are not durably configured
 
 **Location:** `internal/repository/git.go:215-229`; `internal/repository/manage.go:71-90,151-219`; `internal/backup/commit.go:150-185`.
 
 Canonical blobs, trees, and commits are created with Git plumbing, and their commit ID is then saved in fsynced transaction state. Neither the hardened Git invocation nor initialization pins `core.fsync`/`core.fsyncMethod`. There is no corresponding explicit hardening of those newly written Git objects and references before the durable control record depends on them.
 
-The installed Git manual documents the usual default as `committed,-loose-object`; `committed` itself is currently equivalent to `objects`, not `reference`. It explicitly warns that unhardened components can be lost after an unclean shutdown. Atomic worktree file replacement or fsync of a transaction file is not a durability contract for separate Git object/ref files.
+The installed Git manual warns that unhardened components can be lost after an unclean shutdown. Its aggregate descriptions are stale: Git v2.55.0 source defines `committed` as objects plus references, while its default excludes loose objects and references (`write-or-die.h`). Explicit component names avoid this documentation/aggregate drift. Atomic worktree file replacement or fsync of a transaction file is not a durability contract for separate Git object/ref files.
 
 **Evidence:** static call-path review plus the installed `git-config(1)` documentation. Process-restart checkpoints passed, but they do not simulate loss of dirty kernel/storage caches. No actual power-loss failure is claimed.
 
 **Impact:** a durable transaction can remember a local commit whose objects or branch update were not durable. Resume may fail before bundling/pushing it, despite the surrounding fsync machinery.
 
-**Direction:** require a supported Git durability configuration covering loose/packed objects and references, with a real fsync method; verify it cannot be silently ignored. Audit directory durability at the corresponding boundaries and add storage-crash acceptance, not just returned-error checkpoints.
+**Approved resolution:** pin `core.fsync=objects,reference` and `core.fsyncMethod=fsync` in every hardened invocation. A once-per-process bounded version preflight requires Git 2.36 or newer (where both settings were introduced), rejects unknown versions and failed checks, and retains the checked executable path. Existing command failure handling remains exact-exit-based; opening a managed repository preserves compatibility errors instead of misreporting them as an object-format mismatch.
+
+Admin explicitly chose configuration-only local crash-resumability hardening and accepted storage-dependent sync latency, excluding custom journaling/reconstruction, a storage-crash framework, or broader durability redesign. The original high-severity placement overstates the risk to acknowledged backups: a completed revision already has mandatory primary Git publication plus a complete independently recoverable object mirror. This fix primarily protects local pending-state recovery after OS crashes/power loss; an ordinary process crash does not discard the kernel page cache. It does not prove every directory/storage power-failure case.
+
+**Validation:** `internal/repository/durability_test.go` first reproduced disabled settings and absent Git hardware-flush events, then passed with the fix. Real Git 2.55.0 Trace2 confirms flush calls for newly written loose objects and references despite repository-local disabling settings; configuration tests also cover hostile ambient overrides. Compatibility tests use version-response fixtures for minimum/vendor/future versions, old/malformed/missing Git, bounded output, warning/nonzero-exit failures, and refusal before bare initialization. A real Git lock conflict remains a nonzero write error and leaves the reference unpublished. The full repository package and `make check` (all mandatory linters, vet, coverage, and race tests) passed on 2026-09-05; final check evidence is `shell/f414b927d452d1bca3b442301ea903ba/stdout` beneath the evidence directory above. No fsync-error injection or power-loss experiment is claimed.
 
 ### 5. Recovery's resource bounds stop at the Git subprocess boundary
 

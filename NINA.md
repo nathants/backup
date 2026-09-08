@@ -66,7 +66,7 @@ Build with:
 go build ./cmd/backup
 ```
 
-Linux 5.8 or newer, Git with SHA-256 support, and libsodium are required. Restore uses `utimensat` with `AT_EMPTY_PATH` to apply nanosecond timestamps through the verified file descriptor, never through a mutable temporary filename. Production metadata hosting uses `git-remote-aws`.
+Linux 5.8 or newer, Git 2.36 or newer with SHA-256 support, and libsodium are required. Every hardened Git invocation pins `core.fsync=objects,reference` and `core.fsyncMethod=fsync`, overriding repository and ambient settings. A bounded version preflight rejects unsupported/unrecognized Git before running repository commands and retains the checked executable path for the process. This hardens local crash resumability at the cost of storage-dependent metadata sync latency; it relies on Git and the filesystem/hardware honoring fsync, not custom journaling or a universal power-loss guarantee. Restore uses `utimensat` with `AT_EMPTY_PATH` to apply nanosecond timestamps through the verified file descriptor, never through a mutable temporary filename. Production metadata hosting uses `git-remote-aws`.
 
 By default the client reads `$BACKUP_ROOT/.backup-config`, where `BACKUP_ROOT` defaults to `/`. The file must be a bounded regular file that is not group/other writable. Its raw tab/LF format is:
 

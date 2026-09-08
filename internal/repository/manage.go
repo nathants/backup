@@ -103,7 +103,10 @@ func OpenManaged(directory, remote, branch string) (*Managed, error) {
 	}
 	repo := &Managed{Directory: directory, Remote: remote, Branch: branch}
 	objectFormat, err := repo.run(nil, 1024, "rev-parse", "--show-object-format")
-	if err != nil || strings.TrimSpace(string(objectFormat)) != "sha256" {
+	if err != nil {
+		return nil, fmt.Errorf("inspect metadata Git object format: %w", err)
+	}
+	if strings.TrimSpace(string(objectFormat)) != "sha256" {
 		return nil, fmt.Errorf("metadata repository is not Git SHA-256")
 	}
 	configured, err := repo.run(nil, 64<<10, "remote", "get-url", "origin")
@@ -598,7 +601,10 @@ func (repo *Managed) WriteBundle(base, tip string, output io.Writer) error {
 	if base != "" {
 		arguments = append(arguments, "^"+base)
 	}
-	command := hardenedGitCommand(repo.Directory, arguments...)
+	command, err := hardenedGitCommand(repo.Directory, arguments...)
+	if err != nil {
+		return err
+	}
 	stderr := &boundedBuffer{limit: maximumGitErrorBytes}
 	command.Stdout, command.Stderr = output, stderr
 	if err := command.Run(); err != nil {
@@ -687,7 +693,10 @@ func (repo *Managed) runReader(input io.Reader, limit int64, identity bool, argu
 	if input == nil {
 		input = bytes.NewReader(nil)
 	}
-	command := hardenedGitCommand(repo.Directory, arguments...)
+	command, err := hardenedGitCommand(repo.Directory, arguments...)
+	if err != nil {
+		return nil, err
+	}
 	if identity {
 		command.Env = append(command.Env, "GIT_AUTHOR_NAME=backup", "GIT_AUTHOR_EMAIL=backup@invalid", "GIT_COMMITTER_NAME=backup", "GIT_COMMITTER_EMAIL=backup@invalid")
 	}

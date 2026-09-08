@@ -8,8 +8,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 
 	"backup/internal/format"
 )
@@ -212,32 +214,75 @@ func isGitOID(value string) bool {
 	return true
 }
 
-func hardenedGitCommand(repositoryPath string, arguments ...string) *exec.Cmd {
+// Check once and keep using that executable path: querying config values alone
+// cannot detect an older Git silently ignoring an unknown durability setting.
+var durableGitExecutable = sync.OnceValues(findDurableGit)
+
+var gitVersionPattern = regexp.MustCompile(`^git version ([0-9]+)\.([0-9]+)\.[0-9]+[^\r\n]*\n?$`)
+
+func findDurableGit() (string, error) {
+	path, err := exec.LookPath("git")
+	if err != nil {
+		return "", fmt.Errorf("locate Git: %w", err)
+	}
+	command := exec.Command(path, "--version")
+	command.Env = sanitizedGitEnvironment()
+	stdout := &boundedBuffer{limit: 1024}
+	stderr := &boundedBuffer{limit: maximumGitErrorBytes}
+	command.Stdout, command.Stderr = stdout, stderr
+	if err := command.Run(); err != nil {
+		return "", fmt.Errorf("check Git durability support: %w: %s", err, strings.TrimSpace(stderr.buffer.String()))
+	}
+	if stdout.exceeded || stderr.exceeded || stderr.buffer.Len() != 0 {
+		return "", fmt.Errorf("check Git durability support: excessive output or unexpected diagnostic")
+	}
+	version := gitVersionPattern.FindStringSubmatch(stdout.buffer.String())
+	if version == nil {
+		return "", fmt.Errorf("check Git durability support: unrecognized version %q", stdout.buffer.String())
+	}
+	major, majorErr := strconv.Atoi(version[1])
+	minor, minorErr := strconv.Atoi(version[2])
+	if majorErr != nil || minorErr != nil || major < 2 || major == 2 && minor < 36 {
+		return "", fmt.Errorf("durable metadata requires Git 2.36 or newer for core.fsync=objects,reference and core.fsyncMethod=fsync (found %q)", strings.TrimSpace(version[0]))
+	}
+	return path, nil
+}
+
+func hardenedGitCommand(repositoryPath string, arguments ...string) (*exec.Cmd, error) {
+	path, err := durableGitExecutable()
+	if err != nil {
+		return nil, err
+	}
 	args := []string{
 		"--no-pager", "--literal-pathspecs", "--no-replace-objects",
 		"-c", "core.hooksPath=/dev/null",
 		"-c", "core.attributesFile=/dev/null",
 		"-c", "core.autocrlf=false",
 		"-c", "core.eol=lf",
+		"-c", "core.fsync=objects,reference",
+		"-c", "core.fsyncMethod=fsync",
 	}
 	if repositoryPath != "" {
 		args = append(args, "-C", repositoryPath)
 	}
 	args = append(args, arguments...)
-	command := exec.Command("git", args...)
+	command := exec.Command(path, args...)
 	command.Env = sanitizedGitEnvironment()
-	return command
+	return command, nil
 }
 
 func runStandaloneGit(limit int64, arguments ...string) ([]byte, error) {
 	if limit < 1 || len(arguments) == 0 {
 		return nil, fmt.Errorf("invalid Git command")
 	}
-	command := hardenedGitCommand("", arguments...)
+	command, err := hardenedGitCommand("", arguments...)
+	if err != nil {
+		return nil, err
+	}
 	stdout := &boundedBuffer{limit: limit}
 	stderr := &boundedBuffer{limit: maximumGitErrorBytes}
 	command.Stdout, command.Stderr = stdout, stderr
-	err := command.Run()
+	err = command.Run()
 	if stdout.exceeded {
 		return nil, fmt.Errorf("git %s output exceeded %d bytes", arguments[0], limit)
 	}
@@ -265,7 +310,10 @@ func (validator Validator) withGitBlob(objectID string, declared int64, visit fu
 	if !isGitOID(objectID) || declared < 0 || visit == nil {
 		return fmt.Errorf("invalid Git blob stream request")
 	}
-	command := hardenedGitCommand(validator.Repo, "cat-file", "blob", objectID)
+	command, err := hardenedGitCommand(validator.Repo, "cat-file", "blob", objectID)
+	if err != nil {
+		return err
+	}
 	stdout, err := command.StdoutPipe()
 	if err != nil {
 		return err
@@ -311,12 +359,15 @@ func (validator Validator) gitOutput(limit int64, arguments ...string) ([]byte, 
 	if limit < 1 {
 		return nil, fmt.Errorf("invalid Git output limit")
 	}
-	command := hardenedGitCommand(validator.Repo, arguments...)
+	command, err := hardenedGitCommand(validator.Repo, arguments...)
+	if err != nil {
+		return nil, err
+	}
 	stdout := &boundedBuffer{limit: limit}
 	stderr := &boundedBuffer{limit: maximumGitErrorBytes}
 	command.Stdout = stdout
 	command.Stderr = stderr
-	err := command.Run()
+	err = command.Run()
 	if stdout.exceeded {
 		return nil, fmt.Errorf("git %s output exceeded %d bytes", arguments[0], limit)
 	}
