@@ -62,21 +62,23 @@ Repair accumulation appended descriptors to an in-memory `DataParts` slice. The 
 
 **Permanent regressions:** `repair_progress_test.go` accumulates 128 real repairs in reverse catalog order, then verifies restart, commit/verification/restore, and reset. `repair_staging_test.go` checks interrupted descriptor/control publication, reuse of adopted bytes and IDs without another source download, and rejection of invalid/oversized descriptors, incorrect counts/reference sizes, duplicate parts/paths, and insufficient capacity without replacing usable control. `repair_records_test.go` checks streamed existing-format arrays, exact record bounds, malformed input, and the actual parser's fuzz seeds. Full `make check` and all `make fuzz` campaigns passed.
 
-### 4. High — New directory ancestry lacks an independent durability barrier
+### 4. High [done] — New directory ancestry lacked an independent durability barrier
 
-**Locations:** backup `internal/s3server/server.go:117–128,478–498,593–624`; `internal/repository/manage.go:65–68,807–820`.
+**Reviewed locations:** backup `internal/s3server/server.go:117–128,478–498,593–624`; `internal/repository/manage.go:65–68,807–820`.
 
-**Source-level ordering finding; power-loss object loss was not experimentally reproduced.** `openOrCreateDirectory` immediately returns an existing directory without syncing its parent or coordinating with a concurrent creator. This permits:
+**Source-level ordering finding; power-loss object loss was not experimentally reproduced.** On the reviewed source, `openOrCreateDirectory` immediately returned an existing directory without syncing its parent or coordinating with a concurrent creator. This permitted:
 
 - request A creates an ancestor directory, then pauses before its parent fsync;
 - request B opens that now-existing directory through the fast path, publishes below it and acknowledges after syncing only its own lower directories;
 - A has still not completed the ancestor's durability barrier, or its fsync fails.
 
-B's acknowledgement therefore depends on another request completing work that B neither waits for nor verifies. A server-wide process lock does not serialize its concurrent requests. On filesystems requiring the explicit parent-directory fsync, the code has not established durable reachability of B's object.
+B's acknowledgement therefore depended on another request completing work that B neither waited for nor verified. A server-wide process lock does not serialize its concurrent requests. On filesystems requiring the explicit parent-directory fsync, the code had not established durable reachability of B's object.
 
-There is a related setup gap: creating the server data root or the metadata `.backup` directory does not fsync that new directory's containing parent. Flushing descendants and the new directory itself is not an explicit barrier for that parent entry.
+There was a related setup gap: creating the server data root or the metadata `.backup` directory did not fsync that new directory's containing parent. Flushing descendants and the new directory itself is not an explicit barrier for that parent entry.
 
-**Required action:** establish durable directory publication before any dependent acknowledgement, including the concurrently observed-existing case. A small directory-creation critical section or explicit parent synchronization is sufficient; no custom journal is needed. Sync newly created root entries as well. Add syscall/fault-ordering coverage; process-kill/restart tests alone do not establish power-loss ordering.
+**Resolution:** every server create-path directory open now fsyncs its parent before returning a usable child descriptor, including observed-existing entries. Failed barriers prevent dependent object publication. Server-root and managed metadata initialization also sync their containing entries through the opened directory descriptor, avoiding pathname alias/trailing-slash mistakes. Missing managed setup ancestors are created and fsynced individually before descendants; retries flush existing parents without removing or replacing local state. No directory cache, new lock, journal, or backup-format change was introduced.
+
+**Permanent regressions:** real Linux `O_PATH` descriptors reproduce missing existing-directory barriers and demonstrate that an ancestor fsync failure prevents final-key publication; a healthy retry completes through the existing-directory path. Unreadable containing directories exercise new/existing server and metadata roots, failure before Git setup, and retry. Additional tests cover trusted parent aliases, private nested setup directories, unrelated-data preservation, and descriptor-relative parent lookup after rename. These are syscall-failure/order checks, not simulated hardware power-loss evidence. The focused package race runs and full `make check` passed.
 
 ### 5. Medium — Branch validation disagrees across all three publication boundaries, after the choice is durably pinned
 

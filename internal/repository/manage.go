@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"backup/internal/format"
+	"backup/internal/securefs"
 	"golang.org/x/crypto/blake2b"
 	"golang.org/x/sys/unix"
 )
@@ -48,7 +49,7 @@ func initialize(directory, remote, branch string) (*Managed, error) {
 	if directory == "" || branch == "" || strings.HasPrefix(branch, "-") || strings.ContainsAny(branch, "\x00\r\n") {
 		return nil, fmt.Errorf("metadata directory and branch are required")
 	}
-	if err := os.MkdirAll(filepath.Dir(directory), 0o700); err != nil {
+	if err := makeDurableParents(filepath.Dir(filepath.Clean(directory))); err != nil {
 		return nil, err
 	}
 	if info, err := os.Lstat(directory); err == nil {
@@ -76,6 +77,10 @@ func initialize(directory, remote, branch string) (*Managed, error) {
 	if err := unix.Fchmod(fd, 0o700); err != nil {
 		_ = unix.Close(fd)
 		return nil, err
+	}
+	if err := securefs.SyncParent(fd); err != nil {
+		_ = unix.Close(fd)
+		return nil, fmt.Errorf("persist metadata directory entry: %w", err)
 	}
 	if err := unix.Close(fd); err != nil {
 		return nil, err

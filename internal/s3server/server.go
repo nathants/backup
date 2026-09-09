@@ -23,6 +23,8 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"backup/internal/securefs"
+
 	"golang.org/x/crypto/blake2b"
 	"golang.org/x/sys/unix"
 )
@@ -132,6 +134,10 @@ func Open(config Config) (*Server, error) {
 	if err := unix.Fchmod(rootFD, 0o700); err != nil {
 		_ = unix.Close(rootFD)
 		return nil, fmt.Errorf("set data-root mode: %w", err)
+	}
+	if err := securefs.SyncParent(rootFD); err != nil {
+		_ = unix.Close(rootFD)
+		return nil, fmt.Errorf("persist data-root directory entry: %w", err)
 	}
 	server := &Server{
 		config: config, rootFD: rootFD, tempFD: -1,
@@ -608,19 +614,23 @@ func (server *Server) ensureObjectParent(components []string) (int, error) {
 
 func openOrCreateDirectory(parentFD int, name string, mode uint32) (int, error) {
 	fd, err := unix.Openat(parentFD, name, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
-	if err == nil {
-		return fd, nil
+	if errors.Is(err, unix.ENOENT) {
+		if err := unix.Mkdirat(parentFD, name, mode); err != nil && !errors.Is(err, unix.EEXIST) {
+			return -1, err
+		}
+		fd, err = unix.Openat(parentFD, name, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
 	}
-	if !errors.Is(err, unix.ENOENT) {
+	if err != nil {
 		return -1, err
 	}
-	if err := unix.Mkdirat(parentFD, name, mode); err != nil && !errors.Is(err, unix.EEXIST) {
-		return -1, err
-	}
+	// An existing entry may have just been created by another request whose
+	// parent fsync is still pending or failed. Establish our own barrier before
+	// publishing anything beneath it; visibility alone is not durability.
 	if err := unix.Fsync(parentFD); err != nil {
+		_ = unix.Close(fd)
 		return -1, err
 	}
-	return unix.Openat(parentFD, name, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+	return fd, nil
 }
 
 func createTemporaryFile(directoryFD int) (string, *os.File, error) {
