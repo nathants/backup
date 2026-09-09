@@ -38,17 +38,17 @@ On the reviewed source, `auditManifestChain` checked the manifest's declared UUI
 
 **Permanent regressions:** `internal/backup/pending_metadata_test.go` exercises the actual backup APIs, Git, encryption and TLS server: missing/unrelated pending representations, stale ledger cleanup, forward repair, validated repair adoption and interruption replay, no-body verification, two-mirror pinned sync/fresh incident evidence, and primary-offline recovery. Targeted regressions and full `make check` passed.
 
-### 2. High — A failed helper manifest upload advances the published DynamoDB pointer
+### 2. High [done] — A failed helper manifest upload could advance the published DynamoDB pointer
 
-**Locations:** git-remote-aws `main.go:154–178,299–319`; pinned go-dynamolock `dynamolock.go:285–307`.
+**Reviewed locations:** git-remote-aws `main.go:154–178,299–319`; then-pinned go-dynamolock `dynamolock.go:285–307`.
 
-`push` changes `repoMeta.BundlesS3Key` before uploading that object. If its `PutObject` fails, panic unwinding calls deferred `unlock(..., repoMeta)`. Unlock is a conditional DynamoDB publication, not merely lock cleanup: it persists the already-mutated pointer.
+On the reviewed source, `push` changed `repoMeta.BundlesS3Key` before uploading that object. If its `PutObject` failed, panic unwinding called deferred `unlock(..., repoMeta)`. Unlock was a conditional DynamoDB publication, not merely lock cleanup: it persisted the already-mutated pointer.
 
-**Reproduced:** a first real push succeeds. On the second push, the encrypted data bundle upload succeeds but the bundles-list upload receives an injected `403`. The actual deferred unlock publishes the new, never-created manifest key. Subsequent readers cannot even discover the previously healthy history through the current pointer. The old S3 objects survive, but ordinary operation requires repairing primary metadata.
+**Reproduced on the reviewed source:** a first real push succeeds. On the second push, the encrypted data bundle upload succeeds but the bundles-list upload receives an injected `403`. The actual deferred unlock publishes the new, never-created manifest key. Subsequent readers cannot even discover the previously healthy history through the current pointer. The old S3 objects survive, but ordinary operation requires repairing primary metadata. The original regression was `TestReviewFailedManifestPreservesPublishedPointer`.
 
-**Required action:** keep the original published metadata separate from the candidate. Error cleanup must release with the original value; only successful manifest creation may authorize publishing the candidate. Preserve the existing conditional locking/CAS semantics, including ambiguous release outcomes.
+**Resolution verified 2026-09-09:** the issue no longer applies to git-remote-aws `217db888506b3489ade1e80e148133a1ac3e9e5d`. Its push path calls `lease.Commit(ctx, repoMeta)` only after both S3 uploads succeed (`main.go:305–329`). Deferred cleanup instead calls bounded, independent `lease.Release(cleanup)` (`main.go:170–185`), preserving the original push error if release also fails. In the pinned go-dynamolock `40f0418786d9`, Release conditionally removes only ownership attributes and never writes `data` (`lease.go:325–382`). Mutating the local candidate therefore cannot publish it during cleanup. An ambiguous Commit is not retried as a payload write and cannot trigger deletion of the previous bundles list.
 
-**Regression:** `TestReviewFailedManifestPreservesPublishedPointer`, using real push/Git/crypto/SDK/go-dynamolock code and a local SDK transport.
+**Current validation:** all 11 `TestLeasePush` scenarios passed with `-race -count=1`, including rejected manifest upload, commit ambiguity, lease loss, no-op, and cleanup failures. The upload-failure case requires zero metadata commits, one release-only request, and zero S3 deletions. All 21 pinned-library `TestProtocol*` tests also passed with `-race -count=1`, covering release-only cleanup and ambiguous-write behavior. These exercise actual CLI/Git/crypto/SDK/lease code with scripted local provider responses; no live AWS contract or table migration was run. The review was limited to this finding's publication/cleanup boundary, not a new whole-repository review.
 
 ### 3. High — Accumulated repair writes durable state that its own loader refuses
 
