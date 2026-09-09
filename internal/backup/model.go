@@ -286,7 +286,7 @@ type transaction struct {
 	CandidateFiles  map[string]stagedFileRef   `json:"candidate_files,omitempty"`
 	CandidateHashes map[string]string          `json:"candidate_hashes"`
 	DataPartsFile   stagedFileRef              `json:"data_parts_file,omitempty"`
-	DataParts       []stagedDataPart           `json:"-"`
+	DataPartCount   uint64                     `json:"-"`
 	LocalCommit     string                     `json:"local_commit"`
 	LocalAccepted   bool                       `json:"local_accepted"`
 	Metadata        *stagedMetadata            `json:"metadata,omitempty"`

@@ -5,6 +5,7 @@ build:
 	go build -o backup ./cmd/backup
 
 FUZZ_TARGETS := \
+	./internal/backup:FuzzRepairDataPartRecords \
 	./internal/format:FuzzCanonicalMetadataParsers \
 	./internal/format:FuzzValidatePath \
 	./internal/format:FuzzCanonicalObjectKeys \

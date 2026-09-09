@@ -190,7 +190,7 @@ func (run *runtime) loadTransaction() (*transaction, error) {
 		}
 		candidate = &state
 	}
-	if err := validateTransaction(txn, candidate); err != nil {
+	if err := run.validateTransaction(txn, candidate); err != nil {
 		return nil, fmt.Errorf("invalid durable transaction: %w", err)
 	}
 	// Reset and post-completion cleanup no longer need staged bytes. Skipping
@@ -208,9 +208,6 @@ func (run *runtime) saveTransaction(txn *transaction) error {
 	if txn == nil {
 		return fmt.Errorf("nil transaction")
 	}
-	if err := run.stageTransactionFiles(txn); err != nil {
-		return fmt.Errorf("stage transaction files: %w", err)
-	}
 	var candidate *repository.State
 	if len(txn.CandidateFiles) != 0 {
 		state, err := run.loadCandidateState(txn)
@@ -219,15 +216,18 @@ func (run *runtime) saveTransaction(txn *transaction) error {
 		}
 		candidate = &state
 	}
-	if err := validateTransaction(*txn, candidate); err != nil {
+	if err := run.validateTransaction(*txn, candidate); err != nil {
 		return err
 	}
 	return run.store.Write(transactionFilename, txn)
 }
 
-func validateTransaction(txn transaction, candidate *repository.State) error {
+func (run *runtime) validateTransaction(txn transaction, candidate *repository.State) error {
 	if txn.Version != stateVersion {
 		return fmt.Errorf("unsupported state version %d", txn.Version)
+	}
+	if err := run.walkDataParts(&txn, nil); err != nil {
+		return err
 	}
 	if txn.Kind != "initial" && txn.Kind != "genesis" && txn.Kind != "ordinary" && txn.Kind != "repair" {
 		return fmt.Errorf("invalid transaction kind %q", txn.Kind)
@@ -259,7 +259,7 @@ func validateTransaction(txn transaction, candidate *repository.State) error {
 		}
 	}
 	if txn.Plan != nil && len(txn.CandidateFiles) == 0 {
-		if txn.Kind != "ordinary" && txn.Kind != "initial" || len(txn.DataParts) != 0 || txn.LocalCommit != "" || txn.LocalAccepted || txn.Metadata != nil || txn.PushAttempted || txn.PushConfirmed || len(txn.Mirrors) != 0 {
+		if txn.Kind != "ordinary" && txn.Kind != "initial" || txn.DataPartCount != 0 || txn.LocalCommit != "" || txn.LocalAccepted || txn.Metadata != nil || txn.PushAttempted || txn.PushConfirmed || len(txn.Mirrors) != 0 {
 			return fmt.Errorf("add plan contains commit progress")
 		}
 		if txn.Capture != nil {
@@ -285,11 +285,11 @@ func validateTransaction(txn transaction, candidate *repository.State) error {
 		return fmt.Errorf("candidate blob hashes disagree with bytes")
 	}
 	if txn.Capture != nil {
-		if txn.Kind != "ordinary" || txn.Plan == nil || txn.Capture.NextPlan != txn.Plan.Entries || len(txn.Capture.Mirrors) == 0 || len(txn.DataParts) != 0 {
+		if txn.Kind != "ordinary" || txn.Plan == nil || txn.Capture.NextPlan != txn.Plan.Entries || len(txn.Capture.Mirrors) == 0 || txn.DataPartCount != 0 {
 			return fmt.Errorf("captured ordinary transaction has inconsistent durable progress")
 		}
 	}
-	if txn.Kind == "repair" && len(txn.DataParts) == 0 || txn.Kind != "repair" && len(txn.DataParts) != 0 {
+	if txn.Kind == "repair" && txn.DataPartCount == 0 || txn.Kind != "repair" && txn.DataPartCount != 0 {
 		return fmt.Errorf("durable transaction has an invalid staged data-part count")
 	}
 	if txn.LocalCommit != "" && !isCommitID(txn.LocalCommit) {
@@ -298,43 +298,7 @@ func validateTransaction(txn transaction, candidate *repository.State) error {
 	if txn.LocalAccepted && txn.LocalCommit == "" || txn.PushAttempted && !txn.LocalAccepted || txn.PushConfirmed && !txn.PushAttempted || txn.Metadata != nil && txn.LocalCommit == "" {
 		return fmt.Errorf("transaction stages are inconsistent")
 	}
-	type packKey struct {
-		hash string
-		part uint32
-	}
-	expectedData := make(map[packKey]format.PackEntry, len(txn.DataParts))
 	seenPaths := make(map[string]bool)
-	for _, part := range txn.DataParts {
-		if err := validStagedRelativePath(part.RelativePath); err != nil {
-			return fmt.Errorf("invalid staged data path: %w", err)
-		}
-		if seenPaths[part.RelativePath] {
-			return fmt.Errorf("durable transaction contains a duplicate staged data path")
-		}
-		seenPaths[part.RelativePath] = true
-		key := packKey{part.Entry.PackHash, part.Entry.PartNumber}
-		if _, exists := expectedData[key]; exists {
-			return fmt.Errorf("durable transaction contains a duplicate staged data part")
-		}
-		expectedData[key] = part.Entry
-	}
-	if err := state.WalkPacks(format.DefaultLimits(), func(entry format.PackEntry) error {
-		key := packKey{entry.PackHash, entry.PartNumber}
-		expected, ok := expectedData[key]
-		if !ok {
-			return nil
-		}
-		if expected != entry {
-			return fmt.Errorf("staged data part does not match the candidate packs catalog")
-		}
-		delete(expectedData, key)
-		return nil
-	}); err != nil {
-		return err
-	}
-	if len(expectedData) != 0 {
-		return fmt.Errorf("staged data part does not match the candidate packs catalog")
-	}
 	if txn.Metadata != nil {
 		if txn.Metadata.Manifest.TipCommit != txn.LocalCommit {
 			return fmt.Errorf("metadata manifest tip disagrees with local commit")
@@ -367,6 +331,12 @@ func validateTransaction(txn transaction, candidate *repository.State) error {
 		if seenPaths[txn.Metadata.ManifestRelativePath] {
 			return fmt.Errorf("durable transaction contains a duplicate staged path")
 		}
+		seenPaths[txn.Metadata.ManifestRelativePath] = true
+	}
+	if err := run.validateDataPartCatalog(&txn, seenPaths, func(visit func(format.PackEntry) error) error {
+		return state.WalkPacks(format.DefaultLimits(), visit)
+	}, false); err != nil {
+		return err
 	}
 	if err := validateTransactionProgress(txn, state); err != nil {
 		return err
@@ -390,7 +360,7 @@ func validateTransactionProgress(txn transaction, state repository.State) error 
 		if !canonicalMirrors[name] {
 			return fmt.Errorf("durable transaction contains progress for unknown mirror %q", name)
 		}
-		if progress == nil || progress.DataPartCursor > uint64(len(txn.DataParts)) || progress.MetadataPartCursor > metadataCount {
+		if progress == nil || progress.DataPartCursor > txn.DataPartCount || progress.MetadataPartCursor > metadataCount {
 			return fmt.Errorf("durable transaction contains invalid progress for mirror %q", name)
 		}
 		if progress.DataComplete {
@@ -398,7 +368,7 @@ func validateTransactionProgress(txn transaction, state repository.State) error 
 				if !txn.Capture.Mirrors[name] {
 					return fmt.Errorf("mirror %s claims captured-data completion without completed-pack evidence", name)
 				}
-			} else if progress.DataPartCursor != uint64(len(txn.DataParts)) {
+			} else if progress.DataPartCursor != txn.DataPartCount {
 				return fmt.Errorf("mirror %s claims data completion before every staged data part", name)
 			}
 		}
@@ -520,11 +490,14 @@ func (run *runtime) validateStagedObject(relative string, expected objectstore.O
 }
 
 func (run *runtime) validateStagedTransaction(txn transaction) error {
-	for _, part := range txn.DataParts {
+	if err := run.walkDataParts(&txn, func(_ uint64, part stagedDataPart) error {
 		expected := objectstore.Object{Size: part.Entry.PartSize, BLAKE2b: part.Entry.PartHash, SHA256: part.Entry.PartSHA256, MD5: part.Entry.PartMD5}
 		if err := run.validateStagedObject(part.RelativePath, expected); err != nil {
 			return fmt.Errorf("data part %s: %w", part.RelativePath, err)
 		}
+		return nil
+	}); err != nil {
+		return err
 	}
 	if txn.Metadata == nil {
 		return nil

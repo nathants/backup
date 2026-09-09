@@ -40,7 +40,7 @@ func Add(ctx context.Context, options Options, allowEmpty bool) (AddResult, erro
 	}
 	if txn, err := run.loadTransaction(); err != nil {
 		return AddResult{}, err
-	} else if txn != nil && (txn.Plan == nil || txn.Capture != nil || len(txn.CandidateFiles) != 0 || len(txn.DataParts) != 0 || txn.LocalCommit != "" || txn.PushAttempted) {
+	} else if txn != nil && (txn.Plan == nil || txn.Capture != nil || len(txn.CandidateFiles) != 0 || txn.DataPartCount != 0 || txn.LocalCommit != "" || txn.PushAttempted) {
 		return AddResult{}, fmt.Errorf("commit progress already exists; finish commit or reset before replacing the add plan")
 	}
 	head, history, err := run.validatedHead(true)

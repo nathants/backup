@@ -43,13 +43,18 @@ func RepairDataPart(ctx context.Context, options Options, sourceMirror, packHash
 	}
 	result.OldObjectID = oldPart.ObjectID
 	if extending {
-		for _, part := range pending.DataParts {
+		if err := run.walkDataParts(pending, func(_ uint64, part stagedDataPart) error {
 			if part.Entry.PackHash == packHash && part.Entry.PartNumber == partNumber {
 				result.NewObjectID = part.Entry.ObjectID
-				committed, err := run.commitTransaction(ctx, pending)
-				result.CommitID, result.CompleteMirrors = committed.CommitID, committed.CompleteMirrors
-				return result, err
 			}
+			return nil
+		}); err != nil {
+			return result, err
+		}
+		if result.NewObjectID != "" {
+			committed, err := run.commitTransaction(ctx, pending)
+			result.CommitID, result.CompleteMirrors = committed.CommitID, committed.CompleteMirrors
+			return result, err
 		}
 	}
 	sourcePin, ok := run.mirror(sourceMirror)
@@ -133,8 +138,9 @@ func RepairDataPart(ctx context.Context, options Options, sourceMirror, packHash
 	if err != nil || kind != repository.TransitionRepair {
 		return result, fmt.Errorf("repair candidate is not a valid relocation transition: %w", err)
 	}
-	txn.DataParts = append(txn.DataParts, stagedDataPart{Entry: newPart, RelativePath: partRelative})
-	txn.DataPartsFile = stagedFileRef{}
+	if err := run.rewriteDataParts(&txn, txn.DataPartCount, stagedDataPart{Entry: newPart, RelativePath: partRelative}); err != nil {
+		return result, err
+	}
 	for _, progress := range txn.Mirrors {
 		progress.DataComplete = false
 		progress.RevisionComplete = false

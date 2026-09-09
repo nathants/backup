@@ -339,7 +339,7 @@ func (run *runtime) revalidateCandidate(ctx context.Context, txn *transaction, c
 			continue
 		}
 		progress.DataComplete = true
-		progress.DataPartCursor = uint64(len(txn.DataParts))
+		progress.DataPartCursor = txn.DataPartCount
 		if txn.Capture != nil {
 			txn.Capture.Mirrors[name] = true
 		}

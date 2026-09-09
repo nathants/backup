@@ -210,7 +210,7 @@ func (run *runtime) commitTransaction(ctx context.Context, txn *transaction) (Sn
 			if !progress.DataComplete {
 				progress.RevisionComplete = false
 			}
-		} else if len(txn.DataParts) == 0 {
+		} else if txn.DataPartCount == 0 {
 			progress.DataComplete = true
 		}
 	}
@@ -384,7 +384,7 @@ func commitMessage(kind string, sequence uint64) string {
 
 func (run *runtime) validateStagedDataSet(txn transaction, base, candidate repository.State, transition repository.TransitionKind) error {
 	if transition == repository.TransitionOrdinary && txn.Capture != nil {
-		if txn.Plan == nil || txn.Capture.NextPlan != txn.Plan.Entries || len(txn.Capture.Mirrors) == 0 || len(txn.DataParts) != 0 {
+		if txn.Plan == nil || txn.Capture.NextPlan != txn.Plan.Entries || len(txn.Capture.Mirrors) == 0 || txn.DataPartCount != 0 {
 			return fmt.Errorf("captured ordinary revision has incomplete or duplicated data progress")
 		}
 		if err := run.validateCapturedCandidate(&txn, base, candidate); err != nil {
@@ -392,26 +392,9 @@ func (run *runtime) validateStagedDataSet(txn transaction, base, candidate repos
 		}
 		return nil
 	}
-	expected := make(map[format.PackEntry]bool, len(txn.DataParts))
-	for _, part := range txn.DataParts {
-		if expected[part.Entry] {
-			return fmt.Errorf("staged data parts contain a duplicate pack row")
-		}
-		expected[part.Entry] = true
-	}
-	if err := repository.WalkChangedPacks(base, candidate, transition, func(entry format.PackEntry) error {
-		if !expected[entry] {
-			return fmt.Errorf("staged data parts do not exactly match the changed candidate pack rows")
-		}
-		delete(expected, entry)
-		return nil
-	}); err != nil {
-		return err
-	}
-	if len(expected) != 0 {
-		return fmt.Errorf("staged data parts do not exactly match the changed candidate pack rows")
-	}
-	return nil
+	return run.validateDataPartCatalog(&txn, nil, func(visit func(format.PackEntry) error) error {
+		return repository.WalkChangedPacks(base, candidate, transition, visit)
+	}, true)
 }
 
 func metadataPartRelative(metadata *stagedMetadata, index int) (string, error) {
@@ -458,7 +441,7 @@ func hasRevisionComplete(txn *transaction) bool {
 }
 
 func (run *runtime) uploadDataParts(ctx context.Context, txn *transaction, ledger completionLedger) (bool, error) {
-	if len(txn.DataParts) == 0 {
+	if txn.DataPartCount == 0 {
 		for _, mirror := range run.config.Mirrors {
 			eligible := txn.BaseCommit == "" && !ledger.Quarantined[mirror.Canonical.Name] || ledger.eligible(mirror.Canonical.Name, txn.BaseCommit)
 			complete := eligible
@@ -475,43 +458,46 @@ func (run *runtime) uploadDataParts(ctx context.Context, txn *transaction, ledge
 		}
 		return false, nil
 	}
-	for partIndex := range txn.DataParts {
-		part := &txn.DataParts[partIndex]
+	rotated := false
+	if err := run.walkDataParts(txn, func(partIndex uint64, part stagedDataPart) error {
+		if rotated {
+			return nil
+		}
 		key, err := format.ObjectKey(part.Entry.PartHash, part.Entry.ObjectID)
 		if err != nil {
-			return false, err
+			return err
 		}
 		expected := objectstore.Object{Size: part.Entry.PartSize, BLAKE2b: part.Entry.PartHash, SHA256: part.Entry.PartSHA256, MD5: part.Entry.PartMD5}
 		acknowledged := false
 		uncertain := false
 		for _, mirror := range run.config.Mirrors {
 			progress := txn.progress(mirror.Canonical.Name)
-			if progress.DataPartCursor > uint64(partIndex) {
+			if progress.DataPartCursor > partIndex {
 				acknowledged = true
 				continue
 			}
-			if progress.DataPartCursor < uint64(partIndex) {
+			if progress.DataPartCursor < partIndex {
 				continue
 			}
 			writer, err := run.client(ctx, mirror)
 			if err != nil {
 				if reportErr := run.reportf("mirror %s data upload unavailable: %s\n", mirror.Canonical.Name, terminalEscape(err.Error())); reportErr != nil {
-					return false, reportErr
+					return reportErr
 				}
 				continue
 			}
 			result := run.putStaged(ctx, writer, key, part.RelativePath, expected)
 			if result.Disposition == objectstore.CreateAcknowledged || (result.Disposition == objectstore.CreateConflict || result.Disposition == objectstore.CreateAmbiguous) && run.auditObject(ctx, mirror, key, expected) == nil {
 				if err := run.checkpoint("data-object-created-before-ack"); err != nil {
-					return false, err
+					return err
 				}
-				progress.DataPartCursor = uint64(partIndex) + 1
+				progress.DataPartCursor = partIndex + 1
 				acknowledged = true
 				if err := run.saveTransaction(txn); err != nil {
-					return false, err
+					return err
 				}
 				if err := run.checkpoint("data-object-acknowledged"); err != nil {
-					return false, err
+					return err
 				}
 				continue
 			}
@@ -519,20 +505,26 @@ func (run *runtime) uploadDataParts(ctx context.Context, txn *transaction, ledge
 				uncertain = true
 			}
 			if err := run.reportf("mirror %s did not acknowledge data object %s: %s\n", mirror.Canonical.Name, key, terminalEscape(errorText(result.Err))); err != nil {
-				return false, err
+				return err
 			}
 		}
 		if !acknowledged && uncertain {
-			if err := run.rotateDataPart(txn, partIndex); err != nil {
-				return false, err
+			if err := run.rotateDataPart(txn, partIndex, part); err != nil {
+				return err
 			}
-			return true, nil
+			rotated = true
 		}
+		return nil
+	}); err != nil {
+		return false, err
+	}
+	if rotated {
+		return true, nil
 	}
 	for _, mirror := range run.config.Mirrors {
 		progress := txn.progress(mirror.Canonical.Name)
 		eligible := txn.BaseCommit == "" && !ledger.Quarantined[mirror.Canonical.Name] || ledger.eligible(mirror.Canonical.Name, txn.BaseCommit)
-		complete := eligible && progress.DataPartCursor == uint64(len(txn.DataParts))
+		complete := eligible && progress.DataPartCursor == txn.DataPartCount
 		progress.DataComplete = complete
 	}
 	if err := run.saveTransaction(txn); err != nil {
@@ -552,11 +544,15 @@ func (run *runtime) auditObject(ctx context.Context, mirror localconfig.Mirror, 
 	return reader.Audit(ctx, key, expected)
 }
 
-func (run *runtime) rotateDataPart(txn *transaction, index int) error {
+func (run *runtime) rotateDataPart(txn *transaction, index uint64, part stagedDataPart) error {
 	if txn.LocalCommit != "" {
 		return fmt.Errorf("cannot relocate staged data after creating the metadata commit")
 	}
-	part := &txn.DataParts[index]
+	for _, progress := range txn.Mirrors {
+		if progress.DataPartCursor > index {
+			return fmt.Errorf("cannot relocate a data part already acknowledged by a mirror")
+		}
+	}
 	oldEntry := part.Entry
 	newID, err := randomHex(16)
 	if err != nil {
@@ -570,11 +566,10 @@ func (run *runtime) rotateDataPart(txn *transaction, index int) error {
 	// content-addressed staging names before the transaction control record is
 	// replaced. A crash can therefore leave only harmless unreferenced files,
 	// never old references whose bytes were overwritten in place.
-	txn.DataPartsFile = stagedFileRef{}
+	if err := run.rewriteDataParts(txn, index, part); err != nil {
+		return err
+	}
 	for _, progress := range txn.Mirrors {
-		if progress.DataPartCursor > uint64(index) {
-			return fmt.Errorf("cannot relocate a data part already acknowledged by a mirror")
-		}
 		progress.DataComplete = false
 	}
 	if err := run.saveTransaction(txn); err != nil {

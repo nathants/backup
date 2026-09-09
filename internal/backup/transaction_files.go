@@ -27,30 +27,6 @@ type captureSegment struct {
 	Packs        stagedFileRef `json:"packs"`
 }
 
-func (run *runtime) stageTransactionFiles(txn *transaction) error {
-	if txn.Plan != nil {
-		if txn.Plan.IndexFile.RelativePath == "" || len(txn.Plan.ConfigFiles) != 3 {
-			return fmt.Errorf("add plan is not file-backed")
-		}
-	}
-	if len(txn.CandidateFiles) != 0 && len(txn.CandidateFiles) != len(repository.RequiredBlobNames) {
-		return fmt.Errorf("candidate is not completely file-backed")
-	}
-	if txn.DataParts != nil && txn.DataPartsFile.RelativePath == "" {
-		data, err := json.Marshal(txn.DataParts)
-		if err != nil {
-			return err
-		}
-		data = append(data, '\n')
-		ref, err := run.ensureContentAddressedStagedBytes("candidate/data-parts-", ".json", data, txn.DataPartsFile)
-		if err != nil {
-			return err
-		}
-		txn.DataPartsFile = ref
-	}
-	return nil
-}
-
 func stagedMetadataName(name string) string {
 	switch name {
 	case ".publickeys":
@@ -192,15 +168,11 @@ func (run *runtime) hydrateTransactionFiles(txn *transaction) error {
 			}
 		}
 	}
-	if txn.DataPartsFile.RelativePath != "" {
-		data, err := run.readStagedRef(txn.DataPartsFile, 64<<10)
-		if err != nil {
-			return err
-		}
-		if err := decodeOneJSON(data, &txn.DataParts); err != nil {
-			return fmt.Errorf("decode staged data parts: %w", err)
-		}
+	count, err := run.readDataParts(txn.DataPartsFile, nil)
+	if err != nil {
+		return fmt.Errorf("decode staged data parts: %w", err)
 	}
+	txn.DataPartCount = count
 	if txn.Capture != nil {
 		if err := run.validateCaptureSegments(txn); err != nil {
 			return err

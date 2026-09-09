@@ -50,17 +50,17 @@ On the reviewed source, `push` changed `repoMeta.BundlesS3Key` before uploading 
 
 **Current validation:** all 11 `TestLeasePush` scenarios passed with `-race -count=1`, including rejected manifest upload, commit ambiguity, lease loss, no-op, and cleanup failures. The upload-failure case requires zero metadata commits, one release-only request, and zero S3 deletions. All 21 pinned-library `TestProtocol*` tests also passed with `-race -count=1`, covering release-only cleanup and ambiguous-write behavior. These exercise actual CLI/Git/crypto/SDK/lease code with scripted local provider responses; no live AWS contract or table migration was run. The review was limited to this finding's publication/cleanup boundary, not a new whole-repository review.
 
-### 3. High — Accumulated repair writes durable state that its own loader refuses
+### 3. High [done] — Accumulated repair could save a transaction its own loader refused
 
-**Locations:** backup `internal/backup/repair.go:123–148`, `internal/backup/transaction_files.go:39–49,195–224`, `internal/backup/runtime.go:171–225`.
+**Reviewed locations:** backup `internal/backup/repair.go:123–148`, `internal/backup/transaction_files.go:39–49,195–224`, `internal/backup/runtime.go:171–225`.
 
-Repair accumulation appends descriptors to `DataParts`. The writer marshals the entire slice into a content-addressed JSON file without the reader's size ceiling. Hydration later calls `readStagedRef(..., 64<<10)`.
+Repair accumulation appended descriptors to an in-memory `DataParts` slice. The writer marshaled the entire slice into a content-addressed JSON file without the reader's size ceiling. Hydration later called `readStagedRef(..., 64<<10)`.
 
-**Reproduced:** 114 actual `RepairDataPart` calls, each interrupted at the durable candidate checkpoint, save a valid relocation candidate with a 65,784-byte descriptor file. Saving succeeds; reopening returns `hydrate durable transaction files: invalid staged file reference`. `Reset` fails at the same loader. This is reachable through the supported accumulation path needed when several relocations must coexist before any individual mirror can be complete.
+**Reproduced on the reviewed source:** 114 actual `RepairDataPart` calls, each interrupted at the durable candidate checkpoint, saved a valid relocation candidate with a 65,784-byte descriptor file. Saving succeeded; reopening returned `hydrate durable transaction files: invalid staged file reference`. `Reset` failed at the same loader. This is reachable through the supported accumulation path needed when several relocations must coexist before any individual mirror can be complete. The permanent regression also reproduced failure when repair 115 reopened the previously saved candidate.
 
-**Required action:** give repair progress a bounded-record/segmented representation with symmetric writer/reader validation. At minimum, reject unsupported state before replacing the control record, leaving the previous transaction usable. Merely increasing a magic whole-file limit postpones the defect and leaves the ever-growing slice.
+**Resolution:** repair descriptors retain their existing hashed JSON-array format but are now streamed with a 64 KiB per-record/read-ahead bound and matching writer validation. The transaction retains only a file reference and a transient verified count, not the cumulative descriptor slice. Bounded external sorting detects duplicate parts/paths and performs subset/exact catalog validation; upload cursors retain append order. Appending or rotating a descriptor fsyncs a new content-addressed file before replacing the control record, preserving the previous candidate across failed publication. No operational-state schema or canonical backup-format change was needed.
 
-**Regression:** `TestReviewAccumulatedRepairRemainsLoadable`; no invented transaction JSON or replacement implementation is used.
+**Permanent regressions:** `repair_progress_test.go` accumulates 128 real repairs in reverse catalog order, then verifies restart, commit/verification/restore, and reset. `repair_staging_test.go` checks interrupted descriptor/control publication, reuse of adopted bytes and IDs without another source download, and rejection of invalid/oversized descriptors, incorrect counts/reference sizes, duplicate parts/paths, and insufficient capacity without replacing usable control. `repair_records_test.go` checks streamed existing-format arrays, exact record bounds, malformed input, and the actual parser's fuzz seeds. Full `make check` and all `make fuzz` campaigns passed.
 
 ### 4. High — New directory ancestry lacks an independent durability barrier
 

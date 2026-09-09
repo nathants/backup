@@ -97,20 +97,6 @@ func (run *runtime) writeCandidateFiles(txn *transaction, base repository.State,
 		}
 		return field, nil
 	}
-	packKey := func(record []byte) ([]byte, error) {
-		fields := bytes.Split(record, []byte{'\t'})
-		if len(fields) != 8 || len(fields[0]) != 128 {
-			return nil, fmt.Errorf("invalid pack row")
-		}
-		part, err := strconv.ParseUint(string(fields[1]), 10, 32)
-		if err != nil || strconv.FormatUint(part, 10) != string(fields[1]) {
-			return nil, fmt.Errorf("invalid canonical pack part number")
-		}
-		key := make([]byte, 132)
-		copy(key, fields[0])
-		binary.BigEndian.PutUint32(key[128:], uint32(part))
-		return key, nil
-	}
 	workspace := run.options.transactionFilesPath()
 	if err := extsort.SortFiles(workspace, indexInputs, filepath.Join(candidateDirectory, "index.tsv"), extsort.Options{Unique: true, Key: firstField}); err != nil {
 		return fmt.Errorf("sort captured index: %w", err)
@@ -118,7 +104,7 @@ func (run *runtime) writeCandidateFiles(txn *transaction, base repository.State,
 	if err := extsort.SortFiles(workspace, objectInputs, filepath.Join(candidateDirectory, "objects.tsv"), extsort.Options{Unique: true, Key: firstField}); err != nil {
 		return fmt.Errorf("merge object catalog: %w", err)
 	}
-	if err := extsort.SortFiles(workspace, packInputs, filepath.Join(candidateDirectory, "packs.tsv"), extsort.Options{Unique: true, Key: packKey}); err != nil {
+	if err := extsort.SortFiles(workspace, packInputs, filepath.Join(candidateDirectory, "packs.tsv"), extsort.Options{Unique: true, Key: packRecordKey}); err != nil {
 		return fmt.Errorf("merge pack catalog: %w", err)
 	}
 	for _, name := range []string{"FORMAT", "ignore", ".publickeys", "mirrors.tsv"} {
@@ -155,6 +141,21 @@ func (run *runtime) writeCandidateFiles(txn *transaction, base repository.State,
 		txn.CandidateHashes[name] = ref.BLAKE2b
 	}
 	return nil
+}
+
+func packRecordKey(record []byte) ([]byte, error) {
+	fields := bytes.Split(record, []byte{'\t'})
+	if len(fields) != 8 || len(fields[0]) != 128 {
+		return nil, fmt.Errorf("invalid pack row")
+	}
+	part, err := strconv.ParseUint(string(fields[1]), 10, 32)
+	if err != nil || strconv.FormatUint(part, 10) != string(fields[1]) {
+		return nil, fmt.Errorf("invalid canonical pack part number")
+	}
+	key := make([]byte, 132)
+	copy(key, fields[0])
+	binary.BigEndian.PutUint32(key[128:], uint32(part))
+	return key, nil
 }
 
 func (run *runtime) rewriteCandidatePackObjectID(txn *transaction, target format.PackEntry, newID string) error {
