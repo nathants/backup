@@ -177,7 +177,7 @@ Add hashed to unbounded EOF, then rejected any change in size, timestamps, mode 
 
 **Validation:** `TestFindReadsAcceptedTipDuringPendingPublication` first reproduced failures after local acceptance, recorded push intent, and confirmed push. It now verifies exact HEAD, explicit-tip and historical results, operation with the primary offline, rejection of a newer primary revision outside the locally accepted history, and unchanged transaction bytes, local HEAD and canonical worktree. The first full check also exposed an obsolete assertion in `TestInitialPublicationNeverAdoptsExistingRemote`: it treated reading the local pending genesis as foreign adoption. Exact commit-ID diagnostics confirmed the read stayed local; the test now requires that local result while rejecting the foreign commit and retaining unchanged local/remote ref checks and the existing commit/reset/add refusals. Focused race tests and the final full `make check` (lint, vet, coverage, and race) passed.
 
-### 13. Low — TLS private-key mode checking has drifted from the stated contract
+### 13. Low [done] — TLS private-key mode checking has drifted from the stated contract
 
 **Locations:** backup `cmd/backup/main.go:473–495`; compare go-libsodium `keysource/source.go:149–164`.
 
@@ -185,9 +185,9 @@ The TLS reader promises “mode 0600 or stricter” but only rejects group/other
 
 **Reproduced:** `0500`, `0700`, and `0600` with each special bit are accepted; `0400` and `0600` positive controls also pass. This does not demonstrate disclosure to another user, but it violates the explicit private-file policy and illustrates duplicated security checks drifting apart.
 
-**Required action:** enforce the actual allowed mode bits, including special bits. Share a small descriptor-based bounded-regular-file primitive where useful, keeping the different config/CA/private-key permission policies explicit rather than hiding them in a broad abstraction.
+**Disposition:** intentionally skipped. This closes the review item as an accepted low-severity enforcement gap, not a fixed defect. No code or permission checks changed; operators should continue using `0400` or `0600` for TLS private-key files.
 
-**Regression:** `TestReviewTLSPrivateKeyModeMatchesContract`.
+**Original reproduction:** `TestReviewTLSPrivateKeyModeMatchesContract`.
 
 ### 14. Low — Subcommand help discards the information needed to operate the command
 
