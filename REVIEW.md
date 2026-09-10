@@ -109,15 +109,15 @@ A reader loaded the current DynamoDB pointer and then performed a separate S3 GE
 
 ### 7. Medium — Library initialization races and treats successful native reinitialization as failure
 
-**Locations:** go-libsodium `libsodium.go:24–27,50–58`; backup `internal/pack/pack.go:28,52`, `internal/metadatachain/chain.go:18,39`, `internal/backup/runtime.go:736`.
+**Reviewed locations:** go-libsodium `libsodium.go:24–27,50–58`; backup `internal/pack/pack.go:28,52`, `internal/metadatachain/chain.go:18,39`, `internal/backup/runtime.go:736`.
 
-`Init` reads/writes a global Boolean without synchronization. Concurrent first callers can both enter `sodium_init`; its already-initialized return value is successful, but the wrapper panics on every nonzero result.
+On the reviewed source, `Init` read/wrote a global Boolean without synchronization. Concurrent first callers could both enter `sodium_init`; its already-initialized return value is successful, but the wrapper panicked on every nonzero result.
 
-**Reproduced:** 32 simultaneous actual `Init` calls in a fresh process produce a Go race report and `failed to init sodium` panics. The current serial CLI is not shown to hit this schedule, but the shared library's public initializer is unsafe. Separate `sync.Once` instances in different backup packages do not provide library-wide exclusion.
+**Reproduced:** 32 simultaneous actual `Init` calls in a fresh process produced a Go race report and `failed to init sodium` panics. The current serial CLI is not shown to hit this schedule. Separate `sync.Once` instances in different backup packages do not provide library-wide exclusion.
 
-**Required action:** own initialization once inside go-libsodium and correctly distinguish native failure from successful prior initialization. Remove redundant caller-owned initialization guards when that boundary is reliable; do not scatter more local locks across applications.
+**Partial resolution:** local go-libsodium commit `1f9c1d0` owns initialization through `sync.OnceFunc`, accepts native results 0 and 1, and publishes readiness atomically. Native failure remains a panic for subsequent callers; explicit use-before-init rejection and the ciphertext format are unchanged. Fresh-process concurrent initialization and actual native-prior-initialization regressions reproduced the failures before the fix and pass afterward. Library lint, coverage, and full race tests passed.
 
-**Regression:** `TestReviewConcurrentInit` with `-race`.
+**Remaining action, deferred:** the library fix is not published. Backup and git-remote-aws still pin `165cd76c0d68`, so this finding is not [done]. Once a published version is available, update both application pins, remove backup's redundant package guards, and run the application gates. No local dependency replacement or binary installation was made.
 
 ### 8. Medium — Trusted configuration and CA validation can block forever before rejecting a FIFO
 
