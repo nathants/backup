@@ -95,17 +95,17 @@ Two different failures shared the same late-validation problem:
 
 **Permanent regressions:** backup's `TestInitialInvalidBranchDoesNotPinPreparation` checks invalid names, unchanged preparation/add-plan/Git setup bytes, no object-client construction, and successful correction/reset/publication. Repository tests cover pre-mutation rejection, valid nested branches, and real reflog-expression expansion. The helper's `TestRefSlashBranchRoundTrip` exercises the actual CLI, Git, SDK and encryption with scripted local provider responses: first and incremental pushes, no-op, discovery, and fresh fetch of SHA-1/SHA-256 histories, plus retained single-branch and force protections. Native syntax, literal-name and cancellation tests also pass. Full backup `make check` and helper `GOTOOLCHAIN=local bash bin/check.sh` passed; no live AWS contract or installed-binary update was performed.
 
-### 6. Medium — Deleting the helper's previous bundles list breaks concurrent readers
+### 6. Medium [done] — Deleting the helper's previous bundles list broke concurrent readers
 
-**Locations:** git-remote-aws `main.go:321–329,365–387,503–523`.
+**Reviewed locations:** git-remote-aws `main.go:321–329,365–387,503–523`.
 
-A reader loads the current DynamoDB pointer and then performs a separate S3 GET. A successful writer publishes the next pointer and immediately deletes the previous bundles-list object. There is no reader coordination or retry that restarts pointer discovery.
+A reader loaded the current DynamoDB pointer and then performed a separate S3 GET. A successful writer published the next pointer and immediately deleted the previous bundles-list object. There was no reader coordination or retry that restarted pointer discovery.
 
-**Reproduced:** hold an already-formed DynamoDB read response, complete a real healthy push, then release the reader. `list` follows its valid earlier pointer and fails with `NoSuchKey`. This does not depend on eventual consistency, a corrupt mirror, or two authoritative writers; one ordinary reader overlaps one writer.
+**Reproduced:** hold an already-formed DynamoDB read response, complete a real healthy push, then release the reader. `list` followed its valid earlier pointer and failed with `NoSuchKey`. This did not depend on eventual consistency, a corrupt mirror, or two authoritative writers; one ordinary reader overlapped one writer. Permanent tests reproduced the same failure in `list`, `list for-push`, and `fetch` against `122d311`.
 
-**Required action:** stop deleting manifests that in-flight readers can still reference, or make readers restart from current metadata on this specific race. Retaining these small historical lists is the simpler cutover. This finding is about reader availability, not applying the object mirrors' append-only policy to the separate primary Git service.
+**Resolution:** bounded rediscovery, implemented in git-remote-aws `3ebf0a3`. Read-only discovery refreshes the pointer and bundle list together, with at most three total attempts. Only the SDK's typed S3 `NoSuchKey` from the list read triggers another attempt; message text, other HTTP 404 codes, access denial, malformed/truncated content, and missing encrypted bundle bodies do not. A lost pointer or changed branch during rediscovery fails rather than becoming an empty/new repository. The caller's cancellation context remains in force, and exhaustion preserves the missing-object error. Push still reads through its acquired lease and never substitutes an unleased pointer. Old cumulative lists continue to be deleted, avoiding indefinite cumulative-list storage; the CAS protocol, encrypted histories, and remote layout are unchanged.
 
-**Regression:** `TestReviewReaderSurvivesConcurrentManifestPublication`, run in a fresh test process.
+**Permanent regressions:** `metadata_test.go` runs real CLI/Git/SDK/encryption code against scripted local provider responses, holding discovery while an actual writer publishes and deletes the previous list. It verifies successful rediscovery and fetch of the originally requested historical commit. Additional cases cover repeated advancement, unchanged absence, the exact retry cap, narrowly classified failures, pointer/branch loss, and cancellation. The existing lease suite also proves a missing list during push remains a release-only failure, not unleased rediscovery. Focused race regressions and full `GOTOOLCHAIN=local bash bin/check.sh` passed. No live AWS contract or installed-binary update was performed.
 
 ### 7. Medium — Library initialization races and treats successful native reinitialization as failure
 
