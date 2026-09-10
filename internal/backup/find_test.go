@@ -20,7 +20,6 @@ func TestFindReadsAcceptedTipDuringPendingPublication(t *testing.T) {
 	for _, checkpoint := range []string{"local-commit-accepted", "git-push-intent-recorded", "git-push-confirmed"} {
 		t.Run(checkpoint, func(t *testing.T) {
 			h := newIntegrationHarness(t)
-			h.options.PackTarget, h.options.PartSize, h.options.MetadataPartSize = 1<<20, 1<<20, 1<<20
 			ctx := context.Background()
 			genesis, err := initializePublished(ctx, h.options, h.publicKey)
 			if err != nil {

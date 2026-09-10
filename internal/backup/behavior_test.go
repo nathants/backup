@@ -345,6 +345,7 @@ func TestRestoreDoesNotImplicitlyIncludeSymlinkTarget(t *testing.T) {
 
 func TestHistoricalRestoreReportsAndUsesExplicitRelocation(t *testing.T) {
 	harness := newIntegrationHarness(t)
+	harness.options.PartSize = 128 // The catalog changes only one part of the selected pack.
 	ctx := context.Background()
 	genesis, err := initializePublished(ctx, harness.options, harness.publicKey)
 	if err != nil {
@@ -387,6 +388,9 @@ func TestHistoricalRestoreReportsAndUsesExplicitRelocation(t *testing.T) {
 	}
 	if fileHash == "" || packHash == "" || oldPart.PackHash == "" {
 		t.Fatalf("could not resolve historical file pack: file=%q pack=%q part=%#v", fileHash, packHash, oldPart)
+	}
+	if oldPart.PartCount < 2 {
+		t.Fatal("historical relocation fixture needs a multipart pack")
 	}
 	relocated, err := RepairDataPart(ctx, harness.options, "local", oldPart.PackHash, oldPart.PartNumber)
 	if err != nil {
@@ -446,7 +450,6 @@ func TestHistoricalRestoreReportsAndUsesExplicitRelocation(t *testing.T) {
 func TestHistoricalRestoreDoesNotSuggestUnrelatedRelocation(t *testing.T) {
 	harness := newIntegrationHarness(t)
 	harness.options.PackTarget = 1
-	harness.options.PartSize = 1 << 20
 	ctx := context.Background()
 	if _, err := initializePublished(ctx, harness.options, harness.publicKey); err != nil {
 		t.Fatal(err)
@@ -493,7 +496,6 @@ func TestHistoricalRestoreDoesNotSuggestUnrelatedRelocation(t *testing.T) {
 func TestHistoricalRestoreDoesNotSuggestSupersededRelocation(t *testing.T) {
 	harness := newIntegrationHarness(t)
 	harness.options.PackTarget = 1
-	harness.options.PartSize = 1 << 20
 	ctx := context.Background()
 	if _, err := initializePublished(ctx, harness.options, harness.publicKey); err != nil {
 		t.Fatal(err)
@@ -592,6 +594,8 @@ func (transport *observingTransport) observations() []requestObservation {
 
 func TestSyncCopiesCompleteRevisionIdempotentlyAndNeverTrustsConflict(t *testing.T) {
 	harness := newIntegrationHarness(t)
+	// Copy split data packs and metadata bundles, not just whole-stream objects.
+	harness.options.PartSize, harness.options.MetadataPartSize = 128, 128
 	ctx := context.Background()
 	if _, err := initializePublished(ctx, harness.options, harness.publicKey); err != nil {
 		t.Fatal(err)
@@ -683,6 +687,9 @@ func TestSyncCopiesCompleteRevisionIdempotentlyAndNeverTrustsConflict(t *testing
 		t.Fatal(err)
 	}
 	part := testPackEntries(t, testHistoryTip(t, history).State)[0]
+	if part.PartCount < 2 {
+		t.Fatal("sync fixture needs a multipart pack")
+	}
 	corruptPath := filepath.Join(destinationRoot, "objects", part.PartHash, part.ObjectID)
 	if err := os.WriteFile(corruptPath, []byte("corrupt immutable destination bytes"), 0o600); err != nil {
 		t.Fatal(err)
@@ -699,7 +706,6 @@ func TestLargeFileStreamsAcrossMultipleCiphertextParts(t *testing.T) {
 	harness := newIntegrationHarness(t)
 	harness.options.PackTarget = 1 << 20
 	harness.options.PartSize = 1 << 20
-	harness.options.MetadataPartSize = 1 << 20
 	ctx := context.Background()
 	if _, err := initializePublished(ctx, harness.options, harness.publicKey); err != nil {
 		t.Fatal(err)

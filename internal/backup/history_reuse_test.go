@@ -43,7 +43,6 @@ func TestValidatedHistoryReuse(t *testing.T) {
 
 	ctx := context.Background()
 	h := newIntegrationHarness(t)
-	h.options.PackTarget, h.options.PartSize, h.options.MetadataPartSize = 1<<20, 1<<20, 1<<20
 	genesis, err := initializePublished(ctx, h.options, h.publicKey)
 	if err != nil {
 		t.Fatal(err)

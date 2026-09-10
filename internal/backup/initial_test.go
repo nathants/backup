@@ -136,8 +136,9 @@ func TestInitialPublicationRestartBoundaries(t *testing.T) {
 	for _, point := range []string{"initial-remote-pinned", "genesis-transaction-recorded", "local-commit-recorded", "materialization-blob-FORMAT", "local-commit-accepted", "metadata-staged", "git-push-intent-recorded", "git-push-returned", "git-push-confirmed", "metadata-part-created-before-ack", "metadata-part-acknowledged", "metadata-manifest-created-before-ack", "genesis-plan-handed-off", "commit-capture-started", "completed-pack-recorded"} {
 		t.Run(point, func(t *testing.T) {
 			h := newIntegrationHarness(t)
-			h.options.PartSize = 1 << 20
-			h.options.MetadataPartSize = 1 << 20
+			if point == "completed-pack-recorded" {
+				h.options.PackTarget = 1 // Preserve an uncaptured pack after the handoff.
+			}
 			ctx := context.Background()
 			if _, err := initWithKeys(ctx, h.options, h.publicKey); err != nil {
 				t.Fatal(err)
@@ -159,6 +160,12 @@ func TestInitialPublicationRestartBoundaries(t *testing.T) {
 			}
 			if result, err := Commit(ctx, opts); err == nil || !stopped || result.CommitID != "" {
 				t.Fatalf("did not interrupt %s: %+v %v stopped=%v", point, result, err, stopped)
+			}
+			if point == "completed-pack-recorded" {
+				txn := loadTestTransaction(t, h.options)
+				if txn.Capture == nil || txn.Plan == nil || txn.Capture.SegmentCount != 1 || txn.Capture.NextPlan != 1 || txn.Plan.Entries <= 1 {
+					t.Fatal("first-publication fixture must stop between captured and uncaptured packs")
+				}
 			}
 			if err := os.WriteFile(filepath.Join(h.root, "after-add"), []byte("excluded"), 0600); err != nil {
 				t.Fatal(err)
@@ -202,7 +209,6 @@ func TestInitialResetPreservesPreparation(t *testing.T) {
 	for _, point := range []string{"genesis-transaction-recorded", "local-commit-recorded", "local-commit-accepted", "metadata-staged"} {
 		t.Run(point, func(t *testing.T) {
 			h := newIntegrationHarness(t)
-			h.options.MetadataPartSize = 1 << 20
 			ctx := context.Background()
 			if _, err := initWithKeys(ctx, h.options, h.publicKey); err != nil {
 				t.Fatal(err)

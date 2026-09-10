@@ -186,7 +186,6 @@ func TestFindRefusesDirtyFastForwardThenAcceptsCleanRetry(t *testing.T) {
 func newFetchTestHarness(t *testing.T) *integrationHarness {
 	t.Helper()
 	h := newIntegrationHarness(t)
-	h.options.MetadataPartSize = 1 << 20
 	if _, err := initializePublished(context.Background(), h.options, h.publicKey); err != nil {
 		t.Fatal(err)
 	}

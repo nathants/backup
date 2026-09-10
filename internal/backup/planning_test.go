@@ -266,7 +266,6 @@ func TestCompletedPackResumeSkipsCapturedPathsAndIncompletePackRestarts(t *testi
 	t.Run("completed pack skips source reread", func(t *testing.T) {
 		harness := newIntegrationHarness(t)
 		harness.options.PackTarget = 1
-		harness.options.PartSize = 1 << 20
 		ctx := context.Background()
 		if _, err := initializePublished(ctx, harness.options, harness.publicKey); err != nil {
 			t.Fatal(err)
@@ -292,6 +291,10 @@ func TestCompletedPackResumeSkipsCapturedPathsAndIncompletePackRestarts(t *testi
 		}
 		if _, err := Commit(ctx, options); err == nil || !strings.Contains(err.Error(), "completed-pack-recorded") {
 			t.Fatalf("first pack was not durably stopped: %v", err)
+		}
+		txn := loadTestTransaction(t, harness.options)
+		if txn.Capture == nil || txn.Plan == nil || txn.Capture.NextPlan != 2 || txn.Plan.Entries <= 2 {
+			t.Fatal("resume fixture must capture alpha but leave beta pending")
 		}
 		if err := os.Remove(filepath.Join(harness.root, "alpha")); err != nil {
 			t.Fatal(err)
@@ -350,8 +353,6 @@ func TestCompletedPackResumeSkipsCapturedPathsAndIncompletePackRestarts(t *testi
 
 func TestTransactionControlDoesNotEmbedPlanOrCatalogRows(t *testing.T) {
 	harness := newIntegrationHarness(t)
-	harness.options.PackTarget = 1 << 20
-	harness.options.PartSize = 1 << 20
 	ctx := context.Background()
 	if _, err := initializePublished(ctx, harness.options, harness.publicKey); err != nil {
 		t.Fatal(err)
@@ -385,8 +386,6 @@ func TestTransactionControlDoesNotEmbedPlanOrCatalogRows(t *testing.T) {
 
 func TestCaptureWarningsRemainBoundedAndSummarizedAcrossResume(t *testing.T) {
 	harness := newIntegrationHarness(t)
-	harness.options.PackTarget = 1 << 20
-	harness.options.PartSize = 1 << 20
 	ctx := context.Background()
 	if _, err := initializePublished(ctx, harness.options, harness.publicKey); err != nil {
 		t.Fatal(err)

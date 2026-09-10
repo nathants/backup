@@ -18,7 +18,7 @@ func TestAccumulatedRepairProgressSurvivesRestart(t *testing.T) {
 	for _, action := range []string{"commit", "reset"} {
 		t.Run(action, func(t *testing.T) {
 			h := newIntegrationHarness(t)
-			h.options.PackTarget, h.options.PartSize, h.options.MetadataPartSize = 1<<20, 128, 1<<20
+			h.options.PartSize = 128
 			ctx := context.Background()
 			if _, err := initializePublished(ctx, h.options, h.publicKey); err != nil {
 				t.Fatal(err)

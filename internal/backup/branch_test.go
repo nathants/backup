@@ -17,7 +17,6 @@ func TestInitialInvalidBranchDoesNotPinPreparation(t *testing.T) {
 	for _, branch := range []string{"main.lock", "archive.lock/home", "main.", "archive/.hidden", "HEAD"} {
 		t.Run(branch, func(t *testing.T) {
 			h := newIntegrationHarness(t)
-			h.options.PackTarget, h.options.PartSize, h.options.MetadataPartSize = 1<<20, 1<<20, 1<<20
 			ctx := context.Background()
 			original, err := os.ReadFile(h.configPath)
 			if err != nil {

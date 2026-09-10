@@ -209,15 +209,17 @@ Both scripts installed missing tools with `@latest`, so running checks could cha
 
 **Validation:** both scripts pass `bash -n`; direct invocation with an empty PATH returns the expected missing-tool error and status 1. Both existing `GOTOOLCHAIN=local bash bin/check.sh` gates passed, including the helper's cloud-free race selection. The library's existing coverage and race suites also passed. The scripts still emit their pre-existing advisory go-hasdefault/go-hasdefer diagnostics; that output is not represented as fixed. Nothing was installed or pushed.
 
-### 16. Low — Universal tiny-part test defaults impose avoidable release-gate work
+### 16. Low [done] — Universal tiny-part test defaults imposed avoidable release-gate work
 
-**Location:** backup `internal/backup/backup_test.go:45–95`.
+**Reviewed location:** backup `internal/backup/backup_test.go:45–95`.
 
-The shared integration fixture defaults to an 8-byte pack target and 128-byte data and metadata parts. This forces even configuration/no-op/ordinary workflow fixtures through numerous actual uploads, fsyncs and durable acknowledgement transitions. Splitting tests need those sizes; most callers do not.
+The shared integration fixture defaulted to an 8-byte pack target and 128-byte data and metadata parts. This forced even configuration/no-op/ordinary workflow fixtures through numerous actual uploads, fsyncs and durable acknowledgement transitions. Splitting tests need those sizes; most callers do not.
 
-The unchanged `make check` run took 1,253 seconds, with the backup package taking 531 seconds for coverage and 703 seconds under the race detector. Those timings do not attribute all cost to fixture sizing, but the unnecessary splitting work is directly present in the defaults.
+The original unchanged `make check` run took 1,253 seconds, with the backup package taking 531 seconds for coverage and 703 seconds under the race detector. Those timings did not attribute all cost to fixture sizing, but the unnecessary splitting work was directly present in the defaults.
 
-**Recommended simplification:** use ordinary single-part fixture sizes by default and request small parts explicitly in tests asserting splitting, partial acknowledgement, recovery edges or related crashes. Preserve real server/Git code, fsyncs, race coverage and all assertions. Measure the resulting gate improvement; do not mask latency with weaker durability or reduced test coverage.
+**Resolution:** shared workflow fixtures now use 1 MiB pack/data-part/metadata-part limits, with redundant per-test large-size overrides removed. Small limits remain explicit for multipart data/metadata relocation, sync, recovery, partial metadata acknowledgements, and accumulated repair descriptors. Pack-continuation and unrelated-relocation tests retain distinct logical packs. Added preconditions prove that multipart fixtures really split and crash fixtures retain the intended completed/pending progress. The existing 8 MiB random-file splitting test and 128-part accumulated-repair regression retain their payloads and limits. No production code, fsync, existing assertion, checkpoint, or race coverage was removed.
+
+**Validation and measurement:** focused tests and full `make check` passed. Backup statement coverage remained 76.3%. The full gate took 1,462 seconds versus the latest pre-change run's 1,697 seconds; backup coverage/race package times were 686.955/763.719 seconds versus 860.448/816.858 seconds. This is an exploratory, storage-dependent historical comparison, not a controlled speedup claim. An identical four-workflow selection repeated three times took 37.271 seconds before and 38.787 seconds after, demonstrating no elapsed-time improvement in that sample. A separate disposable actual-HTTP diagnostic measured the init/add/commit/no-op workflow at 44 PUTs with former sizing (9 data, 33 metadata parts, 2 manifests) versus 5 with ordinary sizing (1 data, 2 metadata parts, 2 manifests): 88.6% fewer uploads in that fixture. The diagnostic was removed before the final gate. No Docker or live cloud contract was run for this test-only change.
 
 ## Original review validation evidence and limits
 

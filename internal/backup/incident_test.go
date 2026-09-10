@@ -19,7 +19,6 @@ import (
 func incidentHarness(t *testing.T) (*integrationHarness, format.PackEntry, string) {
 	t.Helper()
 	h := newIntegrationHarness(t)
-	h.options.PartSize, h.options.MetadataPartSize = 1<<20, 1<<20
 	ctx := context.Background()
 	if _, err := initializePublished(ctx, h.options, h.publicKey); err != nil {
 		t.Fatal(err)
@@ -254,7 +253,6 @@ func TestVerifiedPendingRevisionFinalizesWithoutForgingStagedAcknowledgements(t 
 func TestIntegrityIncidentHealthyMirrorCanResumeWhileDamagedMirrorStaysExcluded(t *testing.T) {
 	h := newIntegrationHarness(t)
 	remote := newIntegrationHarness(t)
-	h.options.PartSize, h.options.MetadataPartSize = 1<<20, 1<<20
 	config, err := os.ReadFile(h.configPath)
 	if err != nil {
 		t.Fatal(err)
@@ -645,7 +643,6 @@ func TestIntegrityIncidentForwardRepairRestartsAtDurableBoundaries(t *testing.T)
 
 func TestIntegrityIncidentPendingGenesisCannotReuseDamagedMetadata(t *testing.T) {
 	h := newIntegrationHarness(t)
-	h.options.MetadataPartSize = 1 << 20
 	ctx := context.Background()
 	t.Setenv("GIT_REMOTE_AWS_SECRETKEY", fmt.Sprintf("%x", h.secretKey))
 	interrupted := h.options

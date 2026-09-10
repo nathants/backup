@@ -26,7 +26,6 @@ func pendingMetadataFixture(t *testing.T, checkpoint string) (*integrationHarnes
 
 func stagePendingMetadataFixture(t *testing.T, h *integrationHarness, checkpoint string) (*integrationHarness, *transaction, manifestRepresentation) {
 	t.Helper()
-	h.options.PartSize, h.options.MetadataPartSize, h.options.PackTarget = 1<<20, 1<<20, 1<<20
 	ctx := context.Background()
 	genesis, err := initializePublished(ctx, h.options, h.publicKey)
 	if err != nil {

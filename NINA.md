@@ -564,6 +564,8 @@ Errors are concise stderr messages with nonzero status, not Go panics or stack t
 
 Cloud-free executable/PTY secret-loader regressions require Python 3.8 or newer; they use synthetic keys and exercise both actual CLIs. Parser-only key-chain cases live in go-libsodium; backup tests its metadata and application boundaries.
 
+Shared backup workflow fixtures use 1 MiB pack/data-part/metadata-part limits. Splitting, partial-progress, relocation, and recovery tests select smaller limits explicitly and assert the required multipart or incomplete-progress setup. Keep those scenarios explicit rather than imposing tiny-object overhead on every workflow test; production sizing and durability are unchanged.
+
 Run the cloud-free release checks and fuzz campaigns with:
 
 ```sh

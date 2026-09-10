@@ -18,7 +18,7 @@ import (
 func stageRepairFixture(t *testing.T, count int) (*integrationHarness, []format.PackEntry) {
 	t.Helper()
 	h := newIntegrationHarness(t)
-	h.options.PackTarget, h.options.PartSize, h.options.MetadataPartSize = 1<<20, 128, 1<<20
+	h.options.PartSize = 128
 	ctx := context.Background()
 	if _, err := initializePublished(ctx, h.options, h.publicKey); err != nil {
 		t.Fatal(err)

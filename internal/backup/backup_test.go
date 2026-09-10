@@ -80,9 +80,14 @@ func newIntegrationHarness(t *testing.T) *integrationHarness {
 			HTTPClient:          httpServer.Client(),
 		})
 	}
+	// Ordinary workflows fit in one pack/part. Tests of splitting or partial
+	// progress opt in to smaller limits at the relevant operation.
 	return &integrationHarness{
 		root: root, bare: bare, configPath: configPath, server: server, serverRoot: serverRoot, http: httpServer,
-		options:   Options{Root: root, ConfigPath: configPath, PackTarget: 8, PartSize: 128, MetadataPartSize: 128, ClientFactory: factory},
+		options: Options{
+			Root: root, ConfigPath: configPath, ClientFactory: factory,
+			PackTarget: 1 << 20, PartSize: 1 << 20, MetadataPartSize: 1 << 20,
+		},
 		publicKey: publicKey, secretKey: secretKey,
 	}
 }
@@ -325,6 +330,7 @@ func TestRestorePublicationErrorReportsAlreadyRenamedPath(t *testing.T) {
 
 func TestRepairRelocatesDataWithoutOverwritingOldObject(t *testing.T) {
 	harness := newIntegrationHarness(t)
+	harness.options.PartSize = 128 // Relocate one part while retaining its siblings.
 	ctx := context.Background()
 	if _, err := initializePublished(ctx, harness.options, harness.publicKey); err != nil {
 		t.Fatal(err)
@@ -351,6 +357,9 @@ func TestRepairRelocatesDataWithoutOverwritingOldObject(t *testing.T) {
 		return nil
 	}); err != nil || oldPart.PackHash == "" {
 		t.Fatalf("read committed pack: %#v %v", oldPart, err)
+	}
+	if oldPart.PartCount < 2 {
+		t.Fatal("repair fixture needs a multipart pack")
 	}
 	oldPath := filepath.Join(harness.serverRoot, "objects", oldPart.PartHash, oldPart.ObjectID)
 	if _, err := os.Stat(oldPath); err != nil {
@@ -418,6 +427,7 @@ func TestRepairMetadataEdgePublishesAlternateWithoutGitCommit(t *testing.T) {
 	if _, err := initializePublished(ctx, harness.options, harness.publicKey); err != nil {
 		t.Fatal(err)
 	}
+	harness.options.MetadataPartSize = 128 // Damage one part of an otherwise healthy edge.
 	if err := os.WriteFile(filepath.Join(harness.root, "file"), []byte("payload"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -437,6 +447,9 @@ func TestRepairMetadataEdgePublishesAlternateWithoutGitCommit(t *testing.T) {
 	before, err := listManifestRepresentations(ctx, reader, latest.CommitID, testHistoryGenesisFormat(t, history).RepositoryUUID)
 	if err != nil || len(before) != 1 {
 		t.Fatalf("representations=%#v err=%v", before, err)
+	}
+	if len(before[0].Manifest.Parts) < 2 {
+		t.Fatal("metadata repair fixture needs a multipart bundle")
 	}
 	oldPart := before[0].Manifest.Parts[0]
 	oldPath := filepath.Join(harness.serverRoot, "metadata", "parts", oldPart.Hash, oldPart.ObjectID)
@@ -1018,6 +1031,12 @@ func TestTransactionResumesAfterEveryDurableCheckpoint(t *testing.T) {
 			if _, err := initializePublished(ctx, harness.options, harness.publicKey); err != nil {
 				t.Fatal(err)
 			}
+			switch point {
+			case "completed-pack-recorded":
+				harness.options.PackTarget = 1 // Stop between the config and payload packs.
+			case "metadata-part-created-before-ack", "metadata-part-acknowledged":
+				harness.options.MetadataPartSize = 128 // Resume with later parts still pending.
+			}
 			if err := os.WriteFile(filepath.Join(harness.root, "file"), []byte("payload for "+point), 0o600); err != nil {
 				t.Fatal(err)
 			}
@@ -1040,6 +1059,25 @@ func TestTransactionResumesAfterEveryDurableCheckpoint(t *testing.T) {
 			}
 			if !failed {
 				t.Fatalf("checkpoint %s was not reached", point)
+			}
+			switch point {
+			case "completed-pack-recorded":
+				txn := loadTestTransaction(t, harness.options)
+				if txn.Capture == nil || txn.Plan == nil || txn.Capture.SegmentCount != 1 || txn.Capture.NextPlan != 1 || txn.Plan.Entries <= 1 {
+					t.Fatal("checkpoint fixture must retain one completed pack and uncaptured paths")
+				}
+			case "metadata-part-created-before-ack", "metadata-part-acknowledged":
+				txn := loadTestTransaction(t, harness.options)
+				if txn.Metadata == nil || len(txn.Metadata.Manifest.Parts) < 2 {
+					t.Fatal("checkpoint fixture needs a multipart metadata bundle")
+				}
+				var wantCursor uint32
+				if point == "metadata-part-acknowledged" {
+					wantCursor = 1
+				}
+				if progress := txn.Mirrors["local"]; progress == nil || progress.MetadataPartCursor != wantCursor || progress.MetadataManifest || progress.RevisionComplete {
+					t.Fatalf("checkpoint did not retain partial metadata progress: %+v", progress)
+				}
 			}
 			result, err := Commit(ctx, harness.options)
 			if err != nil {
@@ -1179,6 +1217,7 @@ func TestUploadRelocationCheckpointsResumeAfterRestart(t *testing.T) {
 	prepareRepair := func(t *testing.T) (*integrationHarness, format.PackEntry) {
 		t.Helper()
 		harness := newIntegrationHarness(t)
+		harness.options.PartSize = 128
 		ctx := context.Background()
 		if _, err := initializePublished(ctx, harness.options, harness.publicKey); err != nil {
 			t.Fatal(err)
@@ -1198,6 +1237,9 @@ func TestUploadRelocationCheckpointsResumeAfterRestart(t *testing.T) {
 			t.Fatal(err)
 		}
 		part := firstTestPackPart(t, testHistoryTip(t, history).State)
+		if part.PartCount < 2 {
+			t.Fatal("relocation checkpoint fixture needs a multipart pack")
+		}
 		return harness, part
 	}
 	for _, point := range []string{"data-object-created-before-ack", "data-object-acknowledged"} {
@@ -1251,6 +1293,7 @@ func TestUploadRelocationCheckpointsResumeAfterRestart(t *testing.T) {
 		if _, err := initializePublished(ctx, harness.options, harness.publicKey); err != nil {
 			t.Fatal(err)
 		}
+		harness.options.MetadataPartSize = 128
 		if err := os.WriteFile(filepath.Join(harness.root, "file"), []byte("metadata relocation checkpoint"), 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -1273,6 +1316,10 @@ func TestUploadRelocationCheckpointsResumeAfterRestart(t *testing.T) {
 		if _, err := Commit(ctx, options); err == nil || !stopped {
 			t.Fatalf("metadata relocation checkpoint did not stop commit: %v", err)
 		}
+		txn := loadTestTransaction(t, harness.options)
+		if txn.Metadata == nil || len(txn.Metadata.Manifest.Parts) < 2 {
+			t.Fatal("metadata relocation checkpoint fixture needs a multipart bundle")
+		}
 		if _, err := Commit(ctx, harness.options); err != nil {
 			t.Fatalf("resume after metadata relocation: %v", err)
 		}
@@ -1282,9 +1329,6 @@ func TestUploadRelocationCheckpointsResumeAfterRestart(t *testing.T) {
 func TestAmbiguousUploadsUseAuditOrFreshImmutableIdentity(t *testing.T) {
 	t.Run("lost data response is audited", func(t *testing.T) {
 		harness := newIntegrationHarness(t)
-		harness.options.PackTarget = 1 << 20
-		harness.options.PartSize = 1 << 20
-		harness.options.MetadataPartSize = 1 << 20
 		ctx := context.Background()
 		if _, err := initializePublished(ctx, harness.options, harness.publicKey); err != nil {
 			t.Fatal(err)
@@ -1315,9 +1359,6 @@ func TestAmbiguousUploadsUseAuditOrFreshImmutableIdentity(t *testing.T) {
 
 	t.Run("unverifiable data ambiguity relocates before publication", func(t *testing.T) {
 		harness := newIntegrationHarness(t)
-		harness.options.PackTarget = 1 << 20
-		harness.options.PartSize = 1 << 20
-		harness.options.MetadataPartSize = 1 << 20
 		ctx := context.Background()
 		if _, err := initializePublished(ctx, harness.options, harness.publicKey); err != nil {
 			t.Fatal(err)
@@ -1358,9 +1399,6 @@ func TestAmbiguousUploadsUseAuditOrFreshImmutableIdentity(t *testing.T) {
 	} {
 		t.Run(test.name+" ambiguity relocates", func(t *testing.T) {
 			harness := newIntegrationHarness(t)
-			harness.options.PackTarget = 1 << 20
-			harness.options.PartSize = 1 << 20
-			harness.options.MetadataPartSize = 1 << 20
 			ctx := context.Background()
 			if _, err := initializePublished(ctx, harness.options, harness.publicKey); err != nil {
 				t.Fatal(err)

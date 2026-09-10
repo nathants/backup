@@ -73,6 +73,9 @@ func recoveryTestChain(t *testing.T, length int) (*integrationHarness, [][]manif
 	if err != nil || len(first) != 1 {
 		t.Fatalf("genesis representations=%d err=%v", len(first), err)
 	}
+	if len(first[0].Manifest.Parts) < 2 {
+		t.Fatal("recovery fixture needs a multipart full bundle")
+	}
 	chain := [][]manifestRepresentation{first}
 	base := genesis.CommitID
 	for sequence := 1; sequence < length; sequence++ {
