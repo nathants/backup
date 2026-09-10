@@ -165,7 +165,7 @@ By default, read `index.tsv`, `objects.tsv`, and `packs.tsv` from the requested 
 A later immutable relocation can repair that historical restore explicitly:
 
 ```text
-backup restore ... SNAPSHOT --catalog-revision CATALOG
+backup restore --root ROOT --target TARGET --catalog-revision CATALOG REGEX SNAPSHOT
 ```
 
 Resolve and print both revisions once as exact commit IDs. `CATALOG` must be the same repository identity and a descendant of `SNAPSHOT`. Continue reading `index.tsv` and `objects.tsv` from `SNAPSHOT`; read `packs.tsv` from `CATALOG`. For every pack reachable from the snapshot's object rows, the alternate catalog must preserve pack identity, part count/order, ciphertext hashes, checksums, and sizes exactly; only `object_id` may differ through valid relocation commits. Later unrelated pack rows are harmless.
@@ -558,7 +558,7 @@ Recovery and metadata repair require an eligible recipient secret key.
 
 After losing the primary Git service, follow [Restore from recovered metadata](docs/recovery-restore.md) before trying to restore files. `recover` publishes a validated bare repository with `refs/backup/recovered-tip`, not a managed checkout. The tested manual procedure checks the exact external anchor, promotes a branch/HEAD without replacing existing history, makes a fresh checkout, preserves trusted mirror pins while explicitly repinning the local metadata source, and restores using only that recovered metadata and a surviving mirror. Do not run `init`, reuse damaged staging, or treat rescue setup as permission to resume production writes. The original source tree and primary may remain unavailable throughout; production takeover still requires retiring the old writer, restoring the mandatory primary authority, and freshly rebuilding the ledger through verification.
 
-Errors are concise stderr messages with nonzero status, not Go panics or stack traces; help exits successfully. Escape control characters in every untrusted path/key/error before terminal output, use structured encodings for machine/audit logs, and never log authorization headers, credentials, recipient secrets, or raw key material.
+Errors are concise stderr messages with nonzero status, not Go panics or stack traces. `backup COMMAND -h` or `--help`, including `repair data` and `repair metadata`, prints that command's synopsis, registered flags/defaults, and relevant safety notes to stdout and exits successfully without opening repository/configuration/secret state or performing network operations. Top-level help lists commands; `repair --help` lists its two subcommands. Help-output failures remain errors. Options precede positional arguments, matching Go's standard flag parser. Escape control characters in every untrusted path/key/error before terminal output, use structured encodings for machine/audit logs, and never log authorization headers, credentials, recipient secrets, or raw key material.
 
 ## Testing requirements
 

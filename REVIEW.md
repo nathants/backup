@@ -189,13 +189,15 @@ The TLS reader promises “mode 0600 or stricter” but only rejects group/other
 
 **Original reproduction:** `TestReviewTLSPrivateKeyModeMatchesContract`.
 
-### 14. Low — Subcommand help discards the information needed to operate the command
+### 14. Low [done] — Subcommand help discarded the information needed to operate the command
 
-**Locations:** backup `cmd/backup/main.go:99–101,132–137`; `cmd/backup/main_test.go:26–50`.
+**Locations:** backup `cmd/backup/main.go`, `cmd/backup/help.go`, `cmd/backup/main_test.go`.
 
-All flag sets send their help output to `io.Discard`. The dispatcher replaces `flag.ErrHelp` with the generic command list. The real `backup restore --help` succeeds but documents none of `--target`, `--overwrite`, `--catalog-revision` or `--dry-run`, nor the restore positionals. Server and repair have the same discoverability problem. Tests currently assert generic help rather than useful command-specific output.
+All flag sets sent their help output to `io.Discard`, and the dispatcher replaced `flag.ErrHelp` with the generic command list. `backup restore --help` succeeded but documented none of its target, overwrite, catalog, dry-run, or positional arguments. Server and repair had the same discoverability problem, while tests asserted generic rather than command-specific help.
 
-**Required action:** retain the relevant `FlagSet` usage/defaults and positional synopsis, including safety text. A small standard-library usage path is sufficient; a new CLI framework is unnecessary.
+**Resolution:** each subcommand now supplies its synopsis and description alongside its existing flag declarations. Explicit help prints those details and the standard library's registered flags/defaults to stdout; the dispatcher treats successfully printed help as success instead of substituting the command list. The small shared renderer buffers `PrintDefaults` so final output errors propagate. Ordinary argument errors stay concise and terminal-escaped. `repair --help` names its two subcommands and their help commands. Restore retains its exclusive-destination boundary; restore/recovery/import help explains operator-owned resource limits, and recovery explicitly states that `--list` decrypts/imports candidates. No parser behavior, runtime operation, or CLI framework changed. The documented catalog-restore example now places options before positional arguments, matching the existing Go parser.
+
+**Validation:** a failing actual-dispatcher restore-help regression first reproduced generic-only output. Tests now cover both `-h` and `--help` for all commands and both repair subcommands, required positionals, representative flags/defaults, relevant safety text, missing runtime/configuration state, invalid unused secret input, failed output, escaped environment-derived defaults, and unchanged flag-error behavior. The built CLI's restore, recover, and repair help was inspected. The full CLI race suite and `make check` (lint, vet, coverage, and race) passed.
 
 ### 15. Low — Sibling check scripts are environment-mutating and partly advisory while appearing to be validation gates
 

@@ -40,9 +40,9 @@ commands:
   recover    recover metadata from one object mirror
   server     run the narrow production object server
 
-restore safety:
-  Keep exclusive control of the destination tree and its ancestry throughout
-  restore; concurrent destination writers are unsupported, even as the same user.
+Use backup COMMAND --help for command-specific usage and options.
+
+` + restoreSafetyText + `
 
 common environment:
   BACKUP_ROOT             source root (default: /)
@@ -97,8 +97,7 @@ func run(ctx context.Context, arguments []string, stdout, stderr io.Writer) erro
 		return fmt.Errorf("unknown command %q", command)
 	}
 	if errors.Is(err, flag.ErrHelp) {
-		_, writeErr := io.WriteString(stdout, usageText)
-		return writeErr
+		return nil
 	}
 	return err
 }
@@ -116,9 +115,9 @@ func addCommon(flags *flag.FlagSet) *commonFlags {
 		defaults.root = "/"
 	}
 	flags.StringVar(&defaults.root, "root", defaults.root, "backup source root")
-	flags.StringVar(&defaults.config, "config", defaults.config, "trusted local config file")
-	flags.StringVar(&defaults.spool, "spool-directory", defaults.spool, "trusted parent for private plaintext capture spools")
-	flags.Uint64Var(&defaults.spaceReserve, "space-reserve-bytes", 0, "minimum free bytes retained on staging filesystems")
+	flags.StringVar(&defaults.config, "config", defaults.config, "trusted local config file (default: .backup-config beneath --root)")
+	flags.StringVar(&defaults.spool, "spool-directory", defaults.spool, "trusted parent for private plaintext capture spools (default: private repository staging)")
+	flags.Uint64Var(&defaults.spaceReserve, "space-reserve-bytes", 0, "minimum free bytes retained on staging filesystems (0 selects the default 1 GiB)")
 	return defaults
 }
 
@@ -129,18 +128,10 @@ func (common *commonFlags) options(stdout, stderr io.Writer) backupapp.Options {
 	}
 }
 
-func parseFlags(flags *flag.FlagSet, arguments []string) error {
-	flags.SetOutput(io.Discard)
-	if err := flags.Parse(arguments); err != nil {
-		return err
-	}
-	return nil
-}
-
 func runInit(ctx context.Context, arguments []string, stdout, stderr io.Writer) error {
 	flags := flag.NewFlagSet("init", flag.ContinueOnError)
 	common := addCommon(flags)
-	if err := parseFlags(flags, arguments); err != nil {
+	if err := parseFlags(flags, arguments, stdout, "[OPTIONS]", "Create local preparation only; no network publication, keys, or remote configuration are required."); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 {
@@ -158,7 +149,7 @@ func runAdd(ctx context.Context, arguments []string, stdout, stderr io.Writer) e
 	flags := flag.NewFlagSet("add", flag.ContinueOnError)
 	common := addCommon(flags)
 	allowEmpty := flags.Bool("allow-empty", false, "permit a zero-entry snapshot")
-	if err := parseFlags(flags, arguments); err != nil {
+	if err := parseFlags(flags, arguments, stdout, "[OPTIONS]", "Build a provisional path plan without uploading content; commit captures only these paths."); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 {
@@ -178,7 +169,7 @@ func runAdd(ctx context.Context, arguments []string, stdout, stderr io.Writer) e
 func runDiff(arguments []string, stdout, stderr io.Writer) error {
 	flags := flag.NewFlagSet("diff", flag.ContinueOnError)
 	common := addCommon(flags)
-	if err := parseFlags(flags, arguments); err != nil {
+	if err := parseFlags(flags, arguments, stdout, "[OPTIONS]", "Compare the last add plan with HEAD. Content and metadata remain provisional until commit."); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 {
@@ -198,7 +189,7 @@ func runDiff(arguments []string, stdout, stderr io.Writer) error {
 func runCommit(ctx context.Context, arguments []string, stdout, stderr io.Writer) error {
 	flags := flag.NewFlagSet("commit", flag.ContinueOnError)
 	common := addCommon(flags)
-	if err := parseFlags(flags, arguments); err != nil {
+	if err := parseFlags(flags, arguments, stdout, "[OPTIONS]", "Publish or resume the pending transaction. Success requires the primary Git push\nand a complete revision on at least one individual mirror."); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 {
@@ -231,7 +222,7 @@ func printSnapshotResult(output io.Writer, result backupapp.SnapshotResult) erro
 func runReset(arguments []string, stdout, stderr io.Writer) error {
 	flags := flag.NewFlagSet("reset", flag.ContinueOnError)
 	common := addCommon(flags)
-	if err := parseFlags(flags, arguments); err != nil {
+	if err := parseFlags(flags, arguments, stdout, "[OPTIONS]", "Discard an unpublished transaction when safe; refuses ambiguous or published push outcomes."); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 {
@@ -247,7 +238,7 @@ func runReset(arguments []string, stdout, stderr io.Writer) error {
 func runFind(arguments []string, stdout, stderr io.Writer) error {
 	flags := flag.NewFlagSet("find", flag.ContinueOnError)
 	common := addCommon(flags)
-	if err := parseFlags(flags, arguments); err != nil {
+	if err := parseFlags(flags, arguments, stdout, "[OPTIONS] REGEX [REVISION]", "Find canonical ./ paths matching REGEX. REVISION defaults to HEAD."); err != nil {
 		return err
 	}
 	if flags.NArg() < 1 || flags.NArg() > 2 {
@@ -271,11 +262,15 @@ func runRestore(ctx context.Context, arguments []string, stdout, stderr io.Write
 	flags := flag.NewFlagSet("restore", flag.ContinueOnError)
 	common := addCommon(flags)
 	request := backupapp.RestoreRequest{}
-	flags.StringVar(&request.CatalogRevision, "catalog-revision", "", "descendant catalog revision for immutable relocation")
-	flags.StringVar(&request.TargetRoot, "target", "", "existing restore target directory")
+	flags.StringVar(&request.CatalogRevision, "catalog-revision", "", "descendant catalog revision for immutable relocation (default: snapshot revision)")
+	flags.StringVar(&request.TargetRoot, "target", "", "existing restore target directory (required)")
 	flags.BoolVar(&request.DryRun, "dry-run", false, "plan without object reads or writes")
 	flags.BoolVar(&request.Overwrite, "overwrite", false, "replace compatible existing leaves")
-	if err := parseFlags(flags, arguments); err != nil {
+	if err := parseFlags(flags, arguments, stdout, "[OPTIONS] --target DIRECTORY REGEX [REVISION]", `Restore only canonical ./ paths matching REGEX. REVISION defaults to HEAD.
+Existing leaves are refused unless --overwrite is explicit. Selected content is
+verified before publication; a late publication failure can leave a verified subset.
+
+`+restoreSafetyText+"\n\n"+resourceSafetyText+"\n\n"+decryptionHelpText); err != nil {
 		return err
 	}
 	if flags.NArg() < 1 || flags.NArg() > 2 {
@@ -309,7 +304,7 @@ func runVerify(ctx context.Context, arguments []string, stdout, stderr io.Writer
 	flags := flag.NewFlagSet("verify", flag.ContinueOnError)
 	common := addCommon(flags)
 	minimum := flags.Int("minimum-mirrors", 1, "required independently healthy mirrors")
-	if err := parseFlags(flags, arguments); err != nil {
+	if err := parseFlags(flags, arguments, stdout, "[OPTIONS] [REVISION]", "Audit mirrors independently using backend checksum verification; report every mirror.\nREVISION defaults to HEAD. Protocol verification does not download encrypted bodies."); err != nil {
 		return err
 	}
 	if flags.NArg() > 1 {
@@ -337,10 +332,10 @@ func runVerify(ctx context.Context, arguments []string, stdout, stderr io.Writer
 func runSync(ctx context.Context, arguments []string, stdout, stderr io.Writer) error {
 	flags := flag.NewFlagSet("sync", flag.ContinueOnError)
 	common := addCommon(flags)
-	source := flags.String("source", "", "healthy source mirror")
-	destination := flags.String("destination", "", "destination mirror")
-	revision := flags.String("revision", "", "revision to synchronize")
-	if err := parseFlags(flags, arguments); err != nil {
+	source := flags.String("source", "", "healthy source mirror (required)")
+	destination := flags.String("destination", "", "destination mirror (required)")
+	revision := flags.String("revision", "", "revision to synchronize (default HEAD)")
+	if err := parseFlags(flags, arguments, stdout, "[OPTIONS] --source MIRROR --destination MIRROR", "Copy a complete revision between distinct mirrors; never overwrites or deletes existing objects."); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 {
@@ -356,7 +351,8 @@ func runSync(ctx context.Context, arguments []string, stdout, stderr io.Writer) 
 
 func runRepair(ctx context.Context, arguments []string, stdout, stderr io.Writer) error {
 	if len(arguments) == 1 && (arguments[0] == "-h" || arguments[0] == "--help") {
-		return flag.ErrHelp
+		_, err := io.WriteString(stdout, repairUsageText)
+		return err
 	}
 	if len(arguments) == 0 {
 		return fmt.Errorf("repair requires data or metadata subcommand")
@@ -374,8 +370,10 @@ func runRepair(ctx context.Context, arguments []string, stdout, stderr io.Writer
 func runRepairData(ctx context.Context, arguments []string, stdout, stderr io.Writer) error {
 	flags := flag.NewFlagSet("repair data", flag.ContinueOnError)
 	common := addCommon(flags)
-	source := flags.String("source", "", "healthy source mirror")
-	if err := parseFlags(flags, arguments); err != nil {
+	source := flags.String("source", "", "healthy source mirror (required)")
+	if err := parseFlags(flags, arguments, stdout, "[OPTIONS] --source MIRROR PACK_HASH PART_NUMBER", `Relocate healthy exact ciphertext to a new immutable key through a Git revision.
+PACK_HASH is the logical pack BLAKE2b-512 (128 lowercase hex); PART_NUMBER is zero-based.
+Existing objects are never overwritten or deleted.`); err != nil {
 		return err
 	}
 	if flags.NArg() != 2 || *source == "" {
@@ -403,9 +401,12 @@ func runRepairData(ctx context.Context, arguments []string, stdout, stderr io.Wr
 func runRepairMetadata(ctx context.Context, arguments []string, stdout, stderr io.Writer) error {
 	flags := flag.NewFlagSet("repair metadata", flag.ContinueOnError)
 	common := addCommon(flags)
-	destination := flags.String("destination", "", "mirror receiving the alternate representation")
+	destination := flags.String("destination", "", "mirror receiving the alternate representation (required)")
 	revision := flags.String("revision", "", "exact metadata revision to republish (default HEAD)")
-	if err := parseFlags(flags, arguments); err != nil {
+	if err := parseFlags(flags, arguments, stdout, "[OPTIONS] --destination MIRROR", `Publish an alternate immutable representation of an exact validated metadata edge.
+Canonical Git history and existing representations remain unchanged.
+
+`+decryptionHelpText+"\n\n"+resourceSafetyText); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 || *destination == "" {
@@ -423,11 +424,15 @@ func runRecover(ctx context.Context, arguments []string, stdout, stderr io.Write
 	flags := flag.NewFlagSet("recover", flag.ContinueOnError)
 	common := addCommon(flags)
 	request := backupapp.RecoverRequest{}
-	flags.StringVar(&request.Mirror, "mirror", "", "mirror to recover from")
-	flags.StringVar(&request.Tip, "tip", "", "exact externally anchored commit")
-	flags.StringVar(&request.Destination, "destination", "", "new bare repository destination")
-	flags.BoolVar(&request.ListOnly, "list", false, "list candidate tips only")
-	if err := parseFlags(flags, arguments); err != nil {
+	flags.StringVar(&request.Mirror, "mirror", "", "mirror to recover from (required)")
+	flags.StringVar(&request.Tip, "tip", "", "exact externally anchored 64-hex commit (default: latest unambiguous tip)")
+	flags.StringVar(&request.Destination, "destination", "", "new bare repository destination (required unless --list)")
+	flags.BoolVar(&request.ListOnly, "list", false, "list verified commits without publishing a repository")
+	if err := parseFlags(flags, arguments, stdout, "[OPTIONS] --mirror MIRROR {--list | --destination DIRECTORY}", `Recover validated metadata from one mirror without the primary Git service.
+--list also decrypts and imports candidate chains; it is not just a manifest listing.
+After suspected compromise, select a last-known-good external anchor with --tip.
+
+`+resourceSafetyText+"\n\n"+decryptionHelpText); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 {
@@ -502,9 +507,11 @@ func runServer(parent context.Context, arguments []string, stdout, stderr io.Wri
 	bucket := flags.String("bucket", "", "single served bucket")
 	prefix := flags.String("prefix", "", "single served backup prefix")
 	region := flags.String("region", "us-east-1", "SigV4 region")
-	certificate := flags.String("tls-cert", "", "TLS certificate file")
-	privateKey := flags.String("tls-key", "", "TLS private-key file")
-	if err := parseFlags(flags, arguments); err != nil {
+	certificate := flags.String("tls-cert", "", "TLS certificate file (required)")
+	privateKey := flags.String("tls-key", "", "TLS private-key file (required)")
+	if err := parseFlags(flags, arguments, stdout, "[OPTIONS] --data-root DIRECTORY --bucket BUCKET --tls-cert FILE --tls-key FILE", `Serve immutable objects over authenticated HTTPS. Supplied TLS material is required.
+Set BACKUP_SERVER_ACCESS_KEY and BACKUP_SERVER_SECRET_KEY to the ordinary
+read/list/create credential; no overwrite or delete API is exposed.`); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 || *root == "" || *bucket == "" || *certificate == "" || *privateKey == "" {

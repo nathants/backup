@@ -33,14 +33,57 @@ func TestRestoreHelpStatesExclusiveDestinationRequirement(t *testing.T) {
 	}
 }
 
-func TestSubcommandHelpSucceeds(t *testing.T) {
-	for _, command := range []string{"init", "add", "diff", "commit", "reset", "find", "restore", "verify", "sync", "repair", "recover", "server"} {
-		var stdout, stderr bytes.Buffer
-		if err := run(context.Background(), []string{command, "--help"}, &stdout, &stderr); err != nil {
-			t.Fatalf("%s --help: %v", command, err)
-		}
-		if !strings.Contains(stdout.String(), "usage: backup COMMAND") || stderr.Len() != 0 {
-			t.Fatalf("%s stdout=%q stderr=%q", command, stdout.String(), stderr.String())
+func TestSubcommandHelpDescribesCommand(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "absent-root")
+	t.Setenv("BACKUP_ROOT", root)
+	t.Setenv("BACKUP_CONFIG", filepath.Join(root, "absent-config"))
+	t.Setenv("GIT_REMOTE_AWS_SECRETKEY", "invalid-secret-must-not-be-loaded")
+	for _, test := range []struct {
+		command  string
+		synopsis string
+		want     []string
+	}{
+		{"init", "[OPTIONS]", []string{"local preparation", "no network publication", "-root string", "-config string"}},
+		{"add", "[OPTIONS]", []string{"-allow-empty", "-spool-directory string", "-space-reserve-bytes uint", "provisional"}},
+		{"diff", "[OPTIONS]", []string{"-root string", "provisional"}},
+		{"commit", "[OPTIONS]", []string{"-root string", "resume", "one individual mirror"}},
+		{"reset", "[OPTIONS]", []string{"-root string", "unpublished", "ambiguous"}},
+		{"find", "[OPTIONS] REGEX [REVISION]", []string{"-root string", "REVISION defaults to HEAD"}},
+		{"restore", "[OPTIONS] --target DIRECTORY REGEX [REVISION]", []string{"-target string", "-overwrite", "-catalog-revision string", "-dry-run", "REVISION defaults to HEAD", "exclusive control of the destination tree", "memory/swap", "TMPDIR"}},
+		{"verify", "[OPTIONS] [REVISION]", []string{"-minimum-mirrors int", "(default 1)", "REVISION defaults to HEAD"}},
+		{"sync", "[OPTIONS] --source MIRROR --destination MIRROR", []string{"-source string", "-destination string", "-revision string", "never overwrites or deletes"}},
+		{"repair", "{data|metadata} [OPTIONS]", []string{"backup repair data --help", "backup repair metadata --help", "immutable"}},
+		{"repair data", "[OPTIONS] --source MIRROR PACK_HASH PART_NUMBER", []string{"-source string", "zero-based", "128 lowercase hex"}},
+		{"repair metadata", "[OPTIONS] --destination MIRROR", []string{"-destination string", "-revision string", "recipient secret"}},
+		{"recover", "[OPTIONS] --mirror MIRROR {--list | --destination DIRECTORY}", []string{"-mirror string", "-tip string", "-destination string", "-list", "--list also decrypts and imports", "memory/swap", "TMPDIR"}},
+		{"server", "[OPTIONS] --data-root DIRECTORY --bucket BUCKET --tls-cert FILE --tls-key FILE", []string{"-data-root string", "-bucket string", "-tls-cert string", "-tls-key string", "-listen string", "(default \":8443\")", "-region string", "(default \"us-east-1\")", "BACKUP_SERVER_ACCESS_KEY", "BACKUP_SERVER_SECRET_KEY"}},
+	} {
+		for _, helpFlag := range []string{"-h", "--help"} {
+			t.Run(test.command+"/"+helpFlag, func(t *testing.T) {
+				arguments := append(strings.Fields(test.command), helpFlag)
+				var stdout, stderr bytes.Buffer
+				if err := run(context.Background(), arguments, &stdout, &stderr); err != nil {
+					t.Fatalf("help accessed runtime state or failed: %v", err)
+				}
+				help := stdout.String()
+				if !strings.HasPrefix(help, "usage: backup "+test.command+" "+test.synopsis+"\n") || stderr.Len() != 0 {
+					t.Fatalf("wrong command synopsis or output stream: stdout=%q stderr=%q", help, stderr.String())
+				}
+				for _, want := range test.want {
+					if !strings.Contains(help, want) {
+						t.Errorf("help lacks %q: %s", want, help)
+					}
+				}
+				if strings.Contains(help, "usage: backup COMMAND") || strings.Contains(help, "invalid-secret-must-not-be-loaded") {
+					t.Fatalf("help substituted generic usage or disclosed a secret source: %q", help)
+				}
+				if err := run(context.Background(), arguments, failingWriter{}, &stderr); !errors.Is(err, io.ErrClosedPipe) {
+					t.Fatalf("help output error was hidden: %v", err)
+				}
+				if _, err := os.Stat(root); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("help created its source root: %v", err)
+				}
+			})
 		}
 	}
 }
@@ -186,5 +229,43 @@ func TestServerRequiresSingleCredentialEnvironment(t *testing.T) {
 	err = run(context.Background(), args, &stdout, &stderr)
 	if !errors.Is(err, os.ErrNotExist) || !strings.Contains(err.Error(), "read TLS certificate") {
 		t.Fatalf("single credential did not advance to TLS validation: %v", err)
+	}
+}
+
+func TestHelpUsesEscapedEnvironmentDefaultsNotParsedValues(t *testing.T) {
+	root := "/source with spaces\nterminal-control"
+	config := "/local/config"
+	spool := "/local/spool"
+	t.Setenv("BACKUP_ROOT", root)
+	t.Setenv("BACKUP_CONFIG", config)
+	t.Setenv("BACKUP_SPOOL_DIRECTORY", spool)
+	var stdout, stderr bytes.Buffer
+	err := run(context.Background(), []string{"restore", "--root", "/not-the-default", "--help"}, &stdout, &stderr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`(default "/source with spaces\nterminal-control")`, `(default "/local/config")`, `(default "/local/spool")`} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Errorf("help lacks escaped configured default %q: %s", want, stdout.String())
+		}
+	}
+	if strings.Contains(stdout.String(), root) || strings.Contains(stdout.String(), "/not-the-default") || stderr.Len() != 0 {
+		t.Fatalf("help emitted raw controls or a parsed value as a default: stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+}
+
+func TestHelpDoesNotHideFlagErrors(t *testing.T) {
+	for _, arguments := range [][]string{
+		{"restore", "--unknown", "--help"},
+		{"verify", "--minimum-mirrors=bad", "--help"},
+		{"restore", "--target"},
+	} {
+		var stdout, stderr bytes.Buffer
+		if err := run(context.Background(), arguments, &stdout, &stderr); err == nil {
+			t.Fatalf("help hid a flag error: %v", arguments)
+		}
+		if stdout.Len() != 0 || stderr.Len() != 0 {
+			t.Fatalf("flag error printed help instead of returning a concise error: stdout=%q stderr=%q", stdout.String(), stderr.String())
+		}
 	}
 }
