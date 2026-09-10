@@ -46,8 +46,11 @@ func InitializeLocal(directory string) (*Managed, error) {
 }
 
 func initialize(directory, remote, branch string) (*Managed, error) {
-	if directory == "" || branch == "" || strings.HasPrefix(branch, "-") || strings.ContainsAny(branch, "\x00\r\n") {
-		return nil, fmt.Errorf("metadata directory and branch are required")
+	if directory == "" {
+		return nil, fmt.Errorf("metadata directory is required")
+	}
+	if err := ValidateBranch(branch); err != nil {
+		return nil, err
 	}
 	if err := makeDurableParents(filepath.Dir(filepath.Clean(directory))); err != nil {
 		return nil, err
@@ -152,8 +155,11 @@ func OpenLocal(directory, branch string) (*Managed, error) {
 // BindInitialRemote completes local configuration after the caller durably pins
 // the first publication destination. It never replaces an existing origin.
 func (repo *Managed) BindInitialRemote(remote, branch string) error {
-	if remote == "" || branch == "" {
-		return fmt.Errorf("initial remote and branch are required")
+	if remote == "" {
+		return fmt.Errorf("initial remote is required")
+	}
+	if err := ValidateBranch(branch); err != nil {
+		return err
 	}
 	remotes, err := repo.run(nil, 64<<10, "remote")
 	if err != nil {

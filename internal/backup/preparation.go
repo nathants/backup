@@ -185,6 +185,9 @@ func (run *runtime) startGenesis(txn *transaction) error {
 	if err != nil {
 		return err
 	}
+	if err := repository.ValidateBranch(config.Branch); err != nil {
+		return err
+	}
 	if run.preparation.GitRemote != "" && (run.preparation.GitRemote != config.GitRemote || run.preparation.Branch != config.Branch) {
 		return fmt.Errorf("first publication remote does not match its durable pin")
 	}

@@ -296,6 +296,20 @@ func runStandaloneGit(limit int64, arguments ...string) ([]byte, error) {
 	return append([]byte(nil), stdout.buffer.Bytes()...), nil
 }
 
+// ValidateBranch checks Git's complete branch syntax before callers persist a
+// destination pin or mutate repository setup. Checkout expressions must not be
+// expanded into a different branch, even when the current directory has a reflog.
+func ValidateBranch(branch string) error {
+	output, err := runStandaloneGit(maximumGitErrorBytes, "check-ref-format", "--branch", branch)
+	if err != nil {
+		return fmt.Errorf("invalid metadata branch %q: %w", branch, err)
+	}
+	if string(output) != branch+"\n" {
+		return fmt.Errorf("invalid metadata branch %q: expected a literal branch name", branch)
+	}
+	return nil
+}
+
 // InitializeBareSHA256 creates a bare SHA-256 repository through the same
 // hardened, bounded Git runner used by every other production invocation.
 func InitializeBareSHA256(directory string) error {

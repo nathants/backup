@@ -80,20 +80,20 @@ There was a related setup gap: creating the server data root or the metadata `.b
 
 **Permanent regressions:** real Linux `O_PATH` descriptors reproduce missing existing-directory barriers and demonstrate that an ancestor fsync failure prevents final-key publication; a healthy retry completes through the existing-directory path. Unreadable containing directories exercise new/existing server and metadata roots, failure before Git setup, and retry. Additional tests cover trusted parent aliases, private nested setup directories, unrelated-data preservation, and descriptor-relative parent lookup after rename. These are syscall-failure/order checks, not simulated hardware power-loss evidence. The focused package race runs and full `make check` passed.
 
-### 5. Medium — Branch validation disagrees across all three publication boundaries, after the choice is durably pinned
+### 5. Medium [done] — Branch validation disagreed after the choice was durably pinned
 
-**Locations:** backup `internal/localconfig/config.go:20,87–92`, `internal/backup/preparation.go:184–214`, `internal/backup/runtime.go:53–60`, `internal/repository/manage.go:149–181`; git-remote-aws `main.go:109–117,147–148,363`.
+**Reviewed locations:** backup `internal/localconfig/config.go:20,87–92`, `internal/backup/preparation.go:184–214`, `internal/backup/runtime.go:53–60`, `internal/repository/manage.go:149–181`; git-remote-aws `main.go:109–117,147–148,363`.
 
-Two different failures share the same late-validation problem:
+Two different failures shared the same late-validation problem:
 
-- Backup accepts `archive/home`; its existing native-bare publication test successfully uses that branch. The production helper rejects every slash-containing branch before push/fetch.
-- Backup's regex also accepts Git-invalid `main.lock`. First commit persists that choice, adds `origin`, then fails at `git symbolic-ref`. Correcting the config to `main` makes even `Reset` fail with `first publication remote does not match its durable pin`.
+- Backup accepted `archive/home`; its native-bare publication test successfully used that branch. The production helper rejected every slash-containing branch before push/fetch.
+- Backup's regex also accepted Git-invalid `main.lock`. First commit persisted that choice, added `origin`, then failed at `git symbolic-ref`. Correcting the config to `main` made even `Reset` fail with `first publication remote does not match its durable pin`.
 
-**Both reproduced.** The latter occurs entirely locally, before any remote publication. These are configuration errors that turn into trapped preparation state rather than a correctable preflight failure.
+**Both reproduced**, including against helper `217db88` and backup `250f33d`. The latter occurred entirely locally, before remote publication. These configuration errors trapped preparation state rather than failing a correctable preflight.
 
-**Required action:** validate full Git branch syntax and backend compatibility before writing the durable destination pin. Align the helper with valid Git branch names rather than maintaining an unnecessary slash restriction. Retain destination pinning and the preservation-first treatment of existing state; do not solve this by deleting preparation state automatically.
+**Resolution:** backup now invokes native `git check-ref-format --branch` through its hardened runner before persisting the first destination pin, and before managed initialization or initial remote binding can mutate Git setup. The bounded config grammar remains a lexical filter, not the authority for Git syntax. The helper uses the same native branch check through its cancelable Git runner, accepting valid slash names (`git-remote-aws` commit `122d311`). Both require the returned name to equal the literal input, rejecting contextual checkout-expression expansion. Existing durable destination pins, single-remote-branch enforcement, force-push rejection, and storage formats are unchanged; no preparation state is automatically deleted or repinned. Deploy the updated helper before using slash branches.
 
-**Regressions:** `TestReviewInvalidGitBranchDoesNotPinPreparation`, `TestReviewPushSupportsBackupSlashBranch`; positive control `TestInitialRemoteBindingIsPinnedAcrossRestart` passes with the native remote.
+**Permanent regressions:** backup's `TestInitialInvalidBranchDoesNotPinPreparation` checks invalid names, unchanged preparation/add-plan/Git setup bytes, no object-client construction, and successful correction/reset/publication. Repository tests cover pre-mutation rejection, valid nested branches, and real reflog-expression expansion. The helper's `TestRefSlashBranchRoundTrip` exercises the actual CLI, Git, SDK and encryption with scripted local provider responses: first and incremental pushes, no-op, discovery, and fresh fetch of SHA-1/SHA-256 histories, plus retained single-branch and force protections. Native syntax, literal-name and cancellation tests also pass. Full backup `make check` and helper `GOTOOLCHAIN=local bash bin/check.sh` passed; no live AWS contract or installed-binary update was performed.
 
 ### 6. Medium — Deleting the helper's previous bundles list breaks concurrent readers
 
