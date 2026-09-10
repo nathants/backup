@@ -24,6 +24,7 @@ const (
 	EventBrokenSymlink     EventKind = "broken-symlink-skipped"
 	EventOutsideSymlink    EventKind = "outside-symlink-skipped"
 	EventPermissionSkipped EventKind = "permission-denied-skipped"
+	EventFileChanged       EventKind = "file-changed"
 )
 
 type Event struct {
@@ -74,6 +75,7 @@ type Root struct {
 	fd                int
 	once              sync.Once
 	err               error
+	scanOpened        func(string) error
 	captureBeforeOpen func(string) error
 	captureOpened     func(string) error
 	symlinkOpened     func() error
@@ -265,7 +267,7 @@ func (root *Root) scanDirectory(directoryFD int, relative string, parentMount ui
 					return err
 				}
 			case unix.S_IFREG:
-				file, indexEntry, err := root.scanRegular(directoryFD, name, indexPath, stat)
+				file, indexEntry, err := root.scanRegular(directoryFD, name, indexPath, stat, reporter)
 				if err != nil {
 					if reportPermissionSkip(err, indexPath, result, reporter) {
 						continue
@@ -309,7 +311,7 @@ func (root *Root) scanDirectory(directoryFD int, relative string, parentMount ui
 	}
 }
 
-func (root *Root) scanRegular(directoryFD int, name, indexPath string, directoryStat unix.Stat_t) (File, format.IndexEntry, error) {
+func (root *Root) scanRegular(directoryFD int, name, indexPath string, directoryStat unix.Stat_t, reporter Reporter) (File, format.IndexEntry, error) {
 	fd, err := unix.Openat(directoryFD, name, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
 	if err != nil {
 		return File{}, format.IndexEntry{}, fmt.Errorf("open source file %q: %w", indexPath, err)
@@ -327,29 +329,37 @@ func (root *Root) scanRegular(directoryFD int, name, indexPath string, directory
 	if err != nil {
 		return File{}, format.IndexEntry{}, fmt.Errorf("source file %q: %w", indexPath, err)
 	}
+	if root.scanOpened != nil {
+		if err := root.scanOpened(indexPath); err != nil {
+			return File{}, format.IndexEntry{}, err
+		}
+	}
 	hash, _ := blake2b.New512(nil)
-	count, err := io.CopyBuffer(hash, file, make([]byte, 1<<20))
+	// Like commit capture, provisional hashing observes one pass bounded by
+	// the open-time size, rather than chasing appends or requiring quiescence.
+	limited := &io.LimitedReader{R: file, N: int64(identity.Size)}
+	count, err := io.CopyBuffer(hash, limited, make([]byte, 1<<20))
 	if err != nil {
 		return File{}, format.IndexEntry{}, fmt.Errorf("read source file %q: %w", indexPath, err)
-	}
-	if uint64(count) != identity.Size {
-		return File{}, format.IndexEntry{}, fmt.Errorf("source file %q changed size while hashing", indexPath)
 	}
 	var after unix.Stat_t
 	if err := unix.Fstat(fd, &after); err != nil {
 		return File{}, format.IndexEntry{}, fmt.Errorf("restat source file %q: %w", indexPath, err)
 	}
 	afterIdentity, err := identityFromStat(after)
-	if err != nil || afterIdentity != identity {
-		return File{}, format.IndexEntry{}, fmt.Errorf("source file %q changed while hashing", indexPath)
+	if err != nil {
+		return File{}, format.IndexEntry{}, fmt.Errorf("source file %q after hashing: %w", indexPath, err)
 	}
 	hashText := fmt.Sprintf("%x", hash.Sum(nil))
 	mtimeNanoseconds, err := checkedTimespec(identity.MtimeSec, identity.MtimeNS)
 	if err != nil {
 		return File{}, format.IndexEntry{}, fmt.Errorf("source file %q mtime: %w", indexPath, err)
 	}
-	return File{Hash: hashText, Size: identity.Size}, format.IndexEntry{
-		Path: indexPath, Kind: format.KindFile, Ref: "blake2b:" + hashText, Size: identity.Size,
+	if afterIdentity != identity || uint64(count) != identity.Size {
+		report(reporter, Event{Kind: EventFileChanged, Path: indexPath, Detail: "changed while hashing; add plan records the bytes read"})
+	}
+	return File{Hash: hashText, Size: uint64(count)}, format.IndexEntry{
+		Path: indexPath, Kind: format.KindFile, Ref: "blake2b:" + hashText, Size: uint64(count),
 		Mode: identity.Mode, MtimeNS: mtimeNanoseconds,
 	}, nil
 }
