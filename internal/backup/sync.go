@@ -34,7 +34,7 @@ func Sync(ctx context.Context, options Options, sourceName, destinationName, rev
 	if err := run.requirePinnedMirrors(head.State); err != nil {
 		return result, err
 	}
-	selected, err := resolveHistoryRevision(run.repo, history, revision)
+	selected, err := history.ResolveRevision(revision)
 	if err != nil {
 		return result, err
 	}

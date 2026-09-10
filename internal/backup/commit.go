@@ -138,7 +138,7 @@ func (run *runtime) commitTransaction(ctx context.Context, txn *transaction) (Sn
 	var localHistory *repository.History
 	var local repository.ValidatedCommit
 	if txn.LocalCommit != "" {
-		localHistory, err = (repository.Validator{Repo: run.repo.Directory, Limits: format.DefaultLimits()}).ValidateHistory(txn.LocalCommit)
+		localHistory, err = run.historyValidator().ValidateHistory(txn.LocalCommit)
 		if err != nil {
 			return SnapshotResult{}, fmt.Errorf("validate recorded local commit: %w", err)
 		}

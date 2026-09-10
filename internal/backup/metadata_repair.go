@@ -36,7 +36,7 @@ func RepairMetadataEdge(ctx context.Context, options Options, destinationMirror,
 	if err := run.requirePinnedMirrors(head.State); err != nil {
 		return result, err
 	}
-	selected, err := resolveHistoryRevision(run.repo, history, revision)
+	selected, err := history.ResolveRevision(revision)
 	if err != nil {
 		return result, err
 	}

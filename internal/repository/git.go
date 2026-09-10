@@ -35,6 +35,31 @@ type Validator struct {
 	CachePath string
 }
 
+func (validator Validator) resolveCommitID(revision string) (string, error) {
+	if validator.Repo == "" {
+		return "", fmt.Errorf("repository path is required")
+	}
+	if revision == "" || strings.HasPrefix(revision, "-") || strings.ContainsAny(revision, "\x00\r\n") {
+		return "", fmt.Errorf("invalid revision")
+	}
+	objectFormat, err := validator.gitOutput(1024, "rev-parse", "--show-object-format")
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(string(objectFormat)) != "sha256" {
+		return "", fmt.Errorf("metadata repository must use Git SHA-256 object format")
+	}
+	resolved, err := validator.gitOutput(1024, "rev-parse", "--verify", "--end-of-options", revision+"^{commit}")
+	if err != nil {
+		return "", fmt.Errorf("resolve revision %q: %w", revision, err)
+	}
+	commitID := strings.TrimSpace(string(resolved))
+	if !isGitOID(commitID) {
+		return "", fmt.Errorf("git returned invalid commit ID %q", commitID)
+	}
+	return commitID, nil
+}
+
 func (validator Validator) validateCommit(commitID string) (ValidatedCommit, error) {
 	objectType, err := validator.gitOutput(128, "cat-file", "-t", commitID)
 	if err != nil {

@@ -19,6 +19,7 @@ const historyRecordBytes = 64
 // mirror-name ledger are file-backed. Only the selected tip state and the
 // fixed repository format are retained in memory.
 type History struct {
+	validator     Validator
 	workspace     string
 	ids           *os.File
 	count         int

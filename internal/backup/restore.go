@@ -77,13 +77,13 @@ func Restore(ctx context.Context, options Options, request RestoreRequest) (Rest
 	if err := run.requirePinnedMirrors(head.State); err != nil {
 		return result, err
 	}
-	snapshot, err := resolveHistoryRevision(run.repo, history, request.Revision)
+	snapshot, err := history.ResolveRevision(request.Revision)
 	if err != nil {
 		return result, err
 	}
 	catalog := snapshot
 	if request.CatalogRevision != "" {
-		catalog, err = resolveHistoryRevision(run.repo, history, request.CatalogRevision)
+		catalog, err = history.ResolveRevision(request.CatalogRevision)
 		if err != nil {
 			return result, err
 		}

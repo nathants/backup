@@ -98,7 +98,7 @@ func (run *runtime) observeDataFailure(name, key string, failure error) (returnE
 			if prior == "" {
 				return nil
 			}
-			known, err := resolveHistoryRevision(run.repo, history, prior)
+			known, err := history.ResolveRevision(prior)
 			if err != nil {
 				return err
 			}
@@ -133,11 +133,11 @@ func (run *runtime) auditChain(ctx context.Context, client *objectstore.Client, 
 	if err != nil {
 		return incidentStateFailure(err)
 	}
-	state, err := resolveHistoryRevision(run.repo, history, selected)
+	identity, err := history.GenesisFormat()
 	if err != nil {
 		return incidentStateFailure(err)
 	}
-	uuid := state.State.Format.RepositoryUUID
+	uuid := identity.RepositoryUUID
 	failure := auditManifestChain(ctx, client, history, target, uuid, txn, nil)
 	if !conclusiveObjectFailure(failure) {
 		return failure

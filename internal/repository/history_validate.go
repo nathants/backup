@@ -18,26 +18,9 @@ import (
 )
 
 func (validator Validator) ValidateHistory(revision string) (_ *History, returnErr error) {
-	if validator.Repo == "" {
-		return nil, fmt.Errorf("repository path is required")
-	}
-	if revision == "" || strings.HasPrefix(revision, "-") || strings.ContainsAny(revision, "\x00\r\n") {
-		return nil, fmt.Errorf("invalid revision")
-	}
-	objectFormat, err := validator.gitOutput(1024, "rev-parse", "--show-object-format")
+	tipID, err := validator.resolveCommitID(revision)
 	if err != nil {
 		return nil, err
-	}
-	if strings.TrimSpace(string(objectFormat)) != "sha256" {
-		return nil, fmt.Errorf("metadata repository must use Git SHA-256 object format")
-	}
-	resolved, err := validator.gitOutput(1024, "rev-parse", "--verify", "--end-of-options", revision+"^{commit}")
-	if err != nil {
-		return nil, fmt.Errorf("resolve revision %q: %w", revision, err)
-	}
-	tipID := strings.TrimSpace(string(resolved))
-	if !isGitOID(tipID) {
-		return nil, fmt.Errorf("git returned invalid commit ID %q", tipID)
 	}
 
 	workspace, err := os.MkdirTemp("", "backup-history-validation-")
@@ -197,7 +180,7 @@ func (validator Validator) ValidateHistory(revision string) (_ *History, returnE
 		return nil, err
 	}
 	history := &History{
-		workspace: workspace, ids: ids, count: count, tip: tip,
+		validator: validator, workspace: workspace, ids: ids, count: count, tip: tip,
 		genesisFormat: genesisFormat, topologyPath: topologyPath,
 	}
 	idsOpen = false
