@@ -167,17 +167,15 @@ Add hashed to unbounded EOF, then rejected any change in size, timestamps, mode 
 
 **Validation:** `TestScanRegularUsesBoundedProvisionalObservation` first reproduced failures for deterministic growth, empty-file growth, truncation, truncation to empty, in-place writes, and metadata changes, with a passing stable-file control. All now pass through the real walker, asserting exact provisional index/hash rows and mutation events; a subsequent scan observes current content rather than reusing the earlier hash. `TestScanRegularStillRejectsUnsafeLeafChanges` retains rejection of pre-open inode replacement, symlinks, FIFOs, and directories. The filesystem race suite and full `make check` (lint, vet, coverage, and race) passed.
 
-### 12. Low — `find` retains an obsolete pending-publication restriction
+### 12. Low [done] — `find` retained an obsolete pending-publication restriction
 
-**Locations:** backup `internal/backup/find.go:24–29`; compare `internal/backup/verify.go:19–23` and `internal/backup/restore.go`.
+**Locations:** backup `internal/backup/find.go`; compare `internal/backup/verify.go` and `internal/backup/restore.go`.
 
-`find` rejects any transaction with `PushAttempted` and otherwise always requests a fetching/materializing head. Other read operations deliberately inspect the locally accepted validated tip during pending publication. `find` therefore becomes unavailable precisely when an operator may need to inspect the pending revision before verification or forward repair.
+`find` rejected any transaction with `PushAttempted` and otherwise always requested a fetching/materializing head. Other read operations deliberately inspected the locally accepted validated tip during pending publication. `find` therefore became unavailable precisely when an operator might need to inspect the pending revision before verification or forward repair; it also failed before push when the accepted local tip was ahead of the remote.
 
-**Reproduced:** healthy `Find(HEAD)` works; after interrupting a real commit at `git-push-confirmed`, the same read fails with `a published transaction requires commit finalization before reading history`.
+**Resolution:** `find` now uses the same pending-transaction head policy as restore/verify. After local acceptance it validates and reads the local tip without fetching or materializing another tip over the transaction. Otherwise normal fetching and clean-worktree fast-forward checks remain in force. Revision membership, canonical metadata validation, mirror pins, and transaction validation are unchanged. The policy is documented in `NINA.md`.
 
-**Required action:** apply the same pending-transaction read policy as restore/verify, without materializing another tip over the transaction or weakening metadata validation.
-
-**Regression:** `TestReviewFindWorksDuringPendingPublication`.
+**Validation:** `TestFindReadsAcceptedTipDuringPendingPublication` first reproduced failures after local acceptance, recorded push intent, and confirmed push. It now verifies exact HEAD, explicit-tip and historical results, operation with the primary offline, rejection of a newer primary revision outside the locally accepted history, and unchanged transaction bytes, local HEAD and canonical worktree. The first full check also exposed an obsolete assertion in `TestInitialPublicationNeverAdoptsExistingRemote`: it treated reading the local pending genesis as foreign adoption. Exact commit-ID diagnostics confirmed the read stayed local; the test now requires that local result while rejecting the foreign commit and retaining unchanged local/remote ref checks and the existing commit/reset/add refusals. Focused race tests and the final full `make check` (lint, vet, coverage, and race) passed.
 
 ### 13. Low — TLS private-key mode checking has drifted from the stated contract
 

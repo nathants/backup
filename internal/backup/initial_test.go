@@ -279,9 +279,25 @@ func TestInitialPublicationNeverAdoptsExistingRemote(t *testing.T) {
 	if _, err := Add(ctx, h.options, false); err == nil {
 		t.Fatal("add discarded unfinished bootstrap")
 	}
+	pending := loadTestTransaction(t, h.options)
+	if !pending.LocalAccepted || pending.LocalCommit == published.CommitID {
+		t.Fatal("fixture did not retain its own accepted genesis")
+	}
+	// Inspection may read our own pending genesis, but must never adopt or
+	// expose the unrelated repository occupying the configured destination.
 	var resolved string
-	if _, err := Find(h.options, ".*", "HEAD", func(id string) error { resolved = id; return nil }, nil); err == nil || resolved != "" {
-		t.Fatalf("read adopted another repository: %s %v", resolved, err)
+	if count, err := Find(h.options, ".*", "HEAD", func(id string) error { resolved = id; return nil }, nil); err != nil || resolved != pending.LocalCommit || count != 0 {
+		t.Fatalf("read did not retain the local empty genesis: resolved=%s count=%d err=%v", resolved, count, err)
+	}
+	resolved = ""
+	if count, err := Find(h.options, ".*", published.CommitID, func(id string) error { resolved = id; return nil }, nil); err == nil || resolved != "" || count != 0 {
+		t.Fatalf("read exposed another repository: resolved=%s count=%d err=%v", resolved, count, err)
+	}
+	if got := strings.TrimSpace(runGit(t, "--git-dir", owner.bare, "rev-parse", "refs/heads/main")); got != published.CommitID {
+		t.Fatalf("read changed existing remote: %s", got)
+	}
+	if got := strings.TrimSpace(runGit(t, "-C", h.options.repositoryPath(), "rev-parse", "HEAD")); got != pending.LocalCommit {
+		t.Fatalf("read changed local genesis: %s", got)
 	}
 }
 

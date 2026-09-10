@@ -20,12 +20,11 @@ func Find(options Options, pattern, revision string, resolved func(string) error
 		return 0, err
 	}
 	defer func() { _ = run.close() }()
-	if txn, err := run.loadTransaction(); err != nil {
+	txn, err := run.loadTransaction()
+	if err != nil {
 		return 0, err
-	} else if txn != nil && txn.PushAttempted {
-		return 0, fmt.Errorf("a published transaction requires commit finalization before reading history")
 	}
-	head, history, err := run.validatedHead(true)
+	head, history, err := run.validatedHead(txn == nil || !txn.LocalAccepted)
 	if err != nil {
 		return 0, err
 	}
