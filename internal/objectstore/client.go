@@ -482,7 +482,7 @@ func responseStatus(err error) int {
 
 func readTrustedCAFile(filename string) ([]byte, error) {
 	const maximumCAFileBytes = int64(4 << 20)
-	fd, err := unix.Open(filename, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+	fd, err := unix.Open(filename, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
 	if err != nil {
 		return nil, fmt.Errorf("open mirror CA file as a regular no-follow file: %w", err)
 	}

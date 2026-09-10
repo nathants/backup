@@ -425,13 +425,23 @@ func (run *runtime) openStaged(relative string) (*os.File, error) {
 	}
 	defer func() { _ = unix.Close(rootFD) }()
 	fd, err := unix.Openat2(rootFD, relative, &unix.OpenHow{
-		Flags:   uint64(unix.O_RDONLY | unix.O_CLOEXEC | unix.O_NOFOLLOW),
+		Flags:   uint64(unix.O_RDONLY | unix.O_CLOEXEC | unix.O_NOFOLLOW | unix.O_NONBLOCK),
 		Resolve: uint64(unix.RESOLVE_BENEATH | unix.RESOLVE_NO_SYMLINKS | unix.RESOLVE_NO_MAGICLINKS),
 	})
 	if err != nil {
 		return nil, err
 	}
-	return os.NewFile(uintptr(fd), relative), nil
+	file := os.NewFile(uintptr(fd), relative)
+	info, err := file.Stat()
+	if err != nil {
+		_ = file.Close()
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		_ = file.Close()
+		return nil, fmt.Errorf("staged path %q must be a regular file", relative)
+	}
+	return file, nil
 }
 
 func (run *runtime) stagedPath(relative string) (string, error) {

@@ -119,17 +119,17 @@ On the reviewed source, `Init` read/wrote a global Boolean without synchronizati
 
 **Remaining action, deferred:** the library fix is not published. Backup and git-remote-aws still pin `165cd76c0d68`, so this finding is not [done]. Once a published version is available, update both application pins, remove backup's redundant package guards, and run the application gates. No local dependency replacement or binary installation was made.
 
-### 8. Medium — Trusted configuration and CA validation can block forever before rejecting a FIFO
+### 8. Low [done] — Trusted configuration and CA validation could block before rejecting a FIFO
 
-**Locations:** backup `internal/localconfig/config.go:34–50`, `internal/objectstore/client.go:483–493`.
+**Reviewed locations:** backup `internal/localconfig/config.go:34–50`, `internal/objectstore/client.go:483–493`.
 
-Both readers use blocking `O_RDONLY|O_NOFOLLOW` and only inspect the file type after opening. Opening a FIFO with no writer blocks before either regular-file check or size bound runs. A typo or damaged local setup can hang command startup rather than return the promised bounded-file error.
+Both readers used blocking `O_RDONLY|O_NOFOLLOW` and inspected the file type only after opening. Opening a FIFO with no writer blocked before either regular-file check or size bound ran. A typo or damaged local setup could hang command startup rather than return the promised bounded-file error. The staged-file opener shared that blocking pattern and did not itself reject directories.
 
-**Reproduced:** both production readers remain blocked until a writer is deliberately connected, then reject the FIFO. The probes release the blocked reads before cleanup. This is a local configuration robustness defect, not a remote credential-redirection exploit.
+**Reproduced:** the original probes connected a writer to release the blocked production readers before cleanup. Permanent isolated-process regressions subsequently reproduced all three blocking opens against `44f3556` and staged-directory acceptance. This is low-severity local robustness, not a remote credential-redirection or backed-up-data corruption exploit; the original medium rating overstated its practical impact.
 
-**Required action:** use nonblocking, no-follow opens followed by descriptor type/mode/size validation, as the durable store and shared secret-file reader already do. Audit the same pattern in `runtime.openStaged` rather than assuming a no-follow flag alone establishes a regular file.
+**Resolution:** add `O_NONBLOCK` to trusted config, custom CA, and staged-file opens; retain no-follow/confinement and existing validation. Staged opens now require a regular file through the opened descriptor and close rejected descriptors. Regular-file semantics, formats, and permissions are unchanged. No timeout, retry, new dependency, or filesystem abstraction was added to production code.
 
-**Regressions:** `TestReviewTrustedConfigRejectsFIFOWithoutBlocking`, `TestReviewTrustedCARejectsFIFOWithoutBlocking`.
+**Permanent regressions:** `TestLoadRejectsFIFOWithoutBlocking`, `TestTrustedCARejectsFIFOWithoutBlocking`, and `TestOpenStagedRejectsFIFOWithoutBlocking` invoke actual readers in bounded test processes with no FIFO writer. Staged directory/symlink rejection and intact regular-file reads are also covered. Focused race regressions and full `make check` passed.
 
 ### 9. Medium — Already validated history is repeatedly revalidated from genesis
 
