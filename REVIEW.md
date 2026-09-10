@@ -199,13 +199,15 @@ All flag sets sent their help output to `io.Discard`, and the dispatcher replace
 
 **Validation:** a failing actual-dispatcher restore-help regression first reproduced generic-only output. Tests now cover both `-h` and `--help` for all commands and both repair subcommands, required positionals, representative flags/defaults, relevant safety text, missing runtime/configuration state, invalid unused secret input, failed output, escaped environment-derived defaults, and unchanged flag-error behavior. The built CLI's restore, recover, and repair help was inspected. The full CLI race suite and `make check` (lint, vet, coverage, and race) passed.
 
-### 15. Low — Sibling check scripts are environment-mutating and partly advisory while appearing to be validation gates
+### 15. Low [done] — Sibling check scripts installed missing analysis tools automatically
 
-**Locations:** git-remote-aws `bin/check.sh:4–45`; go-libsodium `bin/check.sh:4–45`.
+**Locations:** git-remote-aws `bin/check.sh`; go-libsodium `bin/check.sh`.
 
-Both scripts install missing tools with `@latest`, so running checks can change the machine and silently change lint policy. They run `go fmt` on the worktree, then suppress failures from several checks with `|| true`; `golint` diagnostics are additionally filtered. Their near-duplicate copies have already drifted. The mandatory staticcheck/ineffassign/errcheck/bodyclose/nargs/vet commands do fail on errors, so this is not a claim that every linter failure is ignored.
+Both scripts installed missing tools with `@latest`, so running checks could change the machine and silently change lint policy. They also rewrite formatting and suppress selected advisory failures; those separate behaviors remain unchanged under the chosen scope. Mandatory staticcheck/ineffassign/errcheck/bodyclose/nargs/vet commands still fail on errors.
 
-**Required action:** keep checks nonmutating, fail clearly when required tools are absent, and provision reviewed tool versions separately. Use format verification rather than in-place formatting. Remove low-value advisory checks or label them explicitly outside the gate. Keep the scripts short instead of building another lint orchestration layer.
+**Scoped resolution:** remove automatic installation only. Both scripts now preflight all nine existing analysis tools with `command -v` and exit 1 with `missing required check tool: NAME` before any checks if a prerequisite is absent. Commits: git-remote-aws `ccffa14`; go-libsodium `6b3011a`. No new Go tests, dependency updates, installed binaries, or changes to formatting/advisory policy were included.
+
+**Validation:** both scripts pass `bash -n`; direct invocation with an empty PATH returns the expected missing-tool error and status 1. Both existing `GOTOOLCHAIN=local bash bin/check.sh` gates passed, including the helper's cloud-free race selection. The library's existing coverage and race suites also passed. The scripts still emit their pre-existing advisory go-hasdefault/go-hasdefer diagnostics; that output is not represented as fixed. Nothing was installed or pushed.
 
 ### 16. Low — Universal tiny-part test defaults impose avoidable release-gate work
 
