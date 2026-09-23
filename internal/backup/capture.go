@@ -188,6 +188,14 @@ func (run *runtime) capturePlan(ctx context.Context, txn *transaction, base repo
 		if err != nil {
 			return err
 		}
+		if captured.Entry == nil {
+			// Omissions affect snapshot coverage, not just which version of a
+			// file was captured. Never hide them behind the mutation warning cap.
+			if err := run.reportf("warning: %s: %s\n", terminalEscape(planned.Path), terminalEscape(captured.Reason)); err != nil {
+				return err
+			}
+			return finish()
+		}
 		if captured.Changed {
 			if pendingWarnings == ^uint64(0) {
 				return fmt.Errorf("pending capture warning count overflow")
@@ -202,9 +210,6 @@ func (run *runtime) capturePlan(ctx context.Context, txn *transaction, base repo
 					return err
 				}
 			}
-		}
-		if captured.Entry == nil {
-			return finish()
 		}
 		entry := *captured.Entry
 		if entry.Kind != format.KindFile {

@@ -273,7 +273,7 @@ type captureProgress struct {
 	SegmentCount   uint64          `json:"segment_count"`
 	SegmentHash    string          `json:"segment_hash"`
 	Entries        uint64          `json:"entries"`
-	Warnings       uint64          `json:"warnings"`
+	Warnings       uint64          `json:"warnings"` // Captured mutations only; omissions are always reported.
 	WarningsShown  uint64          `json:"warnings_shown"`
 	WarningSummary bool            `json:"warning_summary"`
 	Mirrors        map[string]bool `json:"mirrors"`

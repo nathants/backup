@@ -384,7 +384,7 @@ func TestTransactionControlDoesNotEmbedPlanOrCatalogRows(t *testing.T) {
 	}
 }
 
-func TestCaptureWarningsRemainBoundedAndSummarizedAcrossResume(t *testing.T) {
+func TestCaptureWarningsRemainBoundedAndOmissionsSurviveResume(t *testing.T) {
 	harness := newIntegrationHarness(t)
 	ctx := context.Background()
 	if _, err := initializePublished(ctx, harness.options, harness.publicKey); err != nil {
@@ -393,6 +393,15 @@ func TestCaptureWarningsRemainBoundedAndSummarizedAcrossResume(t *testing.T) {
 	for index := 0; index < 105; index++ {
 		path := filepath.Join(harness.root, fmt.Sprintf("warning-%03d", index))
 		if err := os.WriteFile(path, []byte("before"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	omitted := []string{"a-omitted", "z-omitted"}
+	if os.Geteuid() != 0 {
+		omitted = append(omitted, "zz-denied")
+	}
+	for _, name := range omitted {
+		if err := os.WriteFile(filepath.Join(harness.root, name), []byte("planned"), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -405,32 +414,66 @@ func TestCaptureWarningsRemainBoundedAndSummarizedAcrossResume(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	for _, name := range omitted {
+		path := filepath.Join(harness.root, name)
+		var err error
+		if name == "zz-denied" {
+			err = os.Chmod(path, 0)
+			t.Cleanup(func() { _ = os.Chmod(path, 0o600) })
+		} else {
+			err = os.Remove(path)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
 	var firstWarnings bytes.Buffer
 	first := harness.options
-	first.Stderr = &firstWarnings
-	stopped := false
-	first.failurePoint = func(point string) error {
-		if point == "completed-pack-recorded" && !stopped {
-			stopped = true
-			return fmt.Errorf("stop before warning summary")
+	first.Stderr = progressWriteFunc(func(data []byte) (int, error) {
+		if bytes.Contains(data, []byte("warning: ./z-omitted:")) {
+			return 0, fmt.Errorf("stop on omitted path")
 		}
-		return nil
+		return firstWarnings.Write(data)
+	})
+	if _, err := Commit(ctx, first); err == nil || !strings.Contains(err.Error(), "stop on omitted path") {
+		t.Fatalf("mandatory omission diagnostic did not stop capture: %v", err)
 	}
-	if _, err := Commit(ctx, first); err == nil || !strings.Contains(err.Error(), "completed-pack-recorded") {
-		t.Fatalf("capture did not stop at completed pack: %v", err)
+	txn := loadTestTransaction(t, harness.options)
+	if txn.Capture == nil || txn.Capture.WarningsShown != maximumDisplayedCaptureWarnings {
+		t.Fatal("fixture did not retain an exhausted mutation-warning budget")
 	}
 	var resumedWarnings bytes.Buffer
 	resumed := harness.options
 	resumed.Stderr = &resumedWarnings
-	if _, err := Commit(ctx, resumed); err != nil {
+	resumed.failurePoint = func(point string) error {
+		if point == "completed-pack-recorded" {
+			return fmt.Errorf("stop before warning summary")
+		}
+		return nil
+	}
+	if _, err := Commit(ctx, resumed); err == nil || !strings.Contains(err.Error(), "completed-pack-recorded") {
+		t.Fatalf("capture did not stop at completed pack: %v", err)
+	}
+	for _, name := range omitted {
+		if !strings.Contains(resumedWarnings.String(), "warning: ./"+name+":") {
+			t.Errorf("resumption hid omitted path %s", name)
+		}
+	}
+	if os.Geteuid() != 0 && !strings.Contains(resumedWarnings.String(), "open planned source") {
+		t.Fatal("permission omission lost the failed operation")
+	}
+	var finalWarnings bytes.Buffer
+	final := harness.options
+	final.Stderr = &finalWarnings
+	if _, err := Commit(ctx, final); err != nil {
 		t.Fatal(err)
 	}
-	combined := firstWarnings.String() + resumedWarnings.String()
+	combined := firstWarnings.String() + resumedWarnings.String() + finalWarnings.String()
 	if details := strings.Count(combined, "warning: ./warning-"); details != maximumDisplayedCaptureWarnings {
 		t.Fatalf("warning details=%d, want %d", details, maximumDisplayedCaptureWarnings)
 	}
 	if strings.Count(combined, "additional planned paths changed") != 1 || !strings.Contains(combined, "warning: 5 additional planned paths changed") {
-		t.Fatalf("warning summary was missing or repeated: %q", combined)
+		t.Fatalf("mutation summary included omissions or was repeated: %q", combined)
 	}
 }
 
