@@ -74,8 +74,9 @@ type Server struct {
 	lock    *os.File
 	listing map[string]*objectListingIndex
 
-	closeOnce sync.Once
-	closeErr  error
+	syncObjectParent func(int) error
+	closeOnce        sync.Once
+	closeErr         error
 }
 
 func Open(config Config) (*Server, error) {
@@ -141,6 +142,7 @@ func Open(config Config) (*Server, error) {
 	}
 	server := &Server{
 		config: config, rootFD: rootFD, tempFD: -1,
+		syncObjectParent: unix.Fsync,
 		listing: map[string]*objectListingIndex{
 			"objects": {}, "metadata/parts": {}, "metadata/manifests": {},
 		},
@@ -495,7 +497,7 @@ func (server *Server) installTemporary(tempName, key string) error {
 	if err := unix.Linkat(server.tempFD, tempName, parentFD, leaf, 0); err != nil {
 		return err
 	}
-	if err := unix.Fsync(parentFD); err != nil {
+	if err := server.syncObjectParent(parentFD); err != nil {
 		return err
 	}
 	if err := unix.Unlinkat(server.tempFD, tempName, 0); err != nil {
@@ -518,11 +520,12 @@ func (server *Server) getObject(ctx context.Context, writer http.ResponseWriter,
 }
 
 func (server *Server) headObject(ctx context.Context, writer http.ResponseWriter, request *http.Request, key string) error {
-	file, info, err := server.openObject(key)
+	file, info, parentFD, err := server.openObjectWithParent(key)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = file.Close() }()
+	defer func() { _ = unix.Close(parentFD) }()
 	mode := request.Header.Get("x-amz-checksum-mode")
 	if mode != "" && mode != "ENABLED" {
 		return requestFailure(http.StatusBadRequest, "InvalidRequest", "x-amz-checksum-mode must be ENABLED")
@@ -545,6 +548,12 @@ func (server *Server) headObject(ctx context.Context, writer http.ResponseWriter
 			writer.Header().Set("X-Backup-Integrity", "corrupt")
 			return requestFailure(http.StatusInternalServerError, "ObjectCorrupt", "stored object failed content verification")
 		}
+		// A checksum HEAD can acknowledge a PUT whose response was lost or
+		// whose post-link fsync failed. Payload and ancestor barriers precede
+		// the link; establish the final entry's barrier through its opened parent.
+		if err := server.syncObjectParent(parentFD); err != nil {
+			return fmt.Errorf("persist verified object entry: %w", err)
+		}
 		writer.Header().Set("x-amz-checksum-sha256", base64.StdEncoding.EncodeToString(shaHash.Sum(nil)))
 		writer.Header().Set("x-amz-checksum-type", "FULL_OBJECT")
 		writer.Header().Set("ETag", `"`+hex.EncodeToString(md5Hash.Sum(nil))+`"`)
@@ -555,45 +564,55 @@ func (server *Server) headObject(ctx context.Context, writer http.ResponseWriter
 }
 
 func (server *Server) openObject(key string) (*os.File, os.FileInfo, error) {
+	file, info, parentFD, err := server.openObjectWithParent(key)
+	if parentFD >= 0 {
+		_ = unix.Close(parentFD)
+	}
+	return file, info, err
+}
+
+func (server *Server) openObjectWithParent(key string) (*os.File, os.FileInfo, int, error) {
 	components, err := keyComponents(key)
 	if err != nil {
-		return nil, nil, requestFailure(http.StatusBadRequest, "InvalidURI", err.Error())
+		return nil, nil, -1, requestFailure(http.StatusBadRequest, "InvalidURI", err.Error())
 	}
 	currentFD, err := unix.Dup(server.rootFD)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, -1, err
 	}
 	for _, component := range components[:len(components)-1] {
 		nextFD, openErr := unix.Openat(currentFD, component, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
 		_ = unix.Close(currentFD)
 		if openErr != nil {
 			if errors.Is(openErr, unix.ENOENT) {
-				return nil, nil, requestFailure(http.StatusNotFound, "NoSuchKey", "object does not exist")
+				return nil, nil, -1, requestFailure(http.StatusNotFound, "NoSuchKey", "object does not exist")
 			}
-			return nil, nil, openErr
+			return nil, nil, -1, openErr
 		}
 		currentFD = nextFD
 	}
 	leaf := components[len(components)-1]
 	objectFD, openErr := unix.Openat(currentFD, leaf, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
-	_ = unix.Close(currentFD)
 	if openErr != nil {
+		_ = unix.Close(currentFD)
 		if errors.Is(openErr, unix.ENOENT) {
-			return nil, nil, requestFailure(http.StatusNotFound, "NoSuchKey", "object does not exist")
+			return nil, nil, -1, requestFailure(http.StatusNotFound, "NoSuchKey", "object does not exist")
 		}
-		return nil, nil, openErr
+		return nil, nil, -1, openErr
 	}
 	file := os.NewFile(uintptr(objectFD), leaf)
 	info, statErr := file.Stat()
 	if statErr != nil {
 		_ = file.Close()
-		return nil, nil, statErr
+		_ = unix.Close(currentFD)
+		return nil, nil, -1, statErr
 	}
 	if !info.Mode().IsRegular() {
 		_ = file.Close()
-		return nil, nil, requestFailure(http.StatusInternalServerError, "InvalidObjectState", "stored object is not a regular file")
+		_ = unix.Close(currentFD)
+		return nil, nil, -1, requestFailure(http.StatusInternalServerError, "InvalidObjectState", "stored object is not a regular file")
 	}
-	return file, info, nil
+	return file, info, currentFD, nil
 }
 
 func (server *Server) ensureObjectParent(components []string) (int, error) {
