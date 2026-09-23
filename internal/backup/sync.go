@@ -211,7 +211,9 @@ func updateCompletionLedgerForSync(ledger *completionLedger, mirror, selected st
 		return fmt.Errorf("selected revision is outside validated history")
 	}
 	if selectedIndex < currentIndex {
-		return fmt.Errorf("refusing to regress mirror %s completion ledger from %s to ancestor %s", mirror, current, selected)
+		// The requested historical audit succeeded; retain the stronger current
+		// evidence without turning a successful sync into a bookkeeping error.
+		return nil
 	}
 	ledger.Mirrors[mirror] = selected
 	return nil

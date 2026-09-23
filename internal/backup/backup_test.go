@@ -2358,11 +2358,19 @@ func TestSyncDoesNotRegressCompletionLedger(t *testing.T) {
 	newer := strings.Repeat("b", 64)
 	older := strings.Repeat("a", 64)
 	ledger.Mirrors["destination"] = newer
-	if err := updateCompletionLedgerForSync(&ledger, "destination", older, testIndexedHistory{older, newer}); err == nil {
-		t.Fatal("sync regressed a destination completion ledger from a newer descendant")
+	if err := updateCompletionLedgerForSync(&ledger, "destination", older, testIndexedHistory{older, newer}); err != nil {
+		t.Fatalf("historical sync rejected newer completion evidence: %v", err)
 	}
 	if ledger.Mirrors["destination"] != newer {
 		t.Fatalf("ledger changed to %s", ledger.Mirrors["destination"])
+	}
+	for _, history := range []testIndexedHistory{{older}, {newer}} {
+		if err := updateCompletionLedgerForSync(&ledger, "destination", older, history); err == nil {
+			t.Fatalf("sync accepted completion evidence outside history %v", history)
+		}
+		if ledger.Mirrors["destination"] != newer {
+			t.Fatal("rejected sync changed completion evidence")
+		}
 	}
 }
 
