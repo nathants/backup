@@ -260,10 +260,11 @@ type stagedFileRef struct {
 }
 
 type stagedPlan struct {
-	IndexFile   stagedFileRef            `json:"index_file"`
-	ConfigFiles map[string]stagedFileRef `json:"config_files"`
-	Entries     int                      `json:"entries"`
-	AllowEmpty  bool                     `json:"allow_empty"`
+	IndexFile        stagedFileRef            `json:"index_file"`
+	ObservationsFile *stagedFileRef           `json:"observations_file,omitempty"`
+	ConfigFiles      map[string]stagedFileRef `json:"config_files"`
+	Entries          int                      `json:"entries"`
+	AllowEmpty       bool                     `json:"allow_empty"`
 }
 
 type captureProgress struct {

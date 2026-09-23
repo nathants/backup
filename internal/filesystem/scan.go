@@ -55,6 +55,8 @@ type File struct {
 
 type Result struct {
 	Entries                 uint64
+	HashedFiles             uint64
+	ReusedFiles             uint64
 	SkippedSpecial          uint64
 	SkippedGitIgnored       uint64
 	SkippedBrokenSymlinks   uint64
@@ -121,13 +123,26 @@ func (root *Root) Close() error {
 // entries in deterministic traversal order. It retains no path or content
 // catalog; callers that require canonical lexical order externally sort rows.
 func (root *Root) Walk(ignore format.Ignore, reporter Reporter, visit func(*File, format.IndexEntry) error) (Result, error) {
+	return root.WalkReusing(ignore, reporter, nil, visit)
+}
+
+// WalkReusing applies current traversal and ignore rules, but may reuse a prior
+// regular-file observation by path. Reused content, size, mode, and mtime are
+// explicitly stale planning evidence, never permission to skip commit capture.
+// Symlinks are resolved afresh; files without a regular observation are hashed.
+func (root *Root) WalkReusing(ignore format.Ignore, reporter Reporter, reuse func(string) (*format.IndexEntry, error), visit func(*File, format.IndexEntry) error) (Result, error) {
 	if visit == nil {
 		return Result{}, fmt.Errorf("scan visitor is required")
 	}
-	return root.walk(ignore, reporter, visit)
+	return root.walk(ignore, reporter, scanVisitor{emit: visit, reuse: reuse})
 }
 
-func (root *Root) walk(ignore format.Ignore, reporter Reporter, visit func(*File, format.IndexEntry) error) (_ Result, returnErr error) {
+type scanVisitor struct {
+	emit  func(*File, format.IndexEntry) error
+	reuse func(string) (*format.IndexEntry, error)
+}
+
+func (root *Root) walk(ignore format.Ignore, reporter Reporter, visit scanVisitor) (_ Result, returnErr error) {
 	if root == nil || root.fd < 0 {
 		return Result{}, fmt.Errorf("backup root is closed")
 	}
@@ -146,7 +161,7 @@ func (root *Root) walk(ignore format.Ignore, reporter Reporter, visit func(*File
 	return result, nil
 }
 
-func (root *Root) scanDirectory(directoryFD int, relative string, parentMount uint64, ignore format.Ignore, gitRules *gitIgnore, reporter Reporter, result *Result, visit func(*File, format.IndexEntry) error) (returnErr error) {
+func (root *Root) scanDirectory(directoryFD int, relative string, parentMount uint64, ignore format.Ignore, gitRules *gitIgnore, reporter Reporter, result *Result, visit scanVisitor) (returnErr error) {
 	// Mount IDs distinguish same-device bind mounts. Query the opened descriptor,
 	// not a pathname that could now name a different directory. STATX_MNT_ID is
 	// available since Linux 5.8; do not silently fall back to device numbers.
@@ -267,6 +282,27 @@ func (root *Root) scanDirectory(directoryFD int, relative string, parentMount ui
 					return err
 				}
 			case unix.S_IFREG:
+				if visit.reuse != nil {
+					cached, err := visit.reuse(indexPath)
+					if err != nil {
+						return err
+					}
+					if cached != nil {
+						if cached.Path != indexPath || cached.Kind != format.KindFile {
+							return fmt.Errorf("invalid regular-file observation for %q", indexPath)
+						}
+						if _, err := format.MarshalIndexEntry(*cached); err != nil {
+							return err
+						}
+						file := File{Hash: strings.TrimPrefix(cached.Ref, "blake2b:"), Size: cached.Size}
+						if err := visit.emit(&file, *cached); err != nil {
+							return err
+						}
+						result.Entries++
+						result.ReusedFiles++
+						continue
+					}
+				}
 				file, indexEntry, err := root.scanRegular(directoryFD, name, indexPath, stat, reporter)
 				if err != nil {
 					if reportPermissionSkip(err, indexPath, result, reporter) {
@@ -274,10 +310,11 @@ func (root *Root) scanDirectory(directoryFD int, relative string, parentMount ui
 					}
 					return err
 				}
-				if err := visit(&file, indexEntry); err != nil {
+				if err := visit.emit(&file, indexEntry); err != nil {
 					return err
 				}
 				result.Entries++
+				result.HashedFiles++
 			case unix.S_IFLNK:
 				indexEntry, skipKind, err := root.scanSymlink(directoryFD, name, indexPath, stat)
 				if err != nil {
@@ -287,7 +324,7 @@ func (root *Root) scanDirectory(directoryFD int, relative string, parentMount ui
 					return err
 				}
 				if indexEntry != nil {
-					if err := visit(nil, *indexEntry); err != nil {
+					if err := visit.emit(nil, *indexEntry); err != nil {
 						return err
 					}
 					result.Entries++

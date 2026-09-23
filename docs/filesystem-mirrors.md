@@ -93,7 +93,9 @@ may be explicitly changed when relocating the disk. Canonical metadata never
 authorizes a filesystem path.
 
 Before the first commit, an empty `mirrors.tsv` is filled from trusted config.
-If you edit tracked mirror/recipient/ignore configuration, run `add` again.
+If you edit tracked mirror/recipient configuration, run `add` again. For ignore-only
+edits, `replan` refreshes selection without rehashing known regular-file paths;
+`diff` shows the replacement plan. No preceding `reset` is needed.
 Configured destination directories under the source root are automatically
 excluded, with a `filesystem-mirror-excluded` diagnostic. Local preparation
 still permits an absent config; when supplied, config is validated for these

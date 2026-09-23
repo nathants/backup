@@ -45,6 +45,7 @@ func TestSubcommandHelpDescribesCommand(t *testing.T) {
 	}{
 		{"init", "[OPTIONS]", []string{"local preparation", "no network publication", "-root string", "-config string"}},
 		{"add", "[OPTIONS]", []string{"-allow-empty", "-spool-directory string", "-space-reserve-bytes uint", "provisional"}},
+		{"replan", "[OPTIONS]", []string{"directory traversal", "provisional", "without fetching or uploading", "Refuses commit progress"}},
 		{"diff", "[OPTIONS]", []string{"-root string", "provisional"}},
 		{"commit", "[OPTIONS]", []string{"-root string", "resume", "one individual mirror"}},
 		{"reset", "[OPTIONS]", []string{"-root string", "unpublished", "ambiguous"}},

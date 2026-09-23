@@ -147,6 +147,8 @@ func (run *runtime) hydrateTransactionFiles(txn *transaction) error {
 		if err := run.validateStagedRef(txn.Plan.IndexFile); err != nil {
 			return fmt.Errorf("validate staged add plan: %w", err)
 		}
+		// Observations are only a replan cache. Commands using the selected
+		// plan must not depend on the presence or integrity of excluded rows.
 		for _, name := range []string{"ignore", ".publickeys", "mirrors.tsv"} {
 			ref, ok := txn.Plan.ConfigFiles[name]
 			if !ok {

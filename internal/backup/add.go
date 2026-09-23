@@ -42,6 +42,10 @@ func Add(ctx context.Context, options Options, allowEmpty bool) (AddResult, erro
 		return AddResult{}, err
 	} else if txn != nil && (txn.Plan == nil || txn.Capture != nil || len(txn.CandidateFiles) != 0 || txn.DataPartCount != 0 || txn.LocalCommit != "" || txn.PushAttempted) {
 		return AddResult{}, fmt.Errorf("commit progress already exists; finish commit or reset before replacing the add plan")
+	} else if txn != nil {
+		if err := run.cleanupPlanGenerations(txn.Plan); err != nil {
+			return AddResult{}, err
+		}
 	}
 	head, history, err := run.validatedHead(true)
 	if err != nil {
@@ -91,7 +95,7 @@ func Add(ctx context.Context, options Options, allowEmpty bool) (AddResult, erro
 		return AddResult{}, err
 	}
 	defer func() { _ = root.Close() }()
-	scan, plan, uniqueNew, newPacks, noChanges, err := run.buildAddPlan(root, ignore, configBlobs, head.State, allowEmpty)
+	scan, plan, uniqueNew, newPacks, noChanges, err := run.buildAddPlan(ctx, root, ignore, configBlobs, head.State, allowEmpty, nil)
 	if err != nil {
 		return AddResult{}, err
 	}
@@ -102,7 +106,7 @@ func Add(ctx context.Context, options Options, allowEmpty bool) (AddResult, erro
 	if err := run.saveTransaction(&txn); err != nil {
 		return AddResult{}, err
 	}
-	if err := run.cleanupPlanGenerations(filepath.Dir(plan.IndexFile.RelativePath)); err != nil {
+	if err := run.cleanupPlanGenerations(plan); err != nil {
 		return AddResult{}, fmt.Errorf("clean superseded add plans: %w", err)
 	}
 	if err := run.checkpoint("candidate-transaction-recorded"); err != nil {
@@ -111,7 +115,7 @@ func Add(ctx context.Context, options Options, allowEmpty bool) (AddResult, erro
 	return AddResult{BaseCommit: head.CommitID, Entries: plan.Entries, UniqueNewObjects: uniqueNew, NewPacks: newPacks, NoChanges: noChanges, Scan: scan}, nil
 }
 
-func (run *runtime) buildAddPlan(root *filesystem.Root, ignore format.Ignore, configBlobs map[string][]byte, base repository.State, allowEmpty bool) (filesystem.Result, *stagedPlan, int, int, bool, error) {
+func (run *runtime) buildAddPlan(ctx context.Context, root *filesystem.Root, ignore format.Ignore, configBlobs map[string][]byte, base repository.State, allowEmpty bool, prior *stagedPlan) (filesystem.Result, *stagedPlan, int, int, bool, error) {
 	ignore, err := run.filesystemScanIgnore(ignore)
 	if err != nil {
 		return filesystem.Result{}, nil, 0, 0, false, err
@@ -131,6 +135,30 @@ func (run *runtime) buildAddPlan(root *filesystem.Root, ignore format.Ignore, co
 		}
 	}()
 
+	var reuse func(string) (*format.IndexEntry, error)
+	if prior != nil {
+		ref := prior.IndexFile
+		if prior.ObservationsFile != nil {
+			ref = *prior.ObservationsFile
+		}
+		rows, err := run.openStaged(ref.RelativePath)
+		if err != nil {
+			return filesystem.Result{}, nil, 0, 0, false, err
+		}
+		defer func() { _ = rows.Close() }()
+		index, err := newObservationIndex(ctx, filepath.Join(buildDirectory, "observations.index"), rows)
+		if err != nil {
+			return filesystem.Result{}, nil, 0, 0, false, err
+		}
+		defer func() { _ = index.file.Close() }()
+		reuse = func(path string) (*format.IndexEntry, error) {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			return index.lookup(path)
+		}
+	}
+
 	rawIndexPath := filepath.Join(buildDirectory, "index.raw")
 	rawHashesPath := filepath.Join(buildDirectory, "hashes.raw")
 	rawIndex, err := os.OpenFile(rawIndexPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
@@ -145,7 +173,7 @@ func (run *runtime) buildAddPlan(root *filesystem.Root, ignore format.Ignore, co
 	indexWriter := bufio.NewWriterSize(rawIndex, 256<<10)
 	hashWriter := bufio.NewWriterSize(rawHashes, 256<<10)
 	var reportErr error
-	scan, walkErr := root.Walk(ignore, func(event filesystem.Event) {
+	scan, walkErr := root.WalkReusing(ignore, func(event filesystem.Event) {
 		if reportErr == nil {
 			if event.Detail != "" {
 				reportErr = run.reportf("%s\t%s\t%s\n", event.Kind, terminalEscape(event.Path), terminalEscape(event.Detail))
@@ -153,7 +181,10 @@ func (run *runtime) buildAddPlan(root *filesystem.Root, ignore format.Ignore, co
 				reportErr = run.reportf("%s\t%s\n", event.Kind, terminalEscape(event.Path))
 			}
 		}
-	}, func(file *filesystem.File, entry format.IndexEntry) error {
+	}, reuse, func(file *filesystem.File, entry format.IndexEntry) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if reportErr != nil {
 			return reportErr
 		}
@@ -263,6 +294,11 @@ func (run *runtime) buildAddPlan(root *filesystem.Root, ignore format.Ignore, co
 		}
 		plan.ConfigFiles[name] = ref
 	}
+	if prior != nil {
+		if err := run.stageObservations(ctx, prior, plan, buildDirectory); err != nil {
+			return filesystem.Result{}, nil, 0, 0, false, err
+		}
+	}
 	noChanges := plan.IndexFile.Size == base.BlobSizes["index.tsv"] && plan.IndexFile.BLAKE2b == base.BlobHashes["index.tsv"]
 	for name, data := range configBlobs {
 		identity := objectstore.HashBytes(data)
@@ -300,7 +336,27 @@ func (run *runtime) cleanupAddBuilds() error {
 	return syncDirectory(run.options.statePath())
 }
 
-func (run *runtime) cleanupPlanGenerations(keep string) error {
+// cleanupPlanGenerations runs under the repository lock, using a plan loaded
+// from the authoritative transaction or one whose save completed successfully.
+// Never call it with an unconfirmed replacement after a save error: the rename
+// may have succeeded even though its final directory barrier failed.
+func (run *runtime) cleanupPlanGenerations(plan *stagedPlan) error {
+	keep := make(map[string]bool)
+	protect := func(ref stagedFileRef) {
+		parts := strings.SplitN(ref.RelativePath, string(filepath.Separator), 3)
+		if len(parts) >= 2 && parts[0] == "plans" {
+			keep[filepath.Join(parts[0], parts[1])] = true
+		}
+	}
+	if plan != nil {
+		protect(plan.IndexFile)
+		for _, ref := range plan.ConfigFiles {
+			protect(ref)
+		}
+		if plan.ObservationsFile != nil {
+			protect(*plan.ObservationsFile)
+		}
+	}
 	plansPath, err := run.stagedPath("plans")
 	if err != nil {
 		return err
@@ -320,7 +376,7 @@ func (run *runtime) cleanupPlanGenerations(keep string) error {
 	}
 	for _, entry := range entries {
 		relative := filepath.Join("plans", entry.Name())
-		if relative == keep {
+		if keep[relative] {
 			continue
 		}
 		path, err := run.stagedPath(relative)

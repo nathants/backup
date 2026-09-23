@@ -30,6 +30,7 @@ const usageText = `usage: backup COMMAND [OPTIONS]
 commands:
   init       prepare a new local repository (no network publication)
   add        scan and stage a snapshot
+  replan     refresh selection without rehashing known files
   diff       show the staged snapshot diff
   commit    publish the staged transaction
   reset      discard an unpublished transaction
@@ -77,6 +78,8 @@ func run(ctx context.Context, arguments []string, stdout, stderr io.Writer) erro
 		err = runInit(ctx, arguments, stdout, stderr)
 	case "add":
 		err = runAdd(ctx, arguments, stdout, stderr)
+	case "replan":
+		err = runReplan(ctx, arguments, stdout, stderr)
 	case "diff":
 		err = runDiff(arguments, stdout, stderr)
 	case "commit":
@@ -163,17 +166,21 @@ func runAdd(ctx context.Context, arguments []string, stdout, stderr io.Writer) e
 	if err != nil {
 		return err
 	}
+	return printAddResult(stdout, result)
+}
+
+func printAddResult(stdout io.Writer, result backupapp.AddResult) error {
 	if _, err := fmt.Fprintf(stdout, "base\t%s\nentries\t%d\nnew-objects\t%d\nnew-packs\t%d\nno-changes\t%t\n", result.BaseCommit, result.Entries, result.UniqueNewObjects, result.NewPacks, result.NoChanges); err != nil {
 		return err
 	}
-	_, err = fmt.Fprintf(stdout, "skipped-special\t%d\nskipped-broken-symlinks\t%d\nskipped-outside-symlinks\t%d\nskipped-permission-denied\t%d\nmounts-entered\t%d\n", result.Scan.SkippedSpecial, result.Scan.SkippedBrokenSymlinks, result.Scan.SkippedOutsideSymlinks, result.Scan.SkippedPermissionDenied, result.Scan.MountsEntered)
+	_, err := fmt.Fprintf(stdout, "skipped-special\t%d\nskipped-broken-symlinks\t%d\nskipped-outside-symlinks\t%d\nskipped-permission-denied\t%d\nmounts-entered\t%d\n", result.Scan.SkippedSpecial, result.Scan.SkippedBrokenSymlinks, result.Scan.SkippedOutsideSymlinks, result.Scan.SkippedPermissionDenied, result.Scan.MountsEntered)
 	return err
 }
 
 func runDiff(arguments []string, stdout, stderr io.Writer) error {
 	flags := flag.NewFlagSet("diff", flag.ContinueOnError)
 	common := addCommon(flags)
-	if err := parseFlags(flags, arguments, stdout, "[OPTIONS]", "Compare the last add plan with HEAD. Content and metadata remain provisional until commit."); err != nil {
+	if err := parseFlags(flags, arguments, stdout, "[OPTIONS]", "Compare the last add/replan selection with its saved base. Content and metadata remain provisional until commit."); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 {

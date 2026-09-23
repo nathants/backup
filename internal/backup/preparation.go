@@ -98,6 +98,11 @@ func (run *runtime) addInitial(ctx context.Context, allowEmpty bool) (AddResult,
 	if txn != nil && txn.Kind != "initial" {
 		return AddResult{}, fmt.Errorf("first commit is in progress; resume commit or reset before adding")
 	}
+	if txn != nil {
+		if err := run.cleanupPlanGenerations(txn.Plan); err != nil {
+			return AddResult{}, err
+		}
+	}
 	if _, exists, err := run.repo.HeadIfExists(); err != nil {
 		return AddResult{}, err
 	} else if exists {
@@ -116,7 +121,7 @@ func (run *runtime) addInitial(ctx context.Context, allowEmpty bool) (AddResult,
 		return AddResult{}, err
 	}
 	config := map[string][]byte{"ignore": blobs["ignore"], ".publickeys": blobs[".publickeys"], "mirrors.tsv": blobs["mirrors.tsv"]}
-	scan, plan, unique, packs, _, err := run.buildAddPlan(root, base.Ignore, config, base, allowEmpty)
+	scan, plan, unique, packs, _, err := run.buildAddPlan(ctx, root, base.Ignore, config, base, allowEmpty, nil)
 	if err != nil {
 		return AddResult{}, err
 	}
@@ -125,7 +130,7 @@ func (run *runtime) addInitial(ctx context.Context, allowEmpty bool) (AddResult,
 	if err := run.saveTransaction(&next); err != nil {
 		return AddResult{}, err
 	}
-	if err := run.cleanupPlanGenerations(filepath.Dir(plan.IndexFile.RelativePath)); err != nil {
+	if err := run.cleanupPlanGenerations(plan); err != nil {
 		return AddResult{}, err
 	}
 	if err := run.checkpoint("candidate-transaction-recorded"); err != nil {

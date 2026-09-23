@@ -37,10 +37,10 @@ func TestScanMountDescriptorErrorIsFatal(t *testing.T) {
 	var result Result
 	err := root.scanDirectory(-1, "nested", 0, format.Ignore{}, nil, func(event Event) {
 		t.Errorf("reported event after failed mount lookup: %+v", event)
-	}, &result, func(_ *File, entry format.IndexEntry) error {
+	}, &result, scanVisitor{emit: func(_ *File, entry format.IndexEntry) error {
 		t.Errorf("visited entry after failed mount lookup: %+v", entry)
 		return nil
-	})
+	}})
 	if !errors.Is(err, unix.EBADF) || !strings.Contains(err.Error(), `stat source directory mount "./nested"`) {
 		t.Fatalf("mount descriptor error: %v", err)
 	}

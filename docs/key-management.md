@@ -9,9 +9,9 @@ A recipient grants decryption capability, not Git or object-store write permissi
 ## Files and syntax
 
 `$BACKUP_ROOT/.backup/.publickeys` is the tracked public recipient list.
-`backup init` creates it empty. Local add/diff/reset work without keys; commit
-requires at least one recipient before binding/publishing the remote. Recipient
-edits after add require another add, like ignore edits.
+`backup init` creates it empty. Local add/replan/diff/reset work without keys;
+commit requires at least one recipient before binding/publishing the remote.
+Recipient edits after add require another add. Only ignore edits can use replan.
 
 Each line belongs to one individual. Each generation is exactly 64 lowercase hex
 characters (the existing 32-byte libsodium box key); generations are joined with
