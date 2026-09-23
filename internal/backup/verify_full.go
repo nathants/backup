@@ -36,6 +36,7 @@ func (run *runtime) verifyFull(ctx context.Context, mirror localconfig.Mirror, s
 	if err := run.verifyFullPacks(ctx, client, mirror.Canonical.Name, selected.State, secret, workspace); err != nil {
 		return err
 	}
+	run.options.progress.phasef("reconstructing metadata for full verification on mirror %s", mirror.Canonical.Name)
 	candidates, err := discoverRecoveryCandidates(ctx, client, selected.CommitID)
 	if err != nil {
 		return err
@@ -61,6 +62,8 @@ func (run *runtime) verifyFull(ctx context.Context, mirror localconfig.Mirror, s
 }
 
 func (run *runtime) verifyFullPacks(ctx context.Context, client objectstore.Store, name string, state repository.State, secret *libsodium.Keyring, workspace string) error {
+	run.options.progress.phasef("decrypting and verifying all packs on mirror %s", name)
+	var checked uint64
 	raw := filepath.Join(workspace, "objects.raw")
 	file, err := os.OpenFile(raw, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
@@ -118,6 +121,8 @@ func (run *runtime) verifyFullPacks(ctx context.Context, client objectstore.Stor
 		if err := run.verifyFullPack(ctx, client, name, parts, part.PackHash, size, secret, members); err != nil {
 			return fmt.Errorf("full verification pack %s: %w", part.PackHash, err)
 		}
+		checked++
+		run.options.progress.detailf("packs fully verified=%d", checked)
 		size = 0
 		if err := parts.Truncate(0); err != nil {
 			return err

@@ -24,6 +24,7 @@ import (
 )
 
 func Add(ctx context.Context, options Options, allowEmpty bool) (AddResult, error) {
+	defer startProgress(&options, "add")()
 	if err := ctx.Err(); err != nil {
 		return AddResult{}, err
 	}
@@ -172,6 +173,8 @@ func (run *runtime) buildAddPlan(ctx context.Context, root *filesystem.Root, ign
 	}
 	indexWriter := bufio.NewWriterSize(rawIndex, 256<<10)
 	hashWriter := bufio.NewWriterSize(rawHashes, 256<<10)
+	run.options.progress.phasef("scanning source and building path plan")
+	var selected uint64
 	var reportErr error
 	scan, walkErr := root.WalkReusing(ignore, func(event filesystem.Event) {
 		if reportErr == nil {
@@ -188,6 +191,8 @@ func (run *runtime) buildAddPlan(ctx context.Context, root *filesystem.Root, ign
 		if reportErr != nil {
 			return reportErr
 		}
+		selected++
+		run.options.progress.detailf("selected paths=%d", selected)
 		row, err := format.MarshalIndexEntry(entry)
 		if err != nil {
 			return err
@@ -218,6 +223,8 @@ func (run *runtime) buildAddPlan(ctx context.Context, root *filesystem.Root, ign
 		return filesystem.Result{}, nil, 0, 0, false, fmt.Errorf("scan produced an empty snapshot plan; use --allow-empty to accept it")
 	}
 
+	run.options.progress.detailf("selected paths=%d hashed files=%d reused files=%d", scan.Entries, scan.HashedFiles, scan.ReusedFiles)
+	run.options.progress.phasef("sorting and validating path plan")
 	firstField := func(record []byte) ([]byte, error) {
 		field, _, ok := bytes.Cut(record, []byte{'\t'})
 		if !ok || len(field) == 0 {

@@ -88,6 +88,7 @@ type verifiedRecovery struct {
 }
 
 func Recover(ctx context.Context, options Options, request RecoverRequest) (RecoverResult, error) {
+	defer startProgress(&options, "recover")()
 	result := RecoverResult{}
 	normalized, err := options.normalized()
 	if err != nil {
@@ -110,6 +111,7 @@ func Recover(ctx context.Context, options Options, request RecoverRequest) (Reco
 	if err != nil {
 		return result, err
 	}
+	run.options.progress.phasef("discovering metadata manifests on mirror %s", request.Mirror)
 	candidates, err := discoverRecoveryCandidates(ctx, client, request.Tip)
 	if err != nil {
 		return result, err
@@ -117,6 +119,7 @@ func Recover(ctx context.Context, options Options, request RecoverRequest) (Reco
 	if len(candidates) == 0 {
 		return result, fmt.Errorf("mirror contains no valid metadata completion manifests")
 	}
+	run.options.progress.detailf("candidate manifests=%d", len(candidates))
 	secretKey, err := run.secretKey(ctx)
 	if err != nil {
 		return result, err
@@ -152,10 +155,13 @@ func Recover(ctx context.Context, options Options, request RecoverRequest) (Reco
 		return result, err
 	}
 	defer func() { _ = removeTreeNoFollow(verificationWorkspace) }()
+	run.options.progress.phasef("downloading, importing and validating recovery chains (including for --list)")
 	verified, failures, err := verifyRecoveryCandidates(ctx, client, candidates, request.Tip, secretKey, verificationWorkspace, normalized.SpaceReserveBytes, !request.ListOnly)
 	if err != nil {
 		return result, err
 	}
+	run.options.progress.detailf("verified tips=%d recorded recovery failures=%d", len(verified), len(failures))
+	run.options.progress.phasef("listing verified recovery revisions")
 	result.Available, err = reportAvailableRecoveries(verified, verificationWorkspace, request.Report)
 	if err != nil {
 		return result, err
@@ -197,6 +203,7 @@ func Recover(ctx context.Context, options Options, request RecoverRequest) (Reco
 	if err := ctx.Err(); err != nil {
 		return result, err
 	}
+	run.options.progress.phasef("publishing verified metadata repository")
 	if err := os.Rename(selected.RepositoryPath, destination); err != nil {
 		return result, err
 	}

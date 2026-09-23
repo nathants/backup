@@ -18,6 +18,7 @@ import (
 )
 
 func RepairMetadataEdge(ctx context.Context, options Options, destinationMirror, revision string) (MetadataRepairResult, error) {
+	defer startProgress(&options, "repair metadata")()
 	result := MetadataRepairResult{}
 	run, err := openRuntime(options, true)
 	if err != nil {
@@ -113,17 +114,21 @@ func RepairMetadataEdge(ctx context.Context, options Options, destinationMirror,
 	}
 	// This is new encryption even when the repaired Git edge is historical.
 	// Use today's validated recipient policy, not superseded historical keys.
+	run.options.progress.phasef("rebuilding encrypted metadata edge")
 	built, err := metadatachain.Build(run.repo, selected.State.Format.RepositoryUUID, base, selected.CommitID, uint64(selectedIndex), head.State.PublicKeys, buildDirectory, partSize, ciphertextBudget)
 	if err != nil {
 		return result, err
 	}
+	run.options.progress.phasef("decrypting and validating rebuilt metadata edge")
 	if err := validateRebuiltMetadataEdge(run.repo, built, selected.State.Format.RepositoryUUID, base, selected.CommitID, secretKey, stage, run.options.SpaceReserveBytes); err != nil {
 		return result, fmt.Errorf("validate rebuilt metadata edge: %w", err)
 	}
 	if err := run.checkpoint("metadata-repair-validated"); err != nil {
 		return result, err
 	}
-	for _, part := range built.Parts {
+	run.options.progress.phasef("uploading rebuilt metadata to mirror %s", destinationMirror)
+	for index, part := range built.Parts {
+		run.options.progress.detailf("parts acknowledged=%d/%d", index, len(built.Parts))
 		key, err := format.MetadataPartKey(part.Manifest)
 		if err != nil {
 			return result, err
@@ -133,6 +138,7 @@ func RepairMetadataEdge(ctx context.Context, options Options, destinationMirror,
 		if create.Disposition != objectstore.CreateAcknowledged && !((create.Disposition == objectstore.CreateConflict || create.Disposition == objectstore.CreateAmbiguous) && client.Audit(ctx, key, expected) == nil) {
 			return result, fmt.Errorf("destination did not acknowledge rebuilt metadata part %s: %s", key, errorText(create.Err))
 		}
+		run.options.progress.detailf("parts acknowledged=%d/%d", index+1, len(built.Parts))
 	}
 	manifestData, err := os.ReadFile(built.ManifestPath)
 	if err != nil {
@@ -146,6 +152,7 @@ func RepairMetadataEdge(ctx context.Context, options Options, destinationMirror,
 	if manifestExpected.BLAKE2b != built.ManifestHash {
 		return result, fmt.Errorf("rebuilt metadata manifest identity changed")
 	}
+	run.options.progress.phasef("publishing rebuilt completion manifest to mirror %s", destinationMirror)
 	create := client.PutFile(ctx, manifestKey, built.ManifestPath, manifestExpected)
 	if create.Disposition != objectstore.CreateAcknowledged && !((create.Disposition == objectstore.CreateConflict || create.Disposition == objectstore.CreateAmbiguous) && client.Audit(ctx, manifestKey, manifestExpected) == nil) {
 		return result, fmt.Errorf("destination did not acknowledge rebuilt metadata manifest %s: %s", manifestKey, errorText(create.Err))

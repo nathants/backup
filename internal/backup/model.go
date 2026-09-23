@@ -47,6 +47,7 @@ type Options struct {
 	Stderr            io.Writer
 	Now               func() time.Time
 	failurePoint      func(string) error
+	progress          *operationProgress
 }
 
 func (options Options) normalized() (Options, error) {

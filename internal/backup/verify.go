@@ -10,6 +10,7 @@ import (
 )
 
 func Verify(ctx context.Context, options Options, minimumMirrors int, revision string) (VerifyResult, error) {
+	defer startProgress(&options, "verify")()
 	result := VerifyResult{Minimum: minimumMirrors}
 	if minimumMirrors < 1 {
 		return result, fmt.Errorf("minimum mirrors must be at least 1")
@@ -74,6 +75,7 @@ func Verify(ctx context.Context, options Options, minimumMirrors int, revision s
 				verification.Complete = true
 				result.Passed++
 			}
+			run.options.progress.eventf("mirror=%s passed=%t detail=%s", mirror.Canonical.Name, verification.Complete, verification.Error)
 			result.Mirrors = append(result.Mirrors, verification)
 		}
 		after, err := run.loadLedger(head.State.Format.RepositoryUUID)

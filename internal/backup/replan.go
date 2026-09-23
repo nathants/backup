@@ -18,6 +18,7 @@ import (
 // observations. It stays on the saved base and performs no remote operations.
 // Add is the explicit way to discard these observations and hash everything.
 func Replan(ctx context.Context, options Options) (AddResult, error) {
+	defer startProgress(&options, "replan")()
 	if err := ctx.Err(); err != nil {
 		return AddResult{}, err
 	}

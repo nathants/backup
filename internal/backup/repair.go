@@ -12,6 +12,7 @@ import (
 )
 
 func RepairDataPart(ctx context.Context, options Options, sourceMirror, packHash string, partNumber uint32) (RepairResult, error) {
+	defer startProgress(&options, "repair data")()
 	result := RepairResult{PackHash: packHash, PartNumber: partNumber}
 	run, err := openRuntime(options, true)
 	if err != nil {
@@ -86,6 +87,8 @@ func RepairDataPart(ctx context.Context, options Options, sourceMirror, packHash
 	}
 	sourcePath := file.Name()
 	defer func() { _ = file.Close(); _ = os.Remove(sourcePath) }()
+	run.options.progress.phasef("reading and verifying healthy repair bytes from mirror %s", sourceMirror)
+	run.options.progress.detailf("part bytes=%d", expected.Size)
 	if err := source.GetVerified(ctx, oldKey, expected, file); err != nil {
 		if observationErr := run.observeDataFailure(sourceMirror, oldKey, err); observationErr != nil {
 			return result, observationErr
@@ -98,6 +101,7 @@ func RepairDataPart(ctx context.Context, options Options, sourceMirror, packHash
 	if err := file.Close(); err != nil {
 		return result, err
 	}
+	run.options.progress.phasef("staging immutable data relocation")
 	txn := newTransaction("repair", head.CommitID, run.options.Now().UTC())
 	if extending {
 		txn = *pending
@@ -151,6 +155,7 @@ func RepairDataPart(ctx context.Context, options Options, sourceMirror, packHash
 	if err := run.checkpoint("forward-repair-candidate-staged"); err != nil {
 		return result, err
 	}
+	run.options.progress.eventf("relocation staged; candidate still requires complete verification and publication")
 	committed, err := run.commitTransaction(ctx, &txn)
 	if err != nil {
 		return result, err

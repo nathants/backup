@@ -140,6 +140,7 @@ func (run *runtime) capturePlan(ctx context.Context, txn *transaction, base repo
 		}
 		pendingIndex = nil
 		pendingWarnings = 0
+		run.options.progress.eventf("capture checkpoint: saved paths=%d/%d eligible-mirrors=%v (revision not yet published)", end, txn.Plan.Entries, sortedMirrorNames(txn.Capture.Mirrors))
 		return run.checkpoint("completed-pack-recorded")
 	}
 	closePack := func(end int) (returnErr error) {
@@ -169,6 +170,8 @@ func (run *runtime) capturePlan(ctx context.Context, txn *transaction, base repo
 	defer abort()
 
 	const maximumPathsPerCaptureSegment = 10_000
+	run.options.progress.phasef("capturing and uploading planned paths")
+	run.options.progress.eventf("resuming capture at saved position=%d/%d", txn.Capture.NextPlan, txn.Plan.Entries)
 	processPlanned := func(position int, planned format.IndexEntry) error {
 		finish := func() error {
 			if position+1-txn.Capture.NextPlan < maximumPathsPerCaptureSegment {
@@ -180,6 +183,7 @@ func (run *runtime) capturePlan(ctx context.Context, txn *transaction, base repo
 			packMirrors = copyBoolSet(txn.Capture.Mirrors)
 			return nil
 		}
+		run.options.progress.detailf("capture processed paths=%d/%d", position, txn.Plan.Entries)
 		captured, err := root.CapturePath(planned, plainSpool, run.options.SpaceReserveBytes)
 		if err != nil {
 			return err
@@ -333,8 +337,10 @@ func (run *runtime) uploadCapturedPart(ctx context.Context, part *pack.StreamPar
 		if _, err := file.Seek(0, io.SeekStart); err != nil {
 			return err
 		}
+		run.options.progress.eventf("uploading ciphertext to mirror %s; part bytes=%d", name, part.Size)
 		result := writer.PutOpenFile(ctx, key, file, expected)
 		if result.Disposition == objectstore.CreateAcknowledged || (result.Disposition == objectstore.CreateConflict || result.Disposition == objectstore.CreateAmbiguous) && run.auditObject(ctx, mirror, key, expected) == nil {
+			run.options.progress.eventf("mirror %s acknowledged ciphertext part bytes=%d", name, part.Size)
 			acknowledged[name] = true
 			continue
 		}
@@ -350,6 +356,7 @@ func (run *runtime) uploadCapturedPart(ctx context.Context, part *pack.StreamPar
 }
 
 func (run *runtime) finalizeCapture(txn *transaction, base repository.State) (bool, error) {
+	run.options.progress.phasef("building and validating captured catalogs")
 	if err := run.buildCandidateFiles(txn, base); err != nil {
 		return false, err
 	}

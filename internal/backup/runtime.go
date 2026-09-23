@@ -619,7 +619,9 @@ func (run *runtime) validatedHead(fetch bool) (repository.ValidatedCommit, *repo
 		// First publication never adopts an unrelated remote's history.
 		fetch = false
 	}
+	run.options.progress.phasef("validating metadata history")
 	if fetch {
+		run.options.progress.phasef("fetching and validating primary metadata")
 		if err := run.repo.Fetch(); err != nil {
 			return repository.ValidatedCommit{}, nil, fmt.Errorf("fetch metadata: %w", err)
 		}
@@ -722,6 +724,7 @@ func (run *runtime) mirror(name string) (localconfig.Mirror, bool) {
 }
 
 func (run *runtime) secretKey(ctx context.Context) (*libsodium.Keyring, error) {
+	run.options.progress.phasef("loading decryption key")
 	libsodium.Init()
 	return keysource.Load(ctx, run.config.GitRemote)
 }

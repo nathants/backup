@@ -49,6 +49,7 @@ func markPublishedSyncError(err error) error {
 // ancestors that could rename its directories, from planning through publication.
 // No-follow checks do not synchronize with concurrent destination writers.
 func Restore(ctx context.Context, options Options, request RestoreRequest) (RestoreResult, error) {
+	defer startProgress(&options, "restore")()
 	result := RestoreResult{}
 	if request.Pattern == "" {
 		return result, fmt.Errorf("regular expression is required")
@@ -121,10 +122,12 @@ func Restore(ctx context.Context, options Options, request RestoreRequest) (Rest
 	if err := os.Chmod(stage, 0o700); err != nil {
 		return result, err
 	}
+	run.options.progress.phasef("planning restore selection and checking destinations")
 	selection, conflicts, err := planRestoreSelection(snapshot.State, expression, targetFD, request.Overwrite, stage, request.Report, &result)
 	if err != nil {
 		return result, err
 	}
+	run.options.progress.detailf("selected paths=%d dry-run=%t", result.Planned, request.DryRun)
 	if request.DryRun {
 		return result, nil
 	}
@@ -135,6 +138,7 @@ func Restore(ctx context.Context, options Options, request RestoreRequest) (Rest
 		return result, nil
 	}
 	if selection.regularCount != 0 {
+		run.options.progress.phasef("preparing selected restore catalogs")
 		if err := prepareRestoreCatalogs(snapshot.State, selection); err != nil {
 			return result, err
 		}
@@ -142,6 +146,7 @@ func Restore(ctx context.Context, options Options, request RestoreRequest) (Rest
 		if err != nil {
 			return result, err
 		}
+		run.options.progress.phasef("downloading, decrypting and verifying selected content; nothing published yet")
 		if err := stageSelectedContentStream(ctx, run, catalog.State, secretKey, selection); err != nil {
 			var unavailable *packPartUnavailableError
 			if errors.As(err, &unavailable) && catalog.CommitID != head.CommitID && catalogHasRelocation(catalog.State, snapshot.State, head.State, unavailable.packHash, unavailable.partNumber) {
@@ -149,10 +154,12 @@ func Restore(ctx context.Context, options Options, request RestoreRequest) (Rest
 			}
 			return result, err
 		}
+		run.options.progress.phasef("checking all staged plaintext before publication")
 		if err := verifyAllStagedStream(selection); err != nil {
 			return result, err
 		}
 	}
+	run.options.progress.phasef("publishing verified restore paths")
 	if err := publishRestoreSelection(targetFD, targetPath, selection, request.Overwrite, request.Report, &result); err != nil {
 		return result, err
 	}

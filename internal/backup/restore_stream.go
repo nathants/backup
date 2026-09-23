@@ -387,6 +387,7 @@ type restorePackStager struct {
 	ciphertextSize uint64
 	expected       map[string]uint64
 	wanted         map[string]uint64
+	verifiedPacks  uint64
 }
 
 func stageSelectedContentStream(ctx context.Context, run *runtime, catalog repository.State, secretKey *libsodium.Keyring, selection restoreSelection) (returnErr error) {
@@ -582,6 +583,10 @@ func (stager *restorePackStager) finishPack() error {
 	}
 	if decryptErr == nil {
 		decryptErr = removeErr
+	}
+	if decryptErr == nil {
+		stager.verifiedPacks++
+		stager.run.options.progress.detailf("packs verified and staged=%d; nothing published yet", stager.verifiedPacks)
 	}
 	stager.current, stager.ciphertextPath = "", ""
 	stager.ciphertextSize, stager.expected, stager.wanted = 0, nil, nil

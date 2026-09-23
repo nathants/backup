@@ -112,6 +112,8 @@ func (run *runtime) observeDataFailure(name, key string, failure error) (returnE
 }
 
 func (run *runtime) auditData(ctx context.Context, client objectstore.Store, name string, state repository.State) error {
+	run.options.progress.phasef("checksum audit of data on mirror %s", name)
+	var checked uint64
 	return state.WalkPacks(format.DefaultLimits(), func(part format.PackEntry) error {
 		key, err := format.ObjectKey(part.PartHash, part.ObjectID)
 		if err != nil {
@@ -124,11 +126,14 @@ func (run *runtime) auditData(ctx context.Context, client objectstore.Store, nam
 			}
 			return fmt.Errorf("data part %s: %w", key, err)
 		}
+		checked++
+		run.options.progress.detailf("objects checked=%d", checked)
 		return nil
 	})
 }
 
 func (run *runtime) auditChain(ctx context.Context, client objectstore.Store, name string, history *repository.History, target int, txn *transaction) error {
+	run.options.progress.phasef("checksum audit of metadata chain on mirror %s", name)
 	selected, err := history.CommitID(target)
 	if err != nil {
 		return incidentStateFailure(err)

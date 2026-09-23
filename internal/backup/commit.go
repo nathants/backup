@@ -15,6 +15,7 @@ import (
 )
 
 func Commit(ctx context.Context, options Options) (SnapshotResult, error) {
+	defer startProgress(&options, "commit")()
 	run, err := openRuntime(options, true)
 	if err != nil {
 		return SnapshotResult{}, err
@@ -26,6 +27,9 @@ func Commit(ctx context.Context, options Options) (SnapshotResult, error) {
 	}
 	if txn != nil && (txn.Kind == "initial" || txn.Kind == "genesis") && run.preparation == nil {
 		return SnapshotResult{}, fmt.Errorf("initial publication lacks its local preparation record; preserve state for diagnosis")
+	}
+	if txn != nil {
+		run.options.progress.phasef("loading saved transaction: kind=%s capture-started=%t local-commit=%t push-confirmed=%t", txn.Kind, txn.Capture != nil, txn.LocalCommit != "", txn.PushConfirmed)
 	}
 	if run.preparation != nil {
 		txn, err = run.commitInitial(ctx, txn)
@@ -88,6 +92,7 @@ func (run *runtime) commitTransaction(ctx context.Context, txn *transaction) (Sn
 	if txn.Resetting {
 		return SnapshotResult{}, fmt.Errorf("transaction reset is in progress; run reset to finish it")
 	}
+	run.options.progress.phasef("validating candidate and saved publication state")
 	candidate, err := run.loadCandidateState(txn)
 	if err != nil {
 		return SnapshotResult{}, err
@@ -232,6 +237,7 @@ func (run *runtime) commitTransaction(ctx context.Context, txn *transaction) (Sn
 		if !hasDataComplete(txn) {
 			return SnapshotResult{}, fmt.Errorf("no individual mirror has the complete candidate data revision")
 		}
+		run.options.progress.phasef("creating local metadata commit")
 		commit, err := run.repo.CreateCommitState(txn.BaseCommit, candidate, commitMessage(txn.Kind, sequence))
 		if err != nil {
 			return SnapshotResult{}, err
@@ -279,6 +285,7 @@ func (run *runtime) commitTransaction(ctx context.Context, txn *transaction) (Sn
 		if err != nil {
 			return SnapshotResult{}, err
 		}
+		run.options.progress.phasef("building encrypted metadata bundle")
 		result, err := metadatachain.Build(run.repo, candidate.Format.RepositoryUUID, txn.BaseCommit, txn.LocalCommit, sequence, candidate.PublicKeys, metadataStage, partSize, ciphertextBudget)
 		if err != nil {
 			return SnapshotResult{}, err
@@ -322,6 +329,7 @@ func (run *runtime) commitTransaction(ctx context.Context, txn *transaction) (Sn
 }
 
 func (run *runtime) finishSnapshot(txn *transaction, ledger completionLedger) (SnapshotResult, error) {
+	run.options.progress.phasef("finalizing revision and cleaning staging")
 	complete := make(map[string]bool)
 	lagging := make(map[string]bool)
 	for _, mirror := range run.config.Mirrors {
@@ -486,6 +494,8 @@ func (run *runtime) uploadDataParts(ctx context.Context, txn *transaction, ledge
 				}
 				continue
 			}
+			run.options.progress.phasef("uploading data to mirror %s", mirror.Canonical.Name)
+			run.options.progress.detailf("part=%d/%d bytes=%d", partIndex+1, txn.DataPartCount, expected.Size)
 			result := run.putStaged(ctx, writer, key, part.RelativePath, expected)
 			if result.Disposition == objectstore.CreateAcknowledged || (result.Disposition == objectstore.CreateConflict || result.Disposition == objectstore.CreateAmbiguous) && run.auditObject(ctx, mirror, key, expected) == nil {
 				if err := run.checkpoint("data-object-created-before-ack"); err != nil {
@@ -607,6 +617,7 @@ func (run *runtime) confirmOrPush(_ context.Context, txn *transaction) error {
 	if err := run.checkpoint("git-push-intent-recorded"); err != nil {
 		return err
 	}
+	run.options.progress.phasef("pushing primary Git metadata")
 	if err := run.repo.Push(txn.LocalCommit, txn.BaseCommit); err != nil {
 		return err
 	}
@@ -628,6 +639,7 @@ func (run *runtime) confirmOrPush(_ context.Context, txn *transaction) error {
 }
 
 func (run *runtime) remoteHistory() (string, *repository.History, error) {
+	run.options.progress.phasef("fetching primary metadata and confirming publication")
 	if err := run.repo.Fetch(); err != nil {
 		return "", nil, err
 	}
@@ -677,6 +689,8 @@ func (run *runtime) uploadMetadata(ctx context.Context, txn *transaction, ledger
 				return err
 			}
 			expected := objectstore.Object{Size: part.Size, BLAKE2b: part.Hash, SHA256: part.SHA256, MD5: part.MD5}
+			run.options.progress.phasef("uploading metadata to mirror %s", mirror.Canonical.Name)
+			run.options.progress.detailf("part=%d/%d bytes=%d", partIndex+1, len(metadata.Manifest.Parts), expected.Size)
 			result := run.putStaged(ctx, writer, key, relative, expected)
 			if result.Disposition == objectstore.CreateAcknowledged || (result.Disposition == objectstore.CreateConflict || result.Disposition == objectstore.CreateAmbiguous) && run.auditObject(ctx, mirror, key, expected) == nil {
 				if err := run.checkpoint("metadata-part-created-before-ack"); err != nil {
@@ -718,6 +732,7 @@ func (run *runtime) uploadMetadata(ctx context.Context, txn *transaction, ledger
 		if expected.BLAKE2b != metadata.ManifestHash {
 			return fmt.Errorf("staged metadata manifest hash changed")
 		}
+		run.options.progress.phasef("publishing completion manifest to mirror %s", mirror.Canonical.Name)
 		if !progress.MetadataManifest {
 			result := run.putStaged(ctx, writer, manifestKey, metadata.ManifestRelativePath, expected)
 			if result.Disposition == objectstore.CreateAcknowledged || (result.Disposition == objectstore.CreateConflict || result.Disposition == objectstore.CreateAmbiguous) && run.auditObject(ctx, mirror, manifestKey, expected) == nil {

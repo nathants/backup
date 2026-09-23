@@ -669,9 +669,14 @@ func TestSyncCopiesCompleteRevisionIdempotentlyAndNeverTrustsConflict(t *testing
 	if _, err := Sync(ctx, constrained, "local", "destination", latest.CommitID); err == nil || !strings.Contains(err.Error(), "stage sync object") {
 		t.Fatalf("sync ignored impossible workspace reserve: %v", err)
 	}
+	var progress bytes.Buffer
+	actualOptions.Stderr = &progress
 	synced, err := Sync(ctx, actualOptions, "local", "destination", latest.CommitID)
 	if err != nil || synced.CommitID != latest.CommitID || synced.DataCopied == 0 || synced.MetadataCopied == 0 {
 		t.Fatalf("sync result=%#v err=%v", synced, err)
+	}
+	if !strings.Contains(progress.String(), "progress: sync:") || !strings.Contains(progress.String(), "objects checked=") || !strings.Contains(progress.String(), "copying metadata chain") {
+		t.Fatalf("missing sync progress: %s", &progress)
 	}
 	verified, err := Verify(ctx, actualOptions, 2, latest.CommitID)
 	if err != nil || verified.Passed != 2 {

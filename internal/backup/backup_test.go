@@ -370,9 +370,14 @@ func TestRepairRelocatesDataWithoutOverwritingOldObject(t *testing.T) {
 	if _, err := RepairDataPart(ctx, constrained, "local", oldPart.PackHash, oldPart.PartNumber); err == nil || !strings.Contains(err.Error(), "stage repair part") {
 		t.Fatalf("data repair ignored impossible workspace reserve: %v", err)
 	}
+	var progress bytes.Buffer
+	harness.options.Stderr = &progress
 	repaired, err := RepairDataPart(ctx, harness.options, "local", oldPart.PackHash, oldPart.PartNumber)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if !strings.Contains(progress.String(), "progress: repair data:") || !strings.Contains(progress.String(), "relocation staged") {
+		t.Fatalf("missing repair progress: %s", &progress)
 	}
 	if repaired.CommitID == before.CommitID || repaired.NewObjectID == oldPart.ObjectID {
 		t.Fatalf("repair result: %#v", repaired)

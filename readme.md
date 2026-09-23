@@ -34,6 +34,13 @@ cat /private/keys/alice.public > /data/.backup/.publickeys
 ./backup commit --root /data
 ```
 
+`add`, `replan`, `commit`, `verify`, `restore`, `sync`, `recover` (including
+`--list`), and both `repair` commands report phases and available counters on stderr.
+Long waits emit a roughly five-second heartbeat; "still running" is not evidence
+of forward progress or durable completion. Progress is best-effort: a failed output
+sink disables it without changing the operation's result. Errors writing mandatory
+warnings or final results still fail the command. Stdout retains the command results.
+
 `add` fixes the selected paths; `commit` captures their current content. Git ignore
 rules apply even outside repositories. Incomplete Git metadata produces a warning
 and pattern-only matching, without tracked-file exceptions. Non-ignored untracked

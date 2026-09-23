@@ -13,6 +13,7 @@ import (
 )
 
 func Sync(ctx context.Context, options Options, sourceName, destinationName, revision string) (SyncResult, error) {
+	defer startProgress(&options, "sync")()
 	result := SyncResult{Source: sourceName, Destination: destinationName}
 	if sourceName == "" || destinationName == "" || sourceName == destinationName {
 		return result, fmt.Errorf("distinct source and destination mirror names are required")
@@ -70,6 +71,7 @@ func Sync(ctx context.Context, options Options, sourceName, destinationName, rev
 	if err := run.observeSyncDestination(ctx, destinationPin, history, selected, txn); err != nil {
 		return result, err
 	}
+	run.options.progress.phasef("copying data from mirror %s to %s", sourceName, destinationName)
 	copying := mirrorCopy{run: run, source: source, destination: destination, sourceName: sourceName, destinationName: destinationName}
 	stage, err := os.MkdirTemp(run.options.statePath(), ".backup-sync-*")
 	if err != nil {
@@ -99,10 +101,12 @@ func Sync(ctx context.Context, options Options, sourceName, destinationName, rev
 		if copied {
 			result.DataCopied++
 		}
+		run.options.progress.detailf("objects checked=%d copied=%d already verified=%d", dataIndex, result.DataCopied, dataIndex-uint64(result.DataCopied))
 		return nil
 	}); err != nil {
 		return result, err
 	}
+	run.options.progress.phasef("copying metadata chain from mirror %s to %s", sourceName, destinationName)
 	copyMetadata := func(edgeIndex int, representation manifestRepresentation) error {
 		for partIndex, part := range representation.Manifest.Parts {
 			key, _ := format.MetadataPartKey(part)
@@ -122,6 +126,7 @@ func Sync(ctx context.Context, options Options, sourceName, destinationName, rev
 			if copied {
 				result.MetadataCopied++
 			}
+			run.options.progress.detailf("metadata objects copied=%d edge=%d/%d parts checked=%d/%d", result.MetadataCopied, edgeIndex+1, targetIndex+1, partIndex+1, len(representation.Manifest.Parts))
 		}
 		manifestKey, _ := format.MetadataManifestKey(representation.Manifest.TipCommit, representation.Hash, representation.ObjectID)
 		manifestExpected := objectstore.HashBytes(representation.Data)
@@ -145,6 +150,7 @@ func Sync(ctx context.Context, options Options, sourceName, destinationName, rev
 	if err := auditManifestChain(ctx, source, history, targetIndex, selected.State.Format.RepositoryUUID, txn, copyMetadata); err != nil {
 		return result, fmt.Errorf("source metadata chain: %w", err)
 	}
+	run.options.progress.phasef("final source and destination verification")
 	before, err := run.loadLedger(selected.State.Format.RepositoryUUID)
 	if err != nil {
 		return result, err
