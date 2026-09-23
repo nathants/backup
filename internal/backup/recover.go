@@ -101,6 +101,7 @@ func Recover(ctx context.Context, options Options, request RecoverRequest) (Reco
 		return result, err
 	}
 	run := &runtime{options: normalized, config: config}
+	defer func() { _ = run.close() }()
 	mirror, ok := run.mirror(request.Mirror)
 	if !ok {
 		return result, fmt.Errorf("unknown mirror %q", request.Mirror)
@@ -206,7 +207,7 @@ func Recover(ctx context.Context, options Options, request RecoverRequest) (Reco
 	return result, nil
 }
 
-func discoverRecoveryCandidates(ctx context.Context, client *objectstore.Client, exactTip string) ([]recoveryCandidate, error) {
+func discoverRecoveryCandidates(ctx context.Context, client objectstore.Store, exactTip string) ([]recoveryCandidate, error) {
 	var candidates []recoveryCandidate
 	totalKeys, totalBytes := 0, 0
 	load := func(prefix, requiredTip string) ([]recoveryCandidate, error) {
@@ -361,7 +362,7 @@ func recoveryLogicalEdgeLess(left, right *recoveryLogicalEdge) bool {
 	return leftKey < rightKey
 }
 
-func verifyRecoveryCandidates(ctx context.Context, client *objectstore.Client, candidates []recoveryCandidate, exactTip string, secretKey *libsodium.Keyring, workspace string, reserveBytes uint64, retainRepository bool) ([]verifiedRecovery, []string, error) {
+func verifyRecoveryCandidates(ctx context.Context, client objectstore.Store, candidates []recoveryCandidate, exactTip string, secretKey *libsodium.Keyring, workspace string, reserveBytes uint64, retainRepository bool) ([]verifiedRecovery, []string, error) {
 	candidateTips := make(map[string]bool)
 	for _, candidate := range candidates {
 		candidateTips[candidate.TipCommit] = true
@@ -584,7 +585,7 @@ func walkRecoveryCommitIDs(path string, visit func(string) error) error {
 	return scanner.Err()
 }
 
-func materializeAndValidateRecoveryPath(ctx context.Context, client *objectstore.Client, path recoveryPath, secretKey *libsodium.Keyring, root, expectedTip string) (string, *repository.History, error) {
+func materializeAndValidateRecoveryPath(ctx context.Context, client objectstore.Store, path recoveryPath, secretKey *libsodium.Keyring, root, expectedTip string) (string, *repository.History, error) {
 	bundleStage := filepath.Join(root, "bundles")
 	if err := os.Mkdir(bundleStage, 0o700); err != nil {
 		return "", nil, err

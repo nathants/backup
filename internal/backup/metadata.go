@@ -28,7 +28,7 @@ type manifestRepresentation struct {
 	Data     []byte
 }
 
-func listManifestRepresentations(ctx context.Context, client *objectstore.Client, tip, repositoryUUID string) ([]manifestRepresentation, error) {
+func listManifestRepresentations(ctx context.Context, client objectstore.Store, tip, repositoryUUID string) ([]manifestRepresentation, error) {
 	if !isCommitID(tip) {
 		return nil, fmt.Errorf("invalid metadata tip")
 	}
@@ -114,7 +114,7 @@ func manifestLimits() format.Limits {
 	return limits
 }
 
-func auditManifestChain(ctx context.Context, client *objectstore.Client, history *repository.History, targetIndex int, repositoryUUID string, pending *transaction, visit func(index int, representation manifestRepresentation) error) error {
+func auditManifestChain(ctx context.Context, client objectstore.Store, history *repository.History, targetIndex int, repositoryUUID string, pending *transaction, visit func(index int, representation manifestRepresentation) error) error {
 	if history == nil || targetIndex < 0 || targetIndex >= history.Len() {
 		return fmt.Errorf("invalid target history position")
 	}
@@ -221,7 +221,7 @@ func (run *runtime) stageMetadataResult(result metadatachain.Result, directory s
 	}, nil
 }
 
-func fetchMetadataBundle(ctx context.Context, client *objectstore.Client, representation manifestRepresentation, destination, stage string) error {
+func fetchMetadataBundle(ctx context.Context, client objectstore.Store, representation manifestRepresentation, destination, stage string) error {
 	output, err := os.OpenFile(destination, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
 		return err
@@ -461,7 +461,7 @@ func readMetadataBundleHeader(reader *bufio.Reader, manifest format.MetadataMani
 	return nil
 }
 
-func materializeMetadataChain(ctx context.Context, client *objectstore.Client, chain [][]manifestRepresentation, secretKey *libsodium.Keyring, quarantine, stage string) ([]manifestRepresentation, error) {
+func materializeMetadataChain(ctx context.Context, client objectstore.Store, chain [][]manifestRepresentation, secretKey *libsodium.Keyring, quarantine, stage string) ([]manifestRepresentation, error) {
 	if len(chain) == 0 {
 		return nil, fmt.Errorf("metadata chain is empty")
 	}

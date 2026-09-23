@@ -27,6 +27,9 @@ func (run *runtime) capturePlan(ctx context.Context, txn *transaction, base repo
 	if txn == nil || txn.Plan == nil || len(txn.CandidateFiles) != 0 {
 		return false, fmt.Errorf("transaction does not contain an uncaptured add plan")
 	}
+	if err := run.requirePlanOutsideFilesystemMirrors(txn.Plan, run.config); err != nil {
+		return false, err
+	}
 	configBlobs := make(map[string][]byte, 3)
 	for _, name := range []string{"ignore", ".publickeys", "mirrors.tsv"} {
 		planned, err := run.readPlanConfig(txn, name)

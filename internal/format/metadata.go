@@ -15,6 +15,7 @@ const (
 	KindSymlink = "symlink"
 
 	MirrorBackupServer = "backup-server"
+	MirrorFilesystem   = "filesystem"
 	MirrorAWSS3        = "aws-s3"
 	MirrorCloudflareR2 = "cloudflare-r2"
 )
@@ -414,7 +415,7 @@ func validatePackSequence(entries []PackEntry) error {
 type Mirror struct {
 	Name     string
 	Kind     string
-	S3URL    string
+	S3URL    string // Storage namespace: s3://bucket/prefix or filesystem://STORE_ID.
 	Endpoint string
 	Region   string
 }
@@ -458,6 +459,13 @@ func ParseMirrors(reader io.Reader, limits Limits) ([]Mirror, error) {
 func validateMirror(mirror Mirror) error {
 	if !namePattern.MatchString(mirror.Name) {
 		return fmt.Errorf("invalid name %q", mirror.Name)
+	}
+	if mirror.Kind == MirrorFilesystem {
+		id := strings.TrimPrefix(mirror.S3URL, "filesystem://")
+		if !strings.HasPrefix(mirror.S3URL, "filesystem://") || len(id) != 32 || strings.Trim(id, "0123456789abcdef") != "" || mirror.Endpoint != "-" || mirror.Region != "-" {
+			return fmt.Errorf("filesystem mirror requires filesystem:// followed by a 32-hex store ID and absent endpoint/region")
+		}
+		return nil
 	}
 	switch mirror.Kind {
 	case MirrorBackupServer, MirrorAWSS3, MirrorCloudflareR2:

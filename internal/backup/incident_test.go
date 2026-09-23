@@ -262,7 +262,7 @@ func TestIntegrityIncidentHealthyMirrorCanResumeWhileDamagedMirrorStaysExcluded(
 		t.Fatal(err)
 	}
 	localFactory := h.options.ClientFactory
-	h.options.ClientFactory = func(ctx context.Context, pin localconfig.Mirror) (*objectstore.Client, error) {
+	h.options.ClientFactory = func(ctx context.Context, pin localconfig.Mirror) (objectstore.Store, error) {
 		if pin.Canonical.Name == "remote" {
 			return remote.options.ClientFactory(ctx, pin)
 		}
@@ -305,7 +305,7 @@ func TestIntegrityIncidentHealthyMirrorCanResumeWhileDamagedMirrorStaysExcluded(
 	ordinary := h.options
 	ordinary.Stderr = &reports
 	factory := h.options.ClientFactory
-	ordinary.ClientFactory = func(ctx context.Context, pin localconfig.Mirror) (*objectstore.Client, error) {
+	ordinary.ClientFactory = func(ctx context.Context, pin localconfig.Mirror) (objectstore.Store, error) {
 		if pin.Canonical.Name == "remote" {
 			t.Error("ordinary commit attempted a quarantined mirror")
 		}
@@ -407,7 +407,7 @@ func TestIntegrityIncidentLedgerRebuildAndTransientFailures(t *testing.T) {
 				}
 			} else {
 				unavailable := h.options
-				unavailable.ClientFactory = func(context.Context, localconfig.Mirror) (*objectstore.Client, error) {
+				unavailable.ClientFactory = func(context.Context, localconfig.Mirror) (objectstore.Store, error) {
 					return nil, errors.New("temporary unavailable reader")
 				}
 				if _, err := Verify(ctx, unavailable, 1, "HEAD"); err == nil {

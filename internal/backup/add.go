@@ -112,6 +112,10 @@ func Add(ctx context.Context, options Options, allowEmpty bool) (AddResult, erro
 }
 
 func (run *runtime) buildAddPlan(root *filesystem.Root, ignore format.Ignore, configBlobs map[string][]byte, base repository.State, allowEmpty bool) (filesystem.Result, *stagedPlan, int, int, bool, error) {
+	ignore, err := run.filesystemScanIgnore(ignore)
+	if err != nil {
+		return filesystem.Result{}, nil, 0, 0, false, err
+	}
 	buildDirectory, err := os.MkdirTemp(run.options.statePath(), ".add-build-")
 	if err != nil {
 		return filesystem.Result{}, nil, 0, 0, false, err

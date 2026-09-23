@@ -213,7 +213,7 @@ func updateCompletionLedgerForSync(ledger *completionLedger, mirror, selected st
 
 type mirrorCopy struct {
 	run                         *runtime
-	source, destination         *objectstore.Client
+	source, destination         objectstore.Store
 	sourceName, destinationName string
 }
 

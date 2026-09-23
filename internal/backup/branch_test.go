@@ -46,7 +46,7 @@ func TestInitialInvalidBranchDoesNotPinPreparation(t *testing.T) {
 				t.Fatal(err)
 			}
 			opts := h.options
-			opts.ClientFactory = func(context.Context, localconfig.Mirror) (*objectstore.Client, error) {
+			opts.ClientFactory = func(context.Context, localconfig.Mirror) (objectstore.Store, error) {
 				t.Error("invalid branch reached object-client construction")
 				return nil, fmt.Errorf("unexpected object client")
 			}

@@ -79,7 +79,7 @@ func contractConfigFromEnvironment(t *testing.T, label, kind string) cloudContra
 	return config
 }
 
-func createAndAuditCloudProbe(ctx context.Context, kind string, client *objectstore.Client, logicalKey, staged string, expected objectstore.Object) error {
+func createAndAuditCloudProbe(ctx context.Context, kind string, client objectstore.Store, logicalKey, staged string, expected objectstore.Object) error {
 	if kind != format.MirrorAWSS3 {
 		created := client.PutFile(ctx, logicalKey, staged, expected)
 		if created.Disposition != objectstore.CreateAcknowledged {
@@ -303,7 +303,8 @@ func runCloudContract(t *testing.T, config cloudContractConfig) {
 		runAWSControlPlaneProtectionContract(t, ctx, config, s3Client, client, logicalKey, expected)
 		runAWSAuthorityProtectionContract(t, ctx, config, client, logicalKey, expected)
 	}
-	t.Run("real CLI round-trip", func(t *testing.T) { runCloudRoundTrip(t, config) })
+	t.Run("real CLI round-trip", func(t *testing.T) { runCloudRoundTrip(t, config, false) })
+	t.Run("filesystem-first CLI round-trip", func(t *testing.T) { runCloudRoundTrip(t, config, true) })
 }
 
 func runAWSCreateProtectionContract(t *testing.T, ctx context.Context, config cloudContractConfig, s3Client *s3.Client) {
@@ -340,7 +341,7 @@ func runAWSCreateProtectionContract(t *testing.T, ctx context.Context, config cl
 	})
 }
 
-func runAWSControlPlaneProtectionContract(t *testing.T, ctx context.Context, config cloudContractConfig, s3Client *s3.Client, client *objectstore.Client, probeKey string, expected objectstore.Object) {
+func runAWSControlPlaneProtectionContract(t *testing.T, ctx context.Context, config cloudContractConfig, s3Client *s3.Client, client objectstore.Store, probeKey string, expected objectstore.Object) {
 	t.Helper()
 	assertDenied := func(operation string, err error) {
 		t.Helper()
@@ -393,7 +394,7 @@ type r2LockRule struct {
 	} `json:"condition"`
 }
 
-func runR2LockProtectionContract(t *testing.T, ctx context.Context, config cloudContractConfig, client *objectstore.Client, probeKey string, expected objectstore.Object) {
+func runR2LockProtectionContract(t *testing.T, ctx context.Context, config cloudContractConfig, client objectstore.Store, probeKey string, expected objectstore.Object) {
 	t.Helper()
 	accountID := os.Getenv("BACKUP_R2_CONTRACT_ACCOUNT_ID")
 	auditToken := os.Getenv("BACKUP_R2_CONTRACT_LOCK_AUDIT_TOKEN")
@@ -683,7 +684,7 @@ func assertCloudKeyAbsent(t *testing.T, ctx context.Context, client *s3.Client, 
 	}
 }
 
-func assertCloudProbe(t *testing.T, ctx context.Context, client *objectstore.Client, key string, expected objectstore.Object, operation string) {
+func assertCloudProbe(t *testing.T, ctx context.Context, client objectstore.Store, key string, expected objectstore.Object, operation string) {
 	t.Helper()
 	if err := client.Audit(ctx, key, expected); err != nil {
 		t.Fatalf("probe changed after %s attempt: %v", operation, err)

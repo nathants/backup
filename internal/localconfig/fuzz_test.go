@@ -9,6 +9,7 @@ import (
 func FuzzTrustedConfigParser(f *testing.F) {
 	f.Add([]byte("git-remote\t/path/to/metadata.git\nbranch\tmain\nmirror\tlocal\tbackup-server\ts3://bucket/prefix\thttps://backup.example\tus-east-1\tbackup\t-\n"))
 	f.Add([]byte("branch\tmain\n"))
+	f.Add([]byte("git-remote\t/path/to/metadata.git\nbranch\tmain\nmirror\tdisk\tfilesystem\tfilesystem://0123456789abcdef0123456789abcdef\t-\t-\t/tmp/disk/store\t/tmp/disk\n"))
 	f.Fuzz(func(t *testing.T, data []byte) {
 		if len(data) > 1<<20 {
 			t.Skip()

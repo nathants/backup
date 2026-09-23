@@ -72,7 +72,7 @@ func cloudQuery(ctx context.Context, config cloudContractConfig, service string,
 	return response.StatusCode, data, err
 }
 
-func runAWSAuthorityProtectionContract(t *testing.T, ctx context.Context, config cloudContractConfig, client *objectstore.Client, probeKey string, expected objectstore.Object) {
+func runAWSAuthorityProtectionContract(t *testing.T, ctx context.Context, config cloudContractConfig, client objectstore.Store, probeKey string, expected objectstore.Object) {
 	t.Helper()
 	user := os.Getenv("BACKUP_AWS_CONTRACT_USER")
 	if !regexp.MustCompile(`^[A-Za-z0-9+=,.@_-]{1,64}$`).MatchString(user) {

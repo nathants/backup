@@ -22,6 +22,7 @@ func FuzzCanonicalMetadataParsers(f *testing.F) {
 		{2, nil},
 		{3, nil},
 		{4, []byte("local\tbackup-server\ts3://bucket/prefix\thttps://backup.example\tus-east-1\n")},
+		{4, []byte("disk\tfilesystem\tfilesystem://0123456789abcdef0123456789abcdef\t-\t-\n")},
 		{5, nil},
 		{6, []byte("^\\./proc(?:/|$)\n")},
 	}

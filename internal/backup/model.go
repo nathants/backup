@@ -16,7 +16,7 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-type ClientFactory func(context.Context, localconfig.Mirror) (*objectstore.Client, error)
+type ClientFactory func(context.Context, localconfig.Mirror) (objectstore.Store, error)
 
 const (
 	stateVersion            = 4
@@ -42,6 +42,7 @@ type Options struct {
 	SpoolDirectory    string
 	SpaceReserveBytes uint64
 	ClientFactory     ClientFactory
+	FullVerify        bool
 	Stdout            io.Writer
 	Stderr            io.Writer
 	Now               func() time.Time

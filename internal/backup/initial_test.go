@@ -26,7 +26,7 @@ func TestInitialLocalWorkflowWithoutRemotes(t *testing.T) {
 		t.Fatal(err)
 	}
 	options := h.options
-	options.ClientFactory = func(context.Context, localconfig.Mirror) (*objectstore.Client, error) {
+	options.ClientFactory = func(context.Context, localconfig.Mirror) (objectstore.Store, error) {
 		return nil, fmt.Errorf("unexpected network client during local preparation")
 	}
 	ctx := context.Background()

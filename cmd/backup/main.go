@@ -19,6 +19,7 @@ import (
 
 	backupapp "backup/internal/backup"
 	"backup/internal/format"
+	"backup/internal/objectstore"
 	"backup/internal/s3server"
 
 	"golang.org/x/sys/unix"
@@ -39,6 +40,7 @@ commands:
   repair     relocate a data part or republish a metadata edge immutably
   recover    recover metadata from one object mirror
   server     run the narrow production object server
+  mirror-init initialize an empty filesystem mirror directory
 
 Use backup COMMAND --help for command-specific usage and options.
 
@@ -69,6 +71,8 @@ func run(ctx context.Context, arguments []string, stdout, stderr io.Writer) erro
 	command, arguments := arguments[0], arguments[1:]
 	var err error
 	switch command {
+	case "mirror-init":
+		err = runMirrorInit(arguments, stdout)
 	case "init":
 		err = runInit(ctx, arguments, stdout, stderr)
 	case "add":
@@ -304,7 +308,8 @@ func runVerify(ctx context.Context, arguments []string, stdout, stderr io.Writer
 	flags := flag.NewFlagSet("verify", flag.ContinueOnError)
 	common := addCommon(flags)
 	minimum := flags.Int("minimum-mirrors", 1, "required independently healthy mirrors")
-	if err := parseFlags(flags, arguments, stdout, "[OPTIONS] [REVISION]", "Audit mirrors independently using backend checksum verification; report every mirror.\nREVISION defaults to HEAD. Protocol verification does not download encrypted bodies."); err != nil {
+	full := flags.Bool("full", false, "fully decrypt filesystem mirrors and reconstruct their metadata; requires a secret key")
+	if err := parseFlags(flags, arguments, stdout, "[OPTIONS] [REVISION]", "Audit mirrors independently using backend checksum verification; report every mirror.\nREVISION defaults to HEAD. Protocol verification does not download encrypted bodies.\nWith --full, only filesystem mirrors can pass; verify every catalog pack and recover the exact metadata tip.\n\n"+resourceSafetyText+"\n\n"+decryptionHelpText); err != nil {
 		return err
 	}
 	if flags.NArg() > 1 {
@@ -314,7 +319,9 @@ func runVerify(ctx context.Context, arguments []string, stdout, stderr io.Writer
 	if flags.NArg() == 1 {
 		revision = flags.Arg(0)
 	}
-	result, operationErr := backupapp.Verify(ctx, common.options(stdout, stderr), *minimum, revision)
+	options := common.options(stdout, stderr)
+	options.FullVerify = *full
+	result, operationErr := backupapp.Verify(ctx, options, *minimum, revision)
 	_, outputErr := fmt.Fprintf(stdout, "commit\t%s\npassed\t%d\nminimum\t%d\n", result.CommitID, result.Passed, result.Minimum)
 	for _, mirror := range result.Mirrors {
 		if outputErr != nil {
@@ -575,4 +582,25 @@ read/list/create credential; no overwrite or delete API is exposed.`); err != ni
 func escapeTerminal(value string) string {
 	control := regexp.MustCompile(`[\x00-\x1f\x7f]`)
 	return control.ReplaceAllStringFunc(value, func(value string) string { return fmt.Sprintf("\\x%02x", value[0]) })
+}
+
+func runMirrorInit(arguments []string, stdout io.Writer) error {
+	flags := flag.NewFlagSet("mirror-init", flag.ContinueOnError)
+	directory := flags.String("directory", "", "existing empty absolute directory (required)")
+	mount := flags.String("mount", "-", "required mount point containing the directory; - permits an ordinary directory")
+	if err := parseFlags(flags, arguments, stdout, "--directory DIRECTORY [--mount MOUNT]", `Initialize one filesystem mirror, without Git/configuration/network access.
+Use an ext4 directory exclusively controlled by you. Existing contents are never replaced.
+For removable disks, require their mount point to prevent writes beneath an absent mount.
+Local create-only writes do not protect against a compromised user with disk access.`); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 || *directory == "" {
+		return fmt.Errorf("mirror-init requires --directory and no positional arguments")
+	}
+	identity, err := objectstore.InitializeFilesystem(*directory, *mount)
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintf(stdout, "store\t%s\n", identity)
+	return err
 }

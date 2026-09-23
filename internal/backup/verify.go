@@ -4,6 +4,9 @@ import (
 	"context"
 	"fmt"
 	"sort"
+
+	"backup/internal/format"
+	"github.com/nathants/go-libsodium"
 )
 
 func Verify(ctx context.Context, options Options, minimumMirrors int, revision string) (VerifyResult, error) {
@@ -33,6 +36,19 @@ func Verify(ctx context.Context, options Options, minimumMirrors int, revision s
 		return result, err
 	}
 	result.CommitID = selected.CommitID
+	var secret *libsodium.Keyring
+	if options.FullVerify {
+		for _, mirror := range run.config.Mirrors {
+			if mirror.Canonical.Kind != format.MirrorFilesystem {
+				continue
+			}
+			secret, err = run.secretKey(ctx)
+			if err != nil {
+				return result, err
+			}
+			break
+		}
+	}
 	// Restart the audit after new negative evidence, so every reinstated mirror
 	// was checked AFTER the incident, regardless of mirror ordering. Each restart
 	// quarantines a previously unquarantined mirror; the loop is bounded.
@@ -45,7 +61,11 @@ func Verify(ctx context.Context, options Options, minimumMirrors int, revision s
 		result.Passed = 0
 		for _, mirror := range run.config.Mirrors {
 			verification := MirrorVerification{Name: mirror.Canonical.Name}
-			if err := run.auditMirror(ctx, mirror, history, selected, txn); err != nil {
+			auditErr := run.auditMirror(ctx, mirror, history, selected, txn)
+			if auditErr == nil && options.FullVerify {
+				auditErr = run.verifyFull(ctx, mirror, selected, txn, secret)
+			}
+			if err := auditErr; err != nil {
 				if isIncidentStateError(err) {
 					return result, err
 				}

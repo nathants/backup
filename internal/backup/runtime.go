@@ -31,7 +31,7 @@ type runtime struct {
 	repo                       *repository.Managed
 	store                      *durable.Store
 	lock                       *os.File
-	clients                    map[string]*objectstore.Client
+	clients                    map[string]objectstore.Store
 	candidateState             *repository.State
 	capturedCandidateValidated bool
 	preparation                *preparation
@@ -133,6 +133,10 @@ func (run *runtime) openStateAndLock() error {
 
 func (run *runtime) close() error {
 	var errs []error
+	for name, client := range run.clients {
+		errs = append(errs, client.Close())
+		delete(run.clients, name)
+	}
 	if run.store != nil {
 		if err := run.store.Close(); err != nil {
 			errs = append(errs, err)
@@ -451,7 +455,7 @@ func (run *runtime) stagedPath(relative string) (string, error) {
 	return filepath.Join(run.options.transactionFilesPath(), relative), nil
 }
 
-func (run *runtime) putStaged(ctx context.Context, writer *objectstore.Client, key, relative string, expected objectstore.Object) objectstore.CreateResult {
+func (run *runtime) putStaged(ctx context.Context, writer objectstore.Store, key, relative string, expected objectstore.Object) objectstore.CreateResult {
 	file, err := run.openStaged(relative)
 	if err != nil {
 		return objectstore.CreateResult{Disposition: objectstore.CreateFailed, Err: err}
@@ -682,17 +686,19 @@ func (run *runtime) requirePinnedMirrors(state repository.State) error {
 	return run.config.RequireCanonicalMirrors(state.Mirrors)
 }
 
-func (run *runtime) client(ctx context.Context, mirror localconfig.Mirror) (*objectstore.Client, error) {
+func (run *runtime) client(ctx context.Context, mirror localconfig.Mirror) (objectstore.Store, error) {
 	if run.clients == nil {
-		run.clients = make(map[string]*objectstore.Client)
+		run.clients = make(map[string]objectstore.Store)
 	}
 	if client := run.clients[mirror.Canonical.Name]; client != nil {
 		return client, nil
 	}
-	var client *objectstore.Client
+	var client objectstore.Store
 	var err error
 	if run.options.ClientFactory != nil {
 		client, err = run.options.ClientFactory(ctx, mirror)
+	} else if mirror.Canonical.Kind == format.MirrorFilesystem {
+		client, err = objectstore.OpenFilesystem(mirror.Directory, mirror.Mount, mirror.Canonical.S3URL, run.options.SpaceReserveBytes)
 	} else {
 		if mirror.Profile == "-" {
 			return nil, fmt.Errorf("mirror %s has no credential profile", mirror.Canonical.Name)

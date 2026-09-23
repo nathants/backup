@@ -14,7 +14,7 @@ import (
 
 // Exercise the real CLI with the same single profile used by the destructive
 // contract. No administrator credential or primary remote is needed to recover.
-func runCloudRoundTrip(t *testing.T, config cloudContractConfig) {
+func runCloudRoundTrip(t *testing.T, config cloudContractConfig, filesystemFirst bool) {
 	t.Helper()
 	workspace := t.TempDir()
 	if parent := os.Getenv("BACKUP_CONTRACT_EVIDENCE_DIR"); parent != "" {
@@ -48,7 +48,22 @@ func runCloudRoundTrip(t *testing.T, config cloudContractConfig) {
 		endpoint = "-"
 	}
 	configPath := filepath.Join(workspace, "backup-config")
-	writeFile(t, configPath, []byte(fmt.Sprintf("git-remote\t%s\nbranch\tmain\nmirror\tcloud\t%s\ts3://%s/%s\t%s\t%s\tbackup\t-\n", remote, config.kind, config.bucket, prefix, endpoint, config.region)), 0o600)
+	baseConfig := fmt.Sprintf("git-remote\t%s\nbranch\tmain\n", remote)
+	cloudRow := fmt.Sprintf("cloud\t%s\ts3://%s/%s\t%s\t%s", config.kind, config.bucket, prefix, endpoint, config.region)
+	cloudBinding := "mirror\t" + cloudRow + "\tbackup\t-\n"
+	disk := filepath.Join(workspace, "disk")
+	diskRow, diskBinding := "", ""
+	if filesystemFirst {
+		if err := os.Mkdir(disk, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		identity := outputField(t, run(t, "", binary, "mirror-init", "--directory", disk), "store")
+		diskRow = "disk\tfilesystem\t" + identity + "\t-\t-"
+		diskBinding = "mirror\t" + diskRow + "\t" + disk + "\t-\n"
+		writeFile(t, configPath, []byte(baseConfig+diskBinding), 0o600)
+	} else {
+		writeFile(t, configPath, []byte(baseConfig+cloudBinding), 0o600)
+	}
 	libsodium.Init()
 	public, secret, err := libsodium.BoxKeypair()
 	if err != nil {
@@ -87,10 +102,29 @@ func runCloudRoundTrip(t *testing.T, config cloudContractConfig) {
 		t.Fatal(err)
 	}
 	command("add")
-	first := outputField(t, command("commit"), "commit")
+	firstOutput := command("commit")
+	first := outputField(t, firstOutput, "commit")
+	if filesystemFirst && outputField(t, firstOutput, "complete-mirror") != "disk" {
+		t.Fatal("first revision was not completed on the filesystem alone")
+	}
 	genesis := strings.TrimSpace(run(t, "", "git", "--git-dir", remote, "rev-list", "--max-parents=0", first))
 	if len(genesis) != 64 {
 		t.Fatalf("first publication lacks a single genesis: %s", genesis)
+	}
+	if filesystemFirst {
+		command("verify", "--full")
+		writeFile(t, configPath, []byte(baseConfig+cloudBinding+diskBinding), 0o600)
+		writeFile(t, filepath.Join(source, ".backup", "mirrors.tsv"), []byte(cloudRow+"\n"+diskRow+"\n"), 0o644)
+		command("add")
+		command("commit")
+		command("sync", "--source", "disk", "--destination", "cloud")
+		command("sync", "--source", "disk", "--destination", "cloud")
+		if output := command("verify", "--minimum-mirrors", "2"); !strings.Contains(output, "passed\t2\n") {
+			t.Fatal("filesystem-to-cloud synchronization was incomplete")
+		}
+		if err := os.Rename(disk, disk+".unavailable"); err != nil {
+			t.Fatal(err)
+		}
 	}
 	// Rotate between cloud revisions. Restore/recovery must select both retained
 	// generations, while newly encrypted packs and bundles use only the tip key.

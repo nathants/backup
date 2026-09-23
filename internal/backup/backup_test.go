@@ -72,7 +72,7 @@ func newIntegrationHarness(t *testing.T) *integrationHarness {
 	if err := os.WriteFile(configPath, []byte(config), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	factory := func(ctx context.Context, mirror localconfig.Mirror) (*objectstore.Client, error) {
+	factory := func(ctx context.Context, mirror localconfig.Mirror) (objectstore.Store, error) {
 		access, secret := "backup", "backup-secret"
 		return objectstore.New(ctx, objectstore.Options{
 			Mirror:              mirror.Canonical,
@@ -1157,7 +1157,7 @@ func TestDeterministicMirrorUnavailabilityRetainsImmutableIdentities(t *testing.
 			t.Fatal(err)
 		}
 		options := harness.options
-		options.ClientFactory = func(context.Context, localconfig.Mirror) (*objectstore.Client, error) {
+		options.ClientFactory = func(context.Context, localconfig.Mirror) (objectstore.Store, error) {
 			return nil, fmt.Errorf("mirror is deterministically unavailable")
 		}
 		if _, err := Commit(ctx, options); err == nil || !strings.Contains(err.Error(), "no individual mirror acknowledged ciphertext part") {
@@ -1192,7 +1192,7 @@ func TestDeterministicMirrorUnavailabilityRetainsImmutableIdentities(t *testing.
 			t.Fatal(err)
 		}
 		options := harness.options
-		options.ClientFactory = func(context.Context, localconfig.Mirror) (*objectstore.Client, error) {
+		options.ClientFactory = func(context.Context, localconfig.Mirror) (objectstore.Store, error) {
 			return nil, fmt.Errorf("mirror is deterministically unavailable")
 		}
 		if _, err := Commit(ctx, options); err == nil || !strings.Contains(err.Error(), "no individual mirror has a complete metadata chain") || !strings.Contains(err.Error(), "mirror is deterministically unavailable") {
@@ -1501,7 +1501,7 @@ func (transport *faultRoundTripper) RoundTrip(request *http.Request) (*http.Resp
 
 func withWriterTransport(harness *integrationHarness, wrap func(http.RoundTripper) http.RoundTripper) Options {
 	options := harness.options
-	options.ClientFactory = func(ctx context.Context, mirror localconfig.Mirror) (*objectstore.Client, error) {
+	options.ClientFactory = func(ctx context.Context, mirror localconfig.Mirror) (objectstore.Store, error) {
 		access, secret := "backup", "backup-secret"
 		httpClient := harness.http.Client()
 		clone := *httpClient
@@ -2254,7 +2254,7 @@ func testStateBlobs(t *testing.T, state repository.State) map[string][]byte {
 	return blobs
 }
 
-func testMirrorClient(t *testing.T, ctx context.Context, harness *integrationHarness) *objectstore.Client {
+func testMirrorClient(t *testing.T, ctx context.Context, harness *integrationHarness) objectstore.Store {
 	t.Helper()
 	config, err := localconfig.Load(harness.configPath)
 	if err != nil {
@@ -2272,7 +2272,7 @@ func cloneTestManifest(manifest format.MetadataManifest) format.MetadataManifest
 	return manifest
 }
 
-func uploadTestManifest(t *testing.T, ctx context.Context, writer *objectstore.Client, manifest format.MetadataManifest, objectID string) manifestRepresentation {
+func uploadTestManifest(t *testing.T, ctx context.Context, writer objectstore.Store, manifest format.MetadataManifest, objectID string) manifestRepresentation {
 	t.Helper()
 	data, err := manifest.MarshalText()
 	if err != nil {
@@ -2294,7 +2294,7 @@ func uploadTestManifest(t *testing.T, ctx context.Context, writer *objectstore.C
 	return manifestRepresentation{Key: key, Hash: identity.BLAKE2b, ObjectID: objectID, Manifest: manifest, Data: data}
 }
 
-func uploadTestMetadataBundle(t *testing.T, ctx context.Context, writer *objectstore.Client, repo *repository.Managed, repositoryUUID, base, tip string, sequence uint64, publicKey []byte, partSize uint64) manifestRepresentation {
+func uploadTestMetadataBundle(t *testing.T, ctx context.Context, writer objectstore.Store, repo *repository.Managed, repositoryUUID, base, tip string, sequence uint64, publicKey []byte, partSize uint64) manifestRepresentation {
 	t.Helper()
 	stage := t.TempDir()
 	built, err := metadatachain.Build(repo, repositoryUUID, base, tip, sequence, testkeys.Chains(publicKey), stage, partSize, ^uint64(0))

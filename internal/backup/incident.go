@@ -111,7 +111,7 @@ func (run *runtime) observeDataFailure(name, key string, failure error) (returnE
 	return run.quarantine(head.State.Format.RepositoryUUID, name)
 }
 
-func (run *runtime) auditData(ctx context.Context, client *objectstore.Client, name string, state repository.State) error {
+func (run *runtime) auditData(ctx context.Context, client objectstore.Store, name string, state repository.State) error {
 	return state.WalkPacks(format.DefaultLimits(), func(part format.PackEntry) error {
 		key, err := format.ObjectKey(part.PartHash, part.ObjectID)
 		if err != nil {
@@ -128,7 +128,7 @@ func (run *runtime) auditData(ctx context.Context, client *objectstore.Client, n
 	})
 }
 
-func (run *runtime) auditChain(ctx context.Context, client *objectstore.Client, name string, history *repository.History, target int, txn *transaction) error {
+func (run *runtime) auditChain(ctx context.Context, client objectstore.Store, name string, history *repository.History, target int, txn *transaction) error {
 	selected, err := history.CommitID(target)
 	if err != nil {
 		return incidentStateFailure(err)
@@ -269,7 +269,7 @@ func (run *runtime) revalidateCapture(ctx context.Context, txn *transaction, led
 	return run.saveTransaction(txn)
 }
 
-func (run *runtime) auditCapturedParts(ctx context.Context, client *objectstore.Client, txn *transaction) error {
+func (run *runtime) auditCapturedParts(ctx context.Context, client objectstore.Store, txn *transaction) error {
 	_, _, paths, err := run.captureSegmentInputPaths(txn, false)
 	if err != nil {
 		return err

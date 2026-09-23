@@ -23,6 +23,8 @@ type Mirror struct {
 	Canonical format.Mirror
 	Profile   string
 	CAFile    string
+	Directory string
+	Mount     string
 }
 
 type Config struct {
@@ -107,7 +109,26 @@ func parse(data []byte) (Config, error) {
 					return Config{}, fmt.Errorf("mirror %q has an invalid local binding", canonical.Name)
 				}
 			}
-			config.Mirrors = append(config.Mirrors, Mirror{Canonical: canonical, Profile: fields[6], CAFile: fields[7]})
+			binding := Mirror{Canonical: canonical, Profile: fields[6], CAFile: fields[7]}
+			if canonical.Kind == format.MirrorFilesystem {
+				binding.Profile, binding.CAFile = "", ""
+				binding.Directory, binding.Mount = fields[6], fields[7]
+				if !validAbsolutePath(binding.Directory) || binding.Directory == "/" || binding.Mount == "/" || binding.Mount != "-" && !validAbsolutePath(binding.Mount) {
+					return Config{}, fmt.Errorf("filesystem mirror requires a canonical absolute directory and mount path (or -)")
+				}
+				if binding.Mount != "-" && binding.Directory != binding.Mount && !strings.HasPrefix(binding.Directory, strings.TrimSuffix(binding.Mount, "/")+"/") {
+					return Config{}, fmt.Errorf("filesystem directory must be beneath its required mount")
+				}
+				for _, prior := range config.Mirrors {
+					if prior.Canonical.Kind != format.MirrorFilesystem {
+						continue
+					}
+					if prior.Canonical.S3URL == canonical.S3URL || prior.Directory == binding.Directory || strings.HasPrefix(prior.Directory, binding.Directory+"/") || strings.HasPrefix(binding.Directory, prior.Directory+"/") {
+						return Config{}, fmt.Errorf("filesystem mirrors must have distinct store identities and non-overlapping directories")
+					}
+				}
+			}
+			config.Mirrors = append(config.Mirrors, binding)
 		default:
 			return Config{}, fmt.Errorf("unknown trusted config row %q", fields[0])
 		}
@@ -136,4 +157,8 @@ func (config Config) RequireCanonicalMirrors(canonical []format.Mirror) error {
 		}
 	}
 	return nil
+}
+
+func validAbsolutePath(value string) bool {
+	return filepath.IsAbs(value) && filepath.Clean(value) == value && !strings.ContainsAny(value, "\x00\t\r\n")
 }

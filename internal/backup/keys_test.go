@@ -21,7 +21,7 @@ func TestEmptyRecipientsPermitLocalPlanningButNeverPublication(t *testing.T) {
 	h := newIntegrationHarness(t)
 	ctx := context.Background()
 	options := h.options
-	options.ClientFactory = func(context.Context, localconfig.Mirror) (*objectstore.Client, error) {
+	options.ClientFactory = func(context.Context, localconfig.Mirror) (objectstore.Store, error) {
 		t.Fatal("network client constructed with empty recipients")
 		return nil, nil
 	}

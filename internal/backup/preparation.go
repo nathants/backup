@@ -185,6 +185,9 @@ func (run *runtime) startGenesis(txn *transaction) error {
 	if err != nil {
 		return err
 	}
+	if err := run.requirePlanOutsideFilesystemMirrors(txn.Plan, config); err != nil {
+		return err
+	}
 	if err := repository.ValidateBranch(config.Branch); err != nil {
 		return err
 	}

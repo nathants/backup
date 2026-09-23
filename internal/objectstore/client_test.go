@@ -306,6 +306,7 @@ func TestObjectIdentityAndKeyValidation(t *testing.T) {
 func FuzzObjectIdentityAndLogicalKeys(f *testing.F) {
 	f.Add([]byte("payload"), "objects/hash/id")
 	f.Add([]byte{}, "../escape")
+	f.Add([]byte("payload"), "objects/"+HashBytes([]byte("payload")).BLAKE2b+"/"+strings.Repeat("a", 32))
 	f.Fuzz(func(t *testing.T, data []byte, key string) {
 		if len(data)+len(key) > 1<<20 {
 			t.Skip()
@@ -317,6 +318,7 @@ func FuzzObjectIdentityAndLogicalKeys(f *testing.F) {
 		client := &Client{prefix: "repository"}
 		_, _ = client.key(key)
 		_, _ = client.listPrefix(key)
+		_, _ = filesystemKeyHash(key)
 	})
 }
 

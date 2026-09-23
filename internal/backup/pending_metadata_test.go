@@ -280,7 +280,7 @@ func TestPendingMetadataSyncAndCompletionRequireOnePinnedMirror(t *testing.T) {
 		t.Fatal(err)
 	}
 	localFactory := h.options.ClientFactory
-	h.options.ClientFactory = func(ctx context.Context, pin localconfig.Mirror) (*objectstore.Client, error) {
+	h.options.ClientFactory = func(ctx context.Context, pin localconfig.Mirror) (objectstore.Store, error) {
 		if pin.Canonical.Name == "remote" {
 			return remote.options.ClientFactory(ctx, pin)
 		}

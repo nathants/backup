@@ -635,7 +635,7 @@ func TestSyncCopiesCompleteRevisionIdempotentlyAndNeverTrustsConflict(t *testing
 	if err := os.WriteFile(harness.configPath, []byte(config), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	actualFactory := func(ctx context.Context, mirror localconfig.Mirror) (*objectstore.Client, error) {
+	actualFactory := func(ctx context.Context, mirror localconfig.Mirror) (objectstore.Store, error) {
 		httpClient := harness.http.Client()
 		if mirror.Canonical.Name == "destination" {
 			httpClient = destinationHTTP.Client()
@@ -653,7 +653,7 @@ func TestSyncCopiesCompleteRevisionIdempotentlyAndNeverTrustsConflict(t *testing
 		t.Fatal(err)
 	}
 	offlineOptions := actualOptions
-	offlineOptions.ClientFactory = func(ctx context.Context, mirror localconfig.Mirror) (*objectstore.Client, error) {
+	offlineOptions.ClientFactory = func(ctx context.Context, mirror localconfig.Mirror) (objectstore.Store, error) {
 		if mirror.Canonical.Name == "destination" {
 			return nil, fmt.Errorf("destination intentionally unavailable")
 		}
@@ -841,7 +841,7 @@ func TestVerifyReportsEveryMirrorWhenThresholdPasses(t *testing.T) {
 		t.Fatal(err)
 	}
 	originalFactory := harness.options.ClientFactory
-	harness.options.ClientFactory = func(ctx context.Context, mirror localconfig.Mirror) (*objectstore.Client, error) {
+	harness.options.ClientFactory = func(ctx context.Context, mirror localconfig.Mirror) (objectstore.Store, error) {
 		if mirror.Canonical.Name == "offline" {
 			return nil, fmt.Errorf("offline mirror is unavailable")
 		}
@@ -882,7 +882,7 @@ func TestVerifyGetsOnlyBoundedPlaintextManifests(t *testing.T) {
 
 	observer := &observingTransport{base: harness.http.Client().Transport}
 	options := harness.options
-	options.ClientFactory = func(ctx context.Context, mirror localconfig.Mirror) (*objectstore.Client, error) {
+	options.ClientFactory = func(ctx context.Context, mirror localconfig.Mirror) (objectstore.Store, error) {
 		access, secret := "backup", "backup-secret"
 		httpClient := harness.http.Client()
 		clone := *httpClient
