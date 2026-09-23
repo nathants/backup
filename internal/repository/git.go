@@ -458,6 +458,7 @@ func sanitizedGitEnvironment() []string {
 	allowedExact := map[string]bool{
 		"HOME": true, "PATH": true, "TMPDIR": true, "SSH_AUTH_SOCK": true,
 		"AWS_ACCESS_KEY_ID": true, "AWS_SECRET_ACCESS_KEY": true, "AWS_SESSION_TOKEN": true,
+		"AWS_REGION": true, "AWS_DEFAULT_REGION": true,
 		"AWS_PROFILE": true, "AWS_DEFAULT_PROFILE": true, "AWS_SHARED_CREDENTIALS_FILE": true, "AWS_CONFIG_FILE": true,
 		"AWS_CA_BUNDLE": true, "SSL_CERT_FILE": true, "SSL_CERT_DIR": true,
 		"GIT_REMOTE_AWS_PUBLICKEY": true, "GIT_REMOTE_AWS_SECRETKEY": true, "GIT_REMOTE_AWS_SECRETKEY_FILE": true, "GIT_REMOTE_AWS_SECRETKEY_CMD": true,

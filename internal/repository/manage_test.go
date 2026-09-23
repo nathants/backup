@@ -154,9 +154,15 @@ func TestAcceptCommitUsesCompareAndSwap(t *testing.T) {
 }
 
 func TestPushUsesBranchSourceCompatibleWithGitRemoteHelpers(t *testing.T) {
+	t.Setenv("AWS_REGION", "us-east-1")
+	t.Setenv("AWS_DEFAULT_REGION", "us-west-2")
 	bin := t.TempDir()
 	helper := filepath.Join(bin, "git-remote-compat")
 	script := `#!/bin/sh
+if [ "$AWS_REGION" != us-east-1 ] || [ "$AWS_DEFAULT_REGION" != us-west-2 ]; then
+    printf 'AWS region environment was not preserved\n' >&2
+    exit 1
+fi
 while IFS= read -r line; do
     case "$line" in
         capabilities)
