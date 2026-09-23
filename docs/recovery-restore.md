@@ -19,7 +19,7 @@ identity rather than recover the old one.
    pins/profiles needed for the selected history. Canonical topology cannot
    authorize new credential destinations.
 3. For potentially malicious backups, apply the operator-owned aggregate resource
-   limits in [Restore safety](../NINA.md#restore-safety) to recovery, listing, Git
+   limits in [Restore safety](design.md#restore-safety) to recovery, listing, Git
    promotion/clone, and restore, including descendants, `TMPDIR`, and destination
    storage. A private directory alone supplies no resource containment.
 4. Obtain a successful recovery using the existing commands, for example
@@ -164,4 +164,4 @@ replacement checkout/configuration, and freshly verify the mirrors to rebuild th
 ledger. Do not force an older selected tip over an established primary. A
 historical rescue selection is not automatically the right tip for continued
 production. Keep provider administration separate and follow the deployment and
-single-writer requirements in [NINA.md](../NINA.md).
+single-writer requirements in [Design and operations](design.md).

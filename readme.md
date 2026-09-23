@@ -4,7 +4,8 @@ Encrypted, deduplicated Linux backups to append-only object storage. One Go bina
 provides the client and a small S3-compatible server.
 
 - Git stores readable snapshot metadata and history.
-- Encrypted packs go to one or more mirrors: `backup server`, AWS S3, or Cloudflare R2.
+- Encrypted packs go to one or more mirrors: native filesystem storage, `backup server`,
+  AWS S3, or Cloudflare R2.
 - Each successful revision is complete on at least one individual mirror, including
   enough metadata to recover without the primary Git service.
 - Restore verifies selected content before publishing files. Repair relocates healthy
@@ -62,6 +63,10 @@ branch	main
 mirror	local	backup-server	s3://backup-bucket/repository	https://backup.example:8443	us-east-1	backup-profile	/etc/backup/ca.pem
 ```
 
+For a native ext4 destination, follow [filesystem mirrors](docs/filesystem-mirrors.md)
+for explicit `mirror-init`, store identity, mount binding, and configuration. It
+needs no server or object-store credential; the Git primary is still mandatory.
+
 Public recipient chains live in `.backup/.publickeys`. New encryption uses each
 recipient's newest generation; retain historical private generations for old data.
 See [key management](docs/key-management.md) for generation, rotation, and on-demand
@@ -82,6 +87,10 @@ can mask a missing genuine edge in this audit, but cannot destroy an existing he
 immutable chain. Retain external revision anchors and periodically exercise actual
 metadata recovery, which decrypts/imports bundles and rejects false representations.
 
+Native filesystem verification reads and hashes local ciphertext. `verify --full`
+also decrypts and verifies every catalog pack and reconstructs the selected metadata
+tip; it requires eligible secrets and counts only filesystem mirrors.
+
 Pending publication is stricter: verification and finalization require the exact
 metadata representation recorded in the transaction. `repair metadata` can validate,
 publish, and atomically adopt a replacement for that pending edge. A completion-ledger
@@ -97,6 +106,8 @@ restore reconstructs files.
 Each repository has one authoritative writer. Mirrors are append-only and grow
 without garbage collection. Cloud deployments must pass their immutability contracts
 before production use; successful uploads alone do not establish ransomware resistance.
+Filesystem mirrors are an explicit exception: backup never replaces published objects,
+but a compromised user with direct filesystem write access can overwrite or delete them.
 
 This is a content archive, not a full system image: regular-file content, permissions,
 modification times, and in-root symlink topology are preserved. Ownership, ACLs,
@@ -112,6 +123,6 @@ make check  # lint, coverage, race detector, vet
 make fuzz
 ```
 
-See [design and operations](NINA.md) for the storage format, invariants, deployment
+See [design and operations](docs/design.md) for the storage format, invariants, deployment
 contracts, and production acceptance gates. The separate
 [Git-primary contract](docs/git-primary-contract.md) tests helper interoperability.
