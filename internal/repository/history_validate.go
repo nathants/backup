@@ -185,9 +185,11 @@ func (validator Validator) ValidateHistory(revision string) (_ *History, returnE
 	}
 	idsOpen = false
 	keep = true
-	if err := writeValidationCache(validator.CachePath, history); err != nil {
-		_ = history.Close()
-		return nil, fmt.Errorf("write validated-ancestor cache: %w", err)
+	if !validator.CacheReadOnly {
+		if err := writeValidationCache(validator.CachePath, history); err != nil {
+			_ = history.Close()
+			return nil, fmt.Errorf("write validated-ancestor cache: %w", err)
+		}
 	}
 	return history, nil
 }

@@ -132,6 +132,96 @@ func TestValidatedHistoryReuse(t *testing.T) {
 		}
 	})
 
+	t.Run("diff reads but never publishes cache", func(t *testing.T) {
+		if err := os.WriteFile(filepath.Join(h.root, "diff-only-file"), []byte("planned difference"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Add(ctx, h.options, false); err != nil {
+			t.Fatal(err)
+		}
+		cachePath := filepath.Join(h.options.statePath(), validatedAncestorFile)
+		validCache, err := os.ReadFile(cachePath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			if err := os.WriteFile(cachePath, validCache, 0o600); err != nil {
+				t.Error(err)
+			}
+		})
+		for _, kind := range []string{"valid", "corrupt", "missing"} {
+			t.Run(kind, func(t *testing.T) {
+				var before os.FileInfo
+				cacheBytes := validCache
+				if kind == "missing" {
+					if err := os.Remove(cachePath); err != nil {
+						t.Fatal(err)
+					}
+				} else {
+					if kind == "corrupt" {
+						cacheBytes = []byte("{}\n")
+					}
+					if err := os.WriteFile(cachePath, cacheBytes, 0o600); err != nil {
+						t.Fatal(err)
+					}
+					before, err = os.Stat(cachePath)
+					if err != nil {
+						t.Fatal(err)
+					}
+				}
+				resetGitTrace(t, trace)
+				if changes, err := DiffCandidate(h.options, nil); err != nil || changes == 0 {
+					t.Fatalf("diff lost planned changes: %d %v", changes, err)
+				}
+				wantTrees := len(ids)
+				if kind == "valid" {
+					wantTrees = 1
+				}
+				if trees := strings.Count(readGitTrace(t, trace), "\tls-tree\t"); trees != wantTrees {
+					t.Errorf("diff loaded %d canonical trees, want %d", trees, wantTrees)
+				}
+				after, err := os.Stat(cachePath)
+				if kind == "missing" {
+					if !os.IsNotExist(err) {
+						t.Fatalf("diff published a missing cache: %v", err)
+					}
+				} else {
+					if err != nil || !os.SameFile(before, after) || before.ModTime() != after.ModTime() {
+						t.Fatalf("diff replaced or modified its cache: %v", err)
+					}
+					if data, err := os.ReadFile(cachePath); err != nil || string(data) != string(cacheBytes) {
+						t.Fatalf("diff changed cache bytes: %v", err)
+					}
+				}
+			})
+		}
+	})
+
+	t.Run("alternate spool cleanup reuses validated ancestor", func(t *testing.T) {
+		options := h.options
+		options.SpoolDirectory = t.TempDir()
+		options.failurePoint = func(point string) error {
+			if point == "commit-capture-started" {
+				return fmt.Errorf("stop before capture")
+			}
+			return nil
+		}
+		if _, err := Commit(ctx, options); err == nil || !strings.Contains(err.Error(), "checkpoint commit-capture-started") {
+			t.Fatalf("failed to prepare interrupted capture: %v", err)
+		}
+		options.failurePoint = nil
+		resetGitTrace(t, trace)
+		if err := Reset(options); err != nil {
+			t.Fatal(err)
+		}
+		if trees := strings.Count(readGitTrace(t, trace), "\tls-tree\t"); trees != 1 {
+			t.Errorf("spool cleanup loaded %d canonical trees, want only the validated anchor", trees)
+		}
+		if entries, err := os.ReadDir(options.SpoolDirectory); err != nil || len(entries) != 0 {
+			t.Fatalf("reset left its alternate spool: %v %v", entries, err)
+		}
+	})
+
 	t.Run("resume uses validated ancestor", func(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(h.root, "new-file"), []byte("pending snapshot"), 0o600); err != nil {
 			t.Fatal(err)

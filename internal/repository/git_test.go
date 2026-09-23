@@ -104,8 +104,11 @@ func TestValidatorCacheFallsBackSafelyAndValidatesDescendants(t *testing.T) {
 	}
 	runGitTest(t, repo, "add", "--", "FORMAT")
 	runGitTest(t, repo, "-c", "user.name=backup", "-c", "user.email=backup@invalid", "commit", "-m", "invalid descendant")
-	if _, err := validator.ValidateHistory("HEAD"); err == nil {
-		t.Fatal("cached validation accepted an invalid descendant")
+	for _, readOnly := range []bool{false, true} {
+		validator.CacheReadOnly = readOnly
+		if _, err := validator.ValidateHistory("HEAD"); err == nil {
+			t.Fatalf("cached validation accepted an invalid descendant (read-only=%v)", readOnly)
+		}
 	}
 }
 

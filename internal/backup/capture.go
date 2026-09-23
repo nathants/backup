@@ -398,7 +398,7 @@ func (run *runtime) cleanupInterruptedPlaintextSpool(txn *transaction) error {
 	if run.options.SpoolDirectory == "" || txn == nil || txn.Capture == nil || txn.BaseCommit == "" {
 		return nil
 	}
-	history, err := (repository.Validator{Repo: run.repo.Directory, Limits: format.DefaultLimits()}).ValidateHistory(txn.BaseCommit)
+	history, err := run.historyValidator().ValidateHistory(txn.BaseCommit)
 	if err != nil {
 		return err
 	}

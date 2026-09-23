@@ -519,7 +519,9 @@ func DiffCandidate(options Options, visit func(Diff) error) (uint64, error) {
 	if run.preparation != nil && (txn.Kind == "initial" || txn.Kind == "genesis") {
 		return run.diffInitial(txn, visit)
 	}
-	history, err := (repository.Validator{Repo: run.repo.Directory, Limits: format.DefaultLimits()}).ValidateHistory(txn.BaseCommit)
+	validator := run.historyValidator()
+	validator.CacheReadOnly = true
+	history, err := validator.ValidateHistory(txn.BaseCommit)
 	if err != nil {
 		return 0, err
 	}

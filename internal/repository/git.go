@@ -30,9 +30,10 @@ type ValidatedCommit struct {
 }
 
 type Validator struct {
-	Repo      string
-	Limits    format.Limits
-	CachePath string
+	Repo          string
+	Limits        format.Limits
+	CachePath     string
+	CacheReadOnly bool // Consume a validated ancestor without publishing a replacement cache.
 }
 
 func (validator Validator) resolveCommitID(revision string) (string, error) {

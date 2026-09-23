@@ -147,6 +147,10 @@ func TestHistoryResolveRevisionRechecksSelectedObjects(t *testing.T) {
 			if _, err := history.ResolveRevision(ids[position]); err == nil {
 				t.Fatal("selected corrupt canonical object was accepted")
 			}
+			validator.CacheReadOnly = true
+			if _, err := validator.ValidateHistory(ids[position]); err == nil {
+				t.Fatal("read-only validation let a same/newer cache hide the corrupt selected state")
+			}
 		})
 	}
 }
