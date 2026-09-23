@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"path/filepath"
 
 	"backup/internal/format"
@@ -119,9 +120,11 @@ func (run *runtime) loadCandidateState(txn *transaction) (repository.State, erro
 	if txn == nil || len(txn.CandidateFiles) != len(repository.RequiredBlobNames) {
 		return repository.State{}, fmt.Errorf("transaction has no complete file-backed candidate")
 	}
-	if run.candidateState != nil && equalHashes(txn.CandidateHashes, run.candidateState.BlobHashes) {
+	if run.candidateState != nil && equalHashes(txn.CandidateHashes, run.candidateState.BlobHashes) && maps.Equal(txn.CandidateFiles, run.candidateStateFiles) {
 		return *run.candidateState, nil
 	}
+	run.candidateState = nil
+	run.candidateStateFiles = nil
 	files := make(map[string]repository.BlobFile, len(repository.RequiredBlobNames))
 	for _, name := range repository.RequiredBlobNames {
 		ref, ok := txn.CandidateFiles[name]
@@ -139,6 +142,7 @@ func (run *runtime) loadCandidateState(txn *transaction) (repository.State, erro
 		return repository.State{}, err
 	}
 	run.candidateState = &state
+	run.candidateStateFiles = maps.Clone(txn.CandidateFiles)
 	return state, nil
 }
 

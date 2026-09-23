@@ -7,12 +7,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"math"
 	"os"
 	"path/filepath"
 
 	"backup/internal/extsort"
 	"backup/internal/format"
+	"backup/internal/repository"
 )
 
 const maximumDataPartRecordBytes = 64 << 10
@@ -227,6 +229,38 @@ func (run *runtime) rewriteDataParts(txn *transaction, position uint64, replacem
 	}
 	txn.DataPartsFile, txn.DataPartCount = ref, count
 	return run.checkpoint("repair-descriptors-staged")
+}
+
+// Retain only the current successful descriptor/catalog validation under the
+// repository lock. Acknowledgement-only saves still validate control progress,
+// but need not reread and sort the same immutable inputs for every part/mirror.
+type repairValidation struct {
+	descriptors   stagedFileRef
+	count         uint64
+	packs         stagedFileRef
+	metadataPaths map[string]bool
+}
+
+func (run *runtime) validateRepairCandidate(txn *transaction, state repository.State, metadataPaths map[string]bool) error {
+	if txn.DataPartCount == 0 {
+		run.repairValidation = nil
+		return nil
+	}
+	cached := run.repairValidation
+	if cached != nil && cached.descriptors == txn.DataPartsFile && cached.count == txn.DataPartCount && cached.packs == txn.CandidateFiles["packs.tsv"] && maps.Equal(cached.metadataPaths, metadataPaths) {
+		return nil
+	}
+	run.repairValidation = nil
+	if err := run.validateDataPartCatalog(txn, metadataPaths, func(visit func(format.PackEntry) error) error {
+		return state.WalkPacks(format.DefaultLimits(), visit)
+	}, false); err != nil {
+		return err
+	}
+	run.repairValidation = &repairValidation{
+		descriptors: txn.DataPartsFile, count: txn.DataPartCount,
+		packs: txn.CandidateFiles["packs.tsv"], metadataPaths: maps.Clone(metadataPaths),
+	}
+	return nil
 }
 
 // Sorted temporary views bound duplicate detection and catalog matching without

@@ -33,6 +33,8 @@ type runtime struct {
 	lock                       *os.File
 	clients                    map[string]objectstore.Store
 	candidateState             *repository.State
+	candidateStateFiles        map[string]stagedFileRef
+	repairValidation           *repairValidation
 	capturedCandidateValidated bool
 	preparation                *preparation
 }
@@ -173,6 +175,10 @@ func (run *runtime) checkpoint(name string) error {
 }
 
 func (run *runtime) loadTransaction() (*transaction, error) {
+	// Validation reuse is limited to unchanged inputs between loads under the lock.
+	run.candidateState = nil
+	run.candidateStateFiles = nil
+	run.repairValidation = nil
 	var txn transaction
 	if err := run.store.Read(transactionFilename, &txn); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -230,8 +236,10 @@ func (run *runtime) validateTransaction(txn transaction, candidate *repository.S
 	if txn.Version != stateVersion {
 		return fmt.Errorf("unsupported state version %d", txn.Version)
 	}
-	if err := run.walkDataParts(&txn, nil); err != nil {
-		return err
+	if txn.DataPartCount == 0 {
+		if err := run.walkDataParts(&txn, nil); err != nil {
+			return err
+		}
 	}
 	if txn.Kind != "initial" && txn.Kind != "genesis" && txn.Kind != "ordinary" && txn.Kind != "repair" {
 		return fmt.Errorf("invalid transaction kind %q", txn.Kind)
@@ -337,15 +345,10 @@ func (run *runtime) validateTransaction(txn transaction, candidate *repository.S
 		}
 		seenPaths[txn.Metadata.ManifestRelativePath] = true
 	}
-	if err := run.validateDataPartCatalog(&txn, seenPaths, func(visit func(format.PackEntry) error) error {
-		return state.WalkPacks(format.DefaultLimits(), visit)
-	}, false); err != nil {
-		return err
-	}
 	if err := validateTransactionProgress(txn, state); err != nil {
 		return err
 	}
-	return nil
+	return run.validateRepairCandidate(&txn, state, seenPaths)
 }
 
 func validateTransactionProgress(txn transaction, state repository.State) error {
@@ -576,6 +579,8 @@ func (run *runtime) saveLedger(ledger completionLedger) error {
 
 func (run *runtime) clearTransactionFiles() error {
 	run.candidateState = nil
+	run.candidateStateFiles = nil
+	run.repairValidation = nil
 	// Remove the control record first. After that durable boundary, leftover
 	// private files are unreferenced and the next add/init can clean them. This
 	// ordering prevents a crash from leaving a live transaction whose required

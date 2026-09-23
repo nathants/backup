@@ -116,9 +116,9 @@ func TestRepairDescriptorHandoffPreservesOldOrNewCandidate(t *testing.T) {
 }
 
 func TestRepairDescriptorValidationCannotReplaceUsableControl(t *testing.T) {
-	for _, defect := range []string{"duplicate-part", "duplicate-path", "catalog-mismatch", "oversized-record", "wrong-count", "wrong-reference", "capacity"} {
+	h, _ := stageRepairFixture(t, 2)
+	for _, defect := range []string{"duplicate-part", "duplicate-path", "catalog-mismatch", "oversized-record", "wrong-count", "wrong-reference", "candidate-path", "candidate-hash", "candidate-size", "candidate-content", "cursor", "completion", "capacity"} {
 		t.Run(defect, func(t *testing.T) {
-			h, _ := stageRepairFixture(t, 2)
 			run, err := openRuntime(h.options, true)
 			if err != nil {
 				t.Fatal(err)
@@ -141,35 +141,76 @@ func TestRepairDescriptorValidationCannotReplaceUsableControl(t *testing.T) {
 				t.Fatalf("fixture descriptors: %d %v", len(parts), err)
 			}
 			replacement := parts[1]
+			rewrite := false
 			switch defect {
 			case "duplicate-part":
 				replacement.Entry = parts[0].Entry
+				rewrite = true
 			case "duplicate-path":
 				replacement.RelativePath = parts[0].RelativePath
+				rewrite = true
 			case "catalog-mismatch":
 				replacement.Entry.PartSize++
+				rewrite = true
 			case "oversized-record":
 				replacement.RelativePath = strings.Repeat("x", maximumDataPartRecordBytes)
+				rewrite = true
 			case "wrong-count":
 				txn.DataPartCount++
 			case "wrong-reference":
 				txn.DataPartsFile.Size++
+			case "candidate-path", "candidate-hash", "candidate-size":
+				ref := txn.CandidateFiles["packs.tsv"]
+				switch defect {
+				case "candidate-path":
+					ref.RelativePath = "candidate/absent-packs"
+				case "candidate-hash":
+					ref.BLAKE2b = strings.Repeat("0", 128)
+				case "candidate-size":
+					ref.Size++
+				}
+				txn.CandidateFiles["packs.tsv"] = ref
+			case "candidate-content":
+				state, err := run.loadCandidateState(txn)
+				if err != nil {
+					t.Fatal(err)
+				}
+				packs := testPackEntries(t, state)
+				packs[0].ObjectID = strings.Repeat("0", 32)
+				data, err := format.MarshalPacks(packs)
+				if err != nil {
+					t.Fatal(err)
+				}
+				ref, err := run.ensureContentAddressedStagedBytes("candidate/changed-packs-", "", data, stagedFileRef{})
+				if err != nil {
+					t.Fatal(err)
+				}
+				txn.CandidateFiles["packs.tsv"] = ref
+				txn.CandidateHashes["packs.tsv"] = ref.BLAKE2b
+			case "cursor":
+				txn.progress("local").DataPartCursor = txn.DataPartCount + 1
+			case "completion":
+				txn.progress("local").DataComplete = true
 			case "capacity":
 				run.options.SpaceReserveBytes = ^uint64(0)
+				rewrite = true
 			}
-			if defect == "wrong-count" || defect == "wrong-reference" {
-				err = run.saveTransaction(txn)
-			} else {
+			if rewrite {
 				err = run.rewriteDataParts(txn, 1, replacement)
-				if defect != "oversized-record" && defect != "capacity" {
-					if err != nil {
-						t.Fatalf("could not construct the invalid candidate: %v", err)
-					}
-					err = run.saveTransaction(txn)
+				if err != nil && defect != "oversized-record" && defect != "capacity" {
+					t.Fatalf("could not construct the invalid candidate: %v", err)
 				}
 			}
-			if err == nil {
-				t.Fatal("invalid repair progress was accepted")
+			if defect == "oversized-record" || defect == "capacity" {
+				if err == nil {
+					t.Fatal("invalid descriptor rewrite was accepted")
+				}
+			} else {
+				for range 2 {
+					if err := run.saveTransaction(txn); err == nil {
+						t.Fatal("invalid repair progress was accepted")
+					}
+				}
 			}
 			run.options.SpaceReserveBytes = h.options.SpaceReserveBytes
 			preserved, err := os.ReadFile(controlPath)
