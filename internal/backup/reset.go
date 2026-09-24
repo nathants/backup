@@ -108,6 +108,12 @@ func (run *runtime) resetInitialGenesis(txn *transaction) error {
 	if err := run.checkpoint("initial-reset-head-cleared"); err != nil {
 		return err
 	}
+	if err := run.repo.ResetIndex(""); err != nil {
+		return err
+	}
+	if err := run.checkpoint("initial-reset-index-cleared"); err != nil {
+		return err
+	}
 	return run.clearTransactionFiles()
 }
 

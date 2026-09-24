@@ -98,7 +98,6 @@ func initialize(directory, remote, branch string) (*Managed, error) {
 		{"config", "core.filemode", "true"},
 		{"config", "core.symlinks", "true"},
 		{"config", "advice.detachedHead", "false"},
-		{"config", "status.showUntrackedFiles", "no"},
 	}
 	if remote != "" {
 		settings = append(settings, []string{"remote", "add", "origin", remote})
@@ -392,9 +391,9 @@ func (repo *Managed) materializationCheckpoint(name string) error {
 	return nil
 }
 
-// ApplyCommit durably treats the seven worktree blobs and branch ref as one
-// recoverable state transition. A command can observe a mixed worktree only
-// after RecoverMaterialization has completed the recorded intent.
+// ApplyCommit durably treats the seven worktree blobs, branch ref, and derived
+// Git index as one recoverable state transition. RecoverMaterialization must
+// complete the recorded intent before another operation inspects the checkout.
 func (repo *Managed) ApplyCommit(target, expected string) error {
 	if repo == nil || repo.Branch == "" || target != "" && !isGitOID(target) || expected != "" && !isGitOID(expected) {
 		return fmt.Errorf("invalid metadata materialization transition")
@@ -517,6 +516,12 @@ func (repo *Managed) RecoverMaterialization() error {
 	if err := repo.materializationCheckpoint("materialization-ref-updated"); err != nil {
 		return err
 	}
+	if err := repo.ResetIndex(intent.target); err != nil {
+		return err
+	}
+	if err := repo.materializationCheckpoint("materialization-index-updated"); err != nil {
+		return err
+	}
 	if err := os.Remove(repo.materializationIntentPath()); err != nil {
 		return err
 	}
@@ -524,6 +529,25 @@ func (repo *Managed) RecoverMaterialization() error {
 		return err
 	}
 	return repo.materializationCheckpoint("materialization-intent-cleared")
+}
+
+// ResetIndex replaces Git's staging view with an already validated commit, or
+// empties it for unborn preparation. It never reads or changes worktree files.
+// Callers hold the operation lock and retain recovery state until it succeeds.
+func (repo *Managed) ResetIndex(commit string) error {
+	if repo == nil || commit != "" && !isGitOID(commit) {
+		return fmt.Errorf("invalid metadata index target")
+	}
+	arguments := []string{"-c", "core.fsync=objects,reference,index", "read-tree"}
+	if commit == "" {
+		arguments = append(arguments, "--empty")
+	} else {
+		arguments = append(arguments, "--reset", commit)
+	}
+	if _, err := repo.run(nil, 1024, arguments...); err != nil {
+		return fmt.Errorf("reset metadata Git index: %w", err)
+	}
+	return syncDirectory(filepath.Join(repo.Directory, ".git"))
 }
 
 func atomicWriteReader(path string, reader io.Reader, mode os.FileMode) error {

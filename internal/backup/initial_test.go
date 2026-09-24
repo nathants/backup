@@ -78,9 +78,11 @@ func TestInitialLocalWorkflowWithoutRemotes(t *testing.T) {
 	if err != nil || !isCommitID(committed.CommitID) || len(committed.CompleteMirrors) != 1 {
 		t.Fatalf("first commit: %+v %v", committed, err)
 	}
+	assertCleanMetadataGitStatus(t, h.options)
 	if _, err := Verify(ctx, h.options, 1, "HEAD"); err != nil {
 		t.Fatal(err)
 	}
+	assertCleanMetadataGitStatus(t, h.options)
 	var paths []string
 	if _, err := Find(h.options, ".*", "HEAD", nil, func(e format.IndexEntry) error { paths = append(paths, e.Path); return nil }); err != nil {
 		t.Fatal(err)
@@ -234,6 +236,9 @@ func TestInitialResetPreservesPreparation(t *testing.T) {
 			if err := Reset(h.options); err != nil {
 				t.Fatal(err)
 			}
+			if indexed := runGit(t, "-C", h.options.repositoryPath(), "ls-files"); indexed != "" {
+				t.Fatalf("reset left staged files in unborn preparation: %q", indexed)
+			}
 			after, err := os.ReadFile(formatPath)
 			if err != nil || !bytes.Equal(identity, after) {
 				t.Fatalf("reset lost identity: %v", err)
@@ -247,6 +252,56 @@ func TestInitialResetPreservesPreparation(t *testing.T) {
 			if _, err := Commit(ctx, h.options); err != nil {
 				t.Fatal(err)
 			}
+		})
+	}
+}
+
+func TestInitialResetResumesIndexCleanup(t *testing.T) {
+	for _, point := range []string{"initial-reset-head-cleared", "initial-reset-index-cleared"} {
+		t.Run(point, func(t *testing.T) {
+			h := newIntegrationHarness(t)
+			ctx := context.Background()
+			if _, err := initWithKeys(ctx, h.options, h.publicKey); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Add(ctx, h.options, false); err != nil {
+				t.Fatal(err)
+			}
+			stopAt := "local-commit-accepted"
+			opts := h.options
+			opts.failurePoint = func(observed string) error {
+				if observed == stopAt {
+					return fmt.Errorf("interrupted %s", observed)
+				}
+				return nil
+			}
+			if _, err := Commit(ctx, opts); err == nil || !strings.Contains(err.Error(), stopAt) {
+				t.Fatalf("did not stop after accepting genesis: %v", err)
+			}
+			before := snapshotTestMetadata(t, h.options.repositoryPath())
+			stopAt = point
+			if err := Reset(opts); err == nil || !strings.Contains(err.Error(), point) {
+				t.Fatalf("did not interrupt reset at %s: %v", point, err)
+			}
+			if err := Reset(h.options); err != nil {
+				t.Fatal(err)
+			}
+			if indexed := runGit(t, "-C", h.options.repositoryPath(), "ls-files"); indexed != "" {
+				t.Fatalf("resumed reset left indexed files: %q", indexed)
+			}
+			after := snapshotTestMetadata(t, h.options.repositoryPath())
+			for name, prior := range before {
+				if after[name] != prior {
+					t.Fatalf("reset changed draft metadata %q", name)
+				}
+			}
+			if _, err := Add(ctx, h.options, false); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Commit(ctx, h.options); err != nil {
+				t.Fatal(err)
+			}
+			assertCleanMetadataGitStatus(t, h.options)
 		})
 	}
 }
@@ -419,6 +474,13 @@ func TestInitialRemoteBindingIsPinnedAcrossRestart(t *testing.T) {
 	}
 	if got := strings.TrimSpace(runGit(t, "--git-dir", h.bare, "rev-parse", "refs/heads/archive/home")); got != result.CommitID {
 		t.Fatalf("configured branch tip: %s", got)
+	}
+}
+
+func assertCleanMetadataGitStatus(t *testing.T, options Options) {
+	t.Helper()
+	if status := runGit(t, "--no-optional-locks", "-C", options.repositoryPath(), "status", "--porcelain=v1", "--untracked-files=all"); status != "" {
+		t.Fatalf("metadata checkout is not clean in Git: %q", status)
 	}
 }
 

@@ -181,6 +181,7 @@ func TestFindRefusesDirtyFastForwardThenAcceptsCleanRetry(t *testing.T) {
 	if after, err := os.ReadFile(ignorePath); err != nil || string(after) != "^\\./remote-only$\n" {
 		t.Fatalf("clean retry did not materialize remote ignore: %q %v", after, err)
 	}
+	assertCleanMetadataGitStatus(t, h.options)
 }
 
 func newFetchTestHarness(t *testing.T) *integrationHarness {

@@ -1015,6 +1015,7 @@ func TestTransactionResumesAfterEveryDurableCheckpoint(t *testing.T) {
 		"materialization-blob-.publickeys",
 		"materialization-blob-mirrors.tsv",
 		"materialization-ref-updated",
+		"materialization-index-updated",
 		"materialization-intent-cleared",
 		"local-commit-accepted",
 		"metadata-staged",
@@ -1095,6 +1096,7 @@ func TestTransactionResumesAfterEveryDurableCheckpoint(t *testing.T) {
 			if err != nil || verified.Passed != 1 {
 				t.Fatalf("verify after %s: %#v %v", point, verified, err)
 			}
+			assertCleanMetadataGitStatus(t, harness.options)
 		})
 	}
 }
@@ -2164,6 +2166,7 @@ func TestResetRepairsWorktreeAfterCrashFollowingBranchRollback(t *testing.T) {
 	if !status.Clean {
 		t.Fatalf("reset left a mixed candidate worktree: %#v", status.Paths)
 	}
+	assertCleanMetadataGitStatus(t, harness.options)
 }
 
 func firstTestPackPart(t *testing.T, state repository.State) format.PackEntry {
