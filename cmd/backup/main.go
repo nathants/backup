@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log"
 	"log/slog"
 	"net"
 	"net/http"
@@ -58,10 +59,7 @@ common environment:
 `
 
 func main() {
-	if err := run(context.Background(), os.Args[1:], os.Stdout, os.Stderr); err != nil {
-		fmt.Fprintln(os.Stderr, "backup:", escapeTerminal(err.Error()))
-		os.Exit(1)
-	}
+	os.Exit(execute(context.Background(), os.Args[1:], os.Stdout, os.Stderr))
 }
 
 func run(ctx context.Context, arguments []string, stdout, stderr io.Writer) error {
@@ -556,6 +554,7 @@ read/list/create credential; no overwrite or delete API is exposed.`); err != ni
 	defer func() { _ = listener.Close() }()
 	server := &http.Server{
 		Handler:           backend,
+		ErrorLog:          log.New(stderr, "", log.LstdFlags),
 		TLSConfig:         &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{tlsCertificate}},
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       24 * time.Hour,

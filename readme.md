@@ -42,6 +42,14 @@ of forward progress or durable completion. Progress is best-effort: a failed out
 sink disables it without changing the operation's result. Errors writing mandatory
 warnings or final results still fail the command. Stdout retains the command results.
 
+Every command also records its stdout/stderr in private JSON Lines files under
+`~/.backup-logs/`, labeled with time, run ID, command, and output stream.
+Logs rotate daily; files last written more than 14 days ago are removed on the
+next invocation or daily rollover. There is no byte cap. Disk-logging failures
+warn on stderr without changing the command's result. Logs contain paths and
+results, but no additional argument/environment dump; treat them as private
+local diagnostics, not a durable audit trail.
+
 `add` fixes the selected paths; `commit` captures their current content. Git ignore
 rules apply even outside repositories. Incomplete Git metadata produces a warning
 and pattern-only matching, without tracked-file exceptions. Non-ignored untracked

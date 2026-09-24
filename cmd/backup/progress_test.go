@@ -16,6 +16,8 @@ func TestProgressSurvivesClosedStderrPipe(t *testing.T) {
 		main()
 		os.Exit(0)
 	}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
 	root := t.TempDir()
 	if err := run(context.Background(), []string{"init", "--root", root}, io.Discard, io.Discard); err != nil {
 		t.Fatal(err)
@@ -41,5 +43,9 @@ func TestProgressSurvivesClosedStderrPipe(t *testing.T) {
 	output, err := command.Output()
 	if err != nil || !strings.Contains(string(output), "entries\t1\n") {
 		t.Fatalf("closed progress pipe hid the CLI result: output=%q err=%v", output, err)
+	}
+	records := readDebugLogs(t, home)
+	if recordedStream(records, "stdout") != string(output) || !strings.Contains(recordedStream(records, "stderr"), "progress: add:") {
+		t.Fatalf("closed progress pipe lost disk diagnostics: %+v", records)
 	}
 }
