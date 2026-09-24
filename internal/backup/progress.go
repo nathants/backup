@@ -12,20 +12,28 @@ import (
 
 const progressInterval = 5 * time.Second
 
+// progressWriter lets a multi-sink writer disable failed progress destinations
+// independently. It returns an error only when no progress destination remains
+// usable; its ordinary Write method must still report mandatory output errors.
+type progressWriter interface {
+	WriteProgress([]byte) (int, error)
+}
+
 // operationProgress is best-effort diagnostics, never evidence of durability or
 // completion. The timer reads only this small snapshot, not live operation state.
 // All stderr writes share its lock so warnings cannot race the heartbeat.
 type operationProgress struct {
-	mu      sync.Mutex
-	output  io.Writer
-	owned   *os.File
-	command string
-	phase   string
-	detail  string
-	started time.Time
-	failed  bool
-	stop    chan struct{}
-	done    chan struct{}
+	mu            sync.Mutex
+	output        io.Writer
+	writeProgress func([]byte) (int, error)
+	owned         *os.File
+	command       string
+	phase         string
+	detail        string
+	started       time.Time
+	failed        bool
+	stop          chan struct{}
+	done          chan struct{}
 }
 
 func startProgress(options *Options, command string) func() {
@@ -40,6 +48,10 @@ func startProgress(options *Options, command string) func() {
 
 func newOperationProgress(output io.Writer, command string, interval time.Duration) *operationProgress {
 	p := &operationProgress{output: output, command: command, started: time.Now(), stop: make(chan struct{}), done: make(chan struct{})}
+	p.writeProgress = output.Write
+	if writer, ok := output.(progressWriter); ok {
+		p.writeProgress = writer.WriteProgress
+	}
 	// Go terminates the process on EPIPE from fd 1 or 2. A private duplicate
 	// turns optional progress writes into ordinary errors without changing the
 	// process-wide SIGPIPE policy or mandatory diagnostic writes.
@@ -49,6 +61,7 @@ func newOperationProgress(output io.Writer, command string, interval time.Durati
 			p.failed = true
 		} else {
 			p.owned = os.NewFile(uintptr(fd), "backup-progress")
+			p.writeProgress = p.owned.Write
 		}
 	}
 	p.phasef("opening configuration and local state")
@@ -87,11 +100,7 @@ func (p *operationProgress) writeLocked(message string) {
 		return
 	}
 	line := fmt.Sprintf("progress: %s: %s; elapsed=%s\n", p.command, message, time.Since(p.started).Truncate(time.Second))
-	output := p.output
-	if p.owned != nil {
-		output = p.owned
-	}
-	n, err := io.WriteString(output, line)
+	n, err := p.writeProgress([]byte(line))
 	p.failed = err != nil || n != len(line)
 }
 

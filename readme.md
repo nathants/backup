@@ -38,9 +38,10 @@ cat /private/keys/alice.public > /data/.backup/.publickeys
 `add`, `replan`, `commit`, `verify`, `restore`, `sync`, `recover` (including
 `--list`), and both `repair` commands report phases and available counters on stderr.
 Long waits emit a roughly five-second heartbeat; "still running" is not evidence
-of forward progress or durable completion. Progress is best-effort: a failed output
-sink disables it without changing the operation's result. Errors writing mandatory
-warnings or final results still fail the command. Stdout retains the command results.
+of forward progress or durable completion. Progress is best-effort: a failed sink
+is disabled without changing the operation's result, and stderr and disk logging
+fail independently. Errors writing mandatory warnings or final results still fail
+the command. Stdout retains the command results.
 
 Every command also records its stdout/stderr in private JSON Lines files under
 `~/.backup-logs/`, labeled with time, run ID, command, and output stream.

@@ -127,9 +127,10 @@ func newCommandLog(home, command string, warning io.Writer, now func() time.Time
 }
 
 type loggedOutput struct {
-	terminal io.Writer
-	log      *commandLog
-	stream   string
+	terminal            io.Writer
+	log                 *commandLog
+	stream              string
+	terminalProgressErr error
 }
 
 func (output *loggedOutput) Write(data []byte) (int, error) {
@@ -142,6 +143,25 @@ func (output *loggedOutput) Write(data []byte) (int, error) {
 		err = io.ErrShortWrite
 	}
 	return n, err
+}
+
+// WriteProgress keeps a healthy destination running after the other fails.
+// Only this optional path suppresses terminal errors; Write remains strict.
+func (output *loggedOutput) WriteProgress(data []byte) (int, error) {
+	output.log.mu.Lock()
+	defer output.log.mu.Unlock()
+	output.log.writeLocked(output.stream, data)
+	n := 0
+	if output.terminalProgressErr == nil {
+		n, output.terminalProgressErr = output.terminal.Write(data)
+		if output.terminalProgressErr == nil && n != len(data) {
+			output.terminalProgressErr = io.ErrShortWrite
+		}
+	}
+	if output.log.failed && output.terminalProgressErr != nil {
+		return n, output.terminalProgressErr
+	}
+	return len(data), nil
 }
 
 func (log *commandLog) writeLocked(stream string, data []byte) {
