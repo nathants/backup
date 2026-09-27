@@ -17,6 +17,18 @@ import (
 	"github.com/nathants/go-libsodium"
 )
 
+// privateTempDir returns an empty filesystem store root that is not
+// group/other writable. t.TempDir applies the umask, so under umask 0002 its
+// directories are group writable and the store rejects them.
+func privateTempDir(t *testing.T) string {
+	t.Helper()
+	directory := t.TempDir()
+	if err := os.Chmod(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return directory
+}
+
 func newFilesystemHarness(t *testing.T) (*integrationHarness, string) {
 	t.Helper()
 	libsodium.Init()
@@ -24,7 +36,7 @@ func newFilesystemHarness(t *testing.T) (*integrationHarness, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h := &integrationHarness{root: t.TempDir(), bare: filepath.Join(t.TempDir(), "metadata.git"), configPath: filepath.Join(t.TempDir(), "config"), serverRoot: t.TempDir(), publicKey: public, secretKey: secret}
+	h := &integrationHarness{root: t.TempDir(), bare: filepath.Join(t.TempDir(), "metadata.git"), configPath: filepath.Join(t.TempDir(), "config"), serverRoot: privateTempDir(t), publicKey: public, secretKey: secret}
 	runGit(t, "init", "--bare", "--object-format=sha256", "--initial-branch=main", h.bare)
 	identity, err := objectstore.InitializeFilesystem(h.serverRoot, "-")
 	if err != nil {
@@ -239,7 +251,7 @@ func TestFilesystemAddMirrorSyncRepairAndMissingDisk(t *testing.T) {
 	if _, err := Commit(ctx, h.options); err != nil {
 		t.Fatal(err)
 	}
-	destination := t.TempDir()
+	destination := privateTempDir(t)
 	secondID, err := objectstore.InitializeFilesystem(destination, "-")
 	if err != nil {
 		t.Fatal(err)
@@ -341,7 +353,7 @@ func testReadHead(t *testing.T, options Options) (repository.ValidatedCommit, *r
 func TestFilesystemSyncAcrossProtocolBackend(t *testing.T) {
 	h := newIntegrationHarness(t)
 	ctx := context.Background()
-	directory := t.TempDir()
+	directory := privateTempDir(t)
 	identity, err := objectstore.InitializeFilesystem(directory, "-")
 	if err != nil {
 		t.Fatal(err)

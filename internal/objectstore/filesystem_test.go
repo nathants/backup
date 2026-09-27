@@ -16,9 +16,21 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-func filesystemFixture(t *testing.T) (*Filesystem, string, string) {
+// privateTempDir returns an empty store root that is not group/other
+// writable. t.TempDir applies the umask, so under umask 0002 its directories
+// are group writable and the store rejects them.
+func privateTempDir(t *testing.T) string {
 	t.Helper()
 	directory := t.TempDir()
+	if err := os.Chmod(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return directory
+}
+
+func filesystemFixture(t *testing.T) (*Filesystem, string, string) {
+	t.Helper()
+	directory := privateTempDir(t)
 	identity, err := InitializeFilesystem(directory, "-")
 	if err != nil {
 		t.Fatal(err)
@@ -142,7 +154,7 @@ func TestFilesystemCorruptionMissingAndUnavailable(t *testing.T) {
 }
 
 func TestFilesystemInitializationIdentityAndMountChecks(t *testing.T) {
-	directory := t.TempDir()
+	directory := privateTempDir(t)
 	if _, err := InitializeFilesystem(directory, directory); err == nil {
 		t.Fatal("ordinary directory accepted as a mount")
 	}

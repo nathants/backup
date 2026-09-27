@@ -30,6 +30,10 @@ func TestFilesystemCLIWithoutMountedDisk(t *testing.T) {
 		}
 	}
 	directory := t.TempDir()
+	// t.TempDir applies the umask, and the store rejects group-writable roots.
+	if err := os.Chmod(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	initialized := invoke("mirror-init", "--directory", directory)
 	identity := strings.TrimSuffix(strings.TrimPrefix(initialized, "store\t"), "\n")
 	if !strings.HasPrefix(identity, "filesystem://") {
