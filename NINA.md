@@ -58,7 +58,8 @@ Linux 5.8+, Go 1.27+, Git 2.36+ with SHA-256 support, and libsodium are required
 `make` or `make build` builds `./backup`. Use published dependencies pinned in
 `go.mod`; remove temporary local replacements before committing published updates.
 
-Use targeted tests while iterating. `make check` runs mandatory lint, coverage,
-race, and vet checks without cloud access; missing linters fail closed.
+Use targeted tests while iterating. `make check` runs mandatory `libcheck` lint
+(including vet), coverage, and race checks without cloud access; a missing linter
+fails closed.
 `make fuzz` runs mutation campaigns. Integration and exact-production acceptance
 are separate gates: passing local tests or ordinary uploads does not qualify a backend.
