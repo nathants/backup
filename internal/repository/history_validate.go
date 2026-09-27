@@ -301,8 +301,7 @@ func (validator Validator) enumerateHistoryIDs(tip string, destination *os.File)
 	waitErr := command.Wait()
 	started = false
 	if waitErr != nil {
-		var exitErr *exec.ExitError
-		if errors.As(waitErr, &exitErr) {
+		if exitErr, ok := errors.AsType[*exec.ExitError](waitErr); ok {
 			return 0, &GitExitError{Operation: "rev-list", ExitCode: exitErr.ExitCode(), Detail: strings.TrimSpace(stderr.buffer.String())}
 		}
 		return 0, fmt.Errorf("wait for git rev-list: %w", waitErr)

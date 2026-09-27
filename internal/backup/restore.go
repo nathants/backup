@@ -375,7 +375,7 @@ func publishSymlink(rootFD int, entry format.IndexEntry, overwrite bool) error {
 }
 
 func createAt(parentFD int, mode uint32) (string, int, error) {
-	for attempt := 0; attempt < 100; attempt++ {
+	for range 100 {
 		name, err := uniqueName()
 		if err != nil {
 			return "", -1, err

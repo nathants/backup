@@ -115,7 +115,7 @@ func TestReplanRetryReclaimsUnusedGenerationsBeforeBuilding(t *testing.T) {
 		}
 		return nil
 	}
-	for attempt := 0; attempt < 3; attempt++ {
+	for range 3 {
 		if _, err := Replan(ctx, options); err == nil || !strings.Contains(err.Error(), "stop before publish") {
 			t.Fatalf("missing failure: %v", err)
 		}

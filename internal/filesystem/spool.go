@@ -133,7 +133,7 @@ func (spool *Spool) Create(sourcePath string, sourceSize, reserveBytes uint64) (
 	if err := checkSpoolCapacity(sourceSize, reserveBytes, availableBytes, availableInodes); err != nil {
 		return nil, fmt.Errorf("plaintext spool capacity for %q: %w", sourcePath, err)
 	}
-	for attempt := 0; attempt < 100; attempt++ {
+	for range 100 {
 		var random [spoolRandomBytes]byte
 		if _, err := io.ReadFull(rand.Reader, random[:]); err != nil {
 			return nil, fmt.Errorf("choose plaintext spool name: %w", err)

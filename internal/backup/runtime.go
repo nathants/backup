@@ -79,9 +79,13 @@ func openRuntime(options Options, requireRepository bool) (*runtime, error) {
 			return nil, err
 		}
 		current, err := readPreparation(normalized)
-		if err != nil || (current == nil) != (preparation == nil) || current != nil && *current != *preparation {
+		if err != nil {
 			_ = run.close()
-			return nil, fmt.Errorf("local preparation changed while acquiring the lock; retry: %v", err)
+			return nil, fmt.Errorf("local preparation changed while acquiring the lock; retry: %w", err)
+		}
+		if (current == nil) != (preparation == nil) || current != nil && *current != *preparation {
+			_ = run.close()
+			return nil, fmt.Errorf("local preparation changed while acquiring the lock; retry")
 		}
 		if preparation != nil && preparation.GitRemote != "" {
 			if err := run.repo.BindInitialRemote(config.GitRemote, config.Branch); err != nil {
@@ -401,7 +405,7 @@ func validStagedRelativePath(value string) error {
 	if value == "" || filepath.IsAbs(value) || filepath.Clean(value) != value || value == "." || strings.HasPrefix(value, "../") {
 		return fmt.Errorf("invalid staged relative path %q", value)
 	}
-	for _, component := range strings.Split(value, string(filepath.Separator)) {
+	for component := range strings.SplitSeq(value, string(filepath.Separator)) {
 		if component == "" || component == "." || component == ".." {
 			return fmt.Errorf("invalid staged path component")
 		}

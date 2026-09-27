@@ -179,7 +179,7 @@ func writeLargeRestoreMetadata(t *testing.T, directory string, records int) {
 		t.Fatal(err)
 	}
 	writer := bufio.NewWriterSize(index, 1<<20)
-	for number := 0; number < records; number++ {
+	for number := range records {
 		if _, err := fmt.Fprintf(writer, "./item-%07d\tsymlink\ttarget:./\t0\t-\t-\n", number); err != nil {
 			_ = index.Close()
 			t.Fatal(err)

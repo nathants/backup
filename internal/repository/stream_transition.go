@@ -120,7 +120,7 @@ func isStreamRepairTransition(oldState, newState State, workspace string) (bool,
 		if len(oldFields) != 8 || len(newFields) != 8 {
 			return false, fmt.Errorf("invalid validated pack row")
 		}
-		for index := 0; index < 7; index++ {
+		for index := range 7 {
 			if oldFields[index] != newFields[index] {
 				return false, fmt.Errorf("packs-only transition changed a logical pack field")
 			}

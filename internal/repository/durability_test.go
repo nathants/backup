@@ -56,7 +56,7 @@ func TestHardenedGitFlushesLooseObjectsAndReferences(t *testing.T) {
 			t.Fatal(err)
 		}
 		flushed := false
-		for _, line := range bytes.Split(bytes.TrimSpace(data), []byte{'\n'}) {
+		for line := range bytes.SplitSeq(bytes.TrimSpace(data), []byte{'\n'}) {
 			var event struct {
 				Category string `json:"category"`
 				Name     string `json:"name"`

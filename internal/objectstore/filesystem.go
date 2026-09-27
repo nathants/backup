@@ -115,7 +115,7 @@ func openAbsoluteDirectory(directory string) (*os.File, error) {
 		return nil, err
 	}
 	if directory != "/" {
-		for _, component := range strings.Split(strings.TrimPrefix(directory, "/"), "/") {
+		for component := range strings.SplitSeq(strings.TrimPrefix(directory, "/"), "/") {
 			next, err := unix.Openat(fd, component, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
 			_ = unix.Close(fd)
 			if err != nil {
@@ -558,7 +558,7 @@ func (store *Filesystem) syncParents(key string) error {
 	defer func() { _ = unix.Close(parent) }()
 	// Flush each containing entry through the opened descriptors.
 	levels := len(strings.Split(key, "/"))
-	for depth := 0; depth < levels; depth++ {
+	for depth := range levels {
 		if err := unix.Fsync(parent); err != nil {
 			return err
 		}

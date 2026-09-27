@@ -124,7 +124,7 @@ func (history *History) ValidateMirrorTopology(mirrors []format.Mirror) error {
 		return err
 	}
 	candidate := make(map[string]string, len(mirrors))
-	for _, row := range bytes.Split(bytes.TrimSuffix(canonical, []byte{'\n'}), []byte{'\n'}) {
+	for row := range bytes.SplitSeq(bytes.TrimSuffix(canonical, []byte{'\n'}), []byte{'\n'}) {
 		if len(row) == 0 {
 			continue
 		}

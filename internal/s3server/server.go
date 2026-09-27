@@ -90,7 +90,7 @@ func Open(config Config) (*Server, error) {
 		if len(config.Prefix) > maximumKeyBytes || !utf8StringWithoutControls(config.Prefix) || strings.HasPrefix(config.Prefix, "/") || strings.HasSuffix(config.Prefix, "/") || path.Clean(config.Prefix) != config.Prefix {
 			return nil, fmt.Errorf("server prefix is not canonical")
 		}
-		for _, component := range strings.Split(config.Prefix, "/") {
+		for component := range strings.SplitSeq(config.Prefix, "/") {
 			if component == "" || component == "." || component == ".." || component == internalDirectory {
 				return nil, fmt.Errorf("server prefix has an invalid component")
 			}
@@ -379,8 +379,7 @@ func statusForError(err error) (int, string, string) {
 	if err == nil {
 		return http.StatusOK, "", ""
 	}
-	var requestErr *requestError
-	if errors.As(err, &requestErr) {
+	if requestErr, ok := errors.AsType[*requestError](err); ok {
 		return requestErr.status, requestErr.code, requestErr.message
 	}
 	return http.StatusInternalServerError, "InternalError", "internal server error"
@@ -653,7 +652,7 @@ func openOrCreateDirectory(parentFD int, name string, mode uint32) (int, error) 
 }
 
 func createTemporaryFile(directoryFD int) (string, *os.File, error) {
-	for attempt := 0; attempt < 100; attempt++ {
+	for range 100 {
 		name, err := randomHex(32)
 		if err != nil {
 			return "", nil, err

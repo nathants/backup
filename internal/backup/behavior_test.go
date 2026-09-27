@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -27,7 +28,7 @@ import (
 func TestAddRejectsCanceledContextBeforeFilesystemAccess(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := Add(ctx, Options{Root: filepath.Join(t.TempDir(), "missing")}, false); err != context.Canceled {
+	if _, err := Add(ctx, Options{Root: filepath.Join(t.TempDir(), "missing")}, false); !errors.Is(err, context.Canceled) {
 		t.Fatalf("Add with canceled context returned %v", err)
 	}
 }
@@ -814,6 +815,9 @@ func TestRestoreLatePublicationFailureReportsExactSubset(t *testing.T) {
 			published = append(published, event.Path)
 		case RestoreRemaining:
 			remaining = append(remaining, event.Path)
+		case RestoreResolved, RestorePlanned:
+		default:
+			t.Errorf("unknown restore event %#v", event)
 		}
 		return nil
 	}

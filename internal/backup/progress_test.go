@@ -74,7 +74,7 @@ func TestProgressOutputFailurePreservesOperationError(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	_, err := Add(ctx, Options{Stderr: progressFailWriter{failure}}, false)
-	if err != context.Canceled {
+	if !errors.Is(err, context.Canceled) || errors.Is(err, failure) {
 		t.Fatalf("progress failure changed the operation error: %v", err)
 	}
 }
@@ -105,7 +105,7 @@ func TestProgressSerializesWarningsAndEvents(t *testing.T) {
 	if !strings.Contains(text, "capturing and uploading planned paths; capture processed paths=999; observed") {
 		t.Fatalf("upload events replaced capture state: %s", text)
 	}
-	for _, line := range strings.Split(text, "\n") {
+	for line := range strings.SplitSeq(text, "\n") {
 		if strings.Contains(line, "acknowledged part=") && strings.Contains(line, "capture processed") {
 			t.Fatalf("upload event inherited capture counters: %s", line)
 		}

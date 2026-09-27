@@ -107,7 +107,7 @@ func TestRecoverPublishesVerifiedRepositoryWithoutReread(t *testing.T) {
 				request.Tip = want
 			}
 			reported := 0
-			request.Report = func(event RecoverEvent) error {
+			request.Report = func(RecoverEvent) error {
 				reported++
 				if reported == 1 {
 					// The complete chain is already verified when reporting begins.
@@ -160,7 +160,7 @@ func TestMetadataRecoveryUsesOneRepositoryForHealthyChain(t *testing.T) {
 	var first os.FileInfo
 	probe.observe = func() error {
 		var repositories []os.FileInfo
-		err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+		err := filepath.WalkDir(root, func(_ string, entry fs.DirEntry, err error) error {
 			if err != nil {
 				return err
 			}

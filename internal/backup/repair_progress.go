@@ -70,8 +70,11 @@ func walkDataPartRecords(input io.Reader, visit func(uint64, stagedDataPart) err
 	decoder := json.NewDecoder(bounded)
 	decoder.DisallowUnknownFields()
 	opening, err := decoder.Token()
-	if err != nil || opening != json.Delim('[') {
-		return 0, fmt.Errorf("staged data parts require a JSON array: %v", err)
+	if err != nil {
+		return 0, fmt.Errorf("staged data parts require a JSON array: %w", err)
+	}
+	if opening != json.Delim('[') {
+		return 0, fmt.Errorf("staged data parts require a JSON array")
 	}
 	var count uint64
 	for {
@@ -99,15 +102,22 @@ func walkDataPartRecords(input io.Reader, visit func(uint64, stagedDataPart) err
 		count++
 	}
 	closing, err := decoder.Token()
-	if err != nil || closing != json.Delim(']') {
-		return count, fmt.Errorf("staged data parts lack the closing array delimiter: %v", err)
+	if err != nil {
+		return count, fmt.Errorf("staged data parts lack the closing array delimiter: %w", err)
+	}
+	if closing != json.Delim(']') {
+		return count, fmt.Errorf("staged data parts lack the closing array delimiter")
 	}
 	if err := bounded.bound(decoder.InputOffset()); err != nil {
 		return count, err
 	}
 	var extra any
-	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
-		return count, fmt.Errorf("trailing staged data-part JSON: %v", err)
+	err = decoder.Decode(&extra)
+	if err == nil {
+		return count, fmt.Errorf("trailing staged data-part JSON")
+	}
+	if !errors.Is(err, io.EOF) {
+		return count, fmt.Errorf("trailing staged data-part JSON: %w", err)
 	}
 	return count, nil
 }

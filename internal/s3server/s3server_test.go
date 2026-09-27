@@ -264,7 +264,7 @@ func TestRequestDateRejectsFarFutureWithoutDurationOverflow(t *testing.T) {
 func TestListingIsSortedBoundedAndCancelable(t *testing.T) {
 	h := newHarness(t)
 	objectsDirectory := filepath.Join(h.root, "objects")
-	for index := 0; index < 1500; index++ {
+	for index := range 1500 {
 		hash := fmt.Sprintf("%0128x", index+1)
 		objectID := fmt.Sprintf("%032x", 1500-index)
 		directory := filepath.Join(objectsDirectory, hash)
@@ -496,10 +496,7 @@ func (writer *failFirstBodyWrite) WriteHeader(status int) {
 func (writer *failFirstBodyWrite) Write(data []byte) (int, error) {
 	if !writer.failed && len(writer.statuses) != 0 && writer.statuses[len(writer.statuses)-1] == http.StatusOK {
 		writer.failed = true
-		count := 3
-		if len(data) < count {
-			count = len(data)
-		}
+		count := min(len(data), 3)
 		_, _ = writer.body.Write(data[:count])
 		return count, errors.New("injected response write failure")
 	}

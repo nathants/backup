@@ -17,7 +17,7 @@ import (
 
 func TestObservationIndexRoundTripAndMisses(t *testing.T) {
 	var data bytes.Buffer
-	for n := 0; n < 2000; n++ {
+	for n := range 2000 {
 		entry := format.IndexEntry{Path: fmt.Sprintf("./dir/%04d spaced-λ", n), Kind: format.KindFile, Ref: "blake2b:" + strings.Repeat("a", 128), Size: uint64(n), Mode: 0600, MtimeNS: -int64(n)}
 		if n%5 == 0 {
 			entry = format.IndexEntry{Path: entry.Path, Kind: format.KindSymlink, Ref: "target:./"}

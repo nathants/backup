@@ -396,7 +396,7 @@ func readMetadataBundleHeader(reader *bufio.Reader, manifest format.MetadataMani
 	readLine := func() (string, error) {
 		line, readErr := reader.ReadSlice('\n')
 		if readErr != nil {
-			if readErr == bufio.ErrBufferFull {
+			if errors.Is(readErr, bufio.ErrBufferFull) {
 				return "", fmt.Errorf("git bundle header line exceeds 4096 bytes")
 			}
 			return "", fmt.Errorf("read git bundle header: %w", readErr)
@@ -483,7 +483,7 @@ func materializeMetadataChain(ctx context.Context, client objectstore.Store, cha
 		}
 	}()
 	var failures []string
-	for attempt := 0; attempt < maximumRecoveryMaterializations; attempt++ {
+	for range maximumRecoveryMaterializations {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}

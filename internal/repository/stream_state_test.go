@@ -305,7 +305,7 @@ func writeLargeFileState(t *testing.T, directory string, records int) int64 {
 	}
 	objectWriter := bufio.NewWriterSize(objects, 1<<20)
 	packWriter := bufio.NewWriterSize(packs, 1<<20)
-	for index := 0; index < records; index++ {
+	for index := range records {
 		hash := fmt.Sprintf("%0128x", index)
 		sha := fmt.Sprintf("%064x", index)
 		short := fmt.Sprintf("%032x", index)

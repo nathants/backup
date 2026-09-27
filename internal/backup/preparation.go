@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 
@@ -232,9 +233,7 @@ func (run *runtime) startGenesis(txn *transaction) error {
 	// Copy the map: the old persisted plan remains valid until saveTransaction.
 	planCopy := *txn.Plan
 	planCopy.ConfigFiles = make(map[string]stagedFileRef, 3)
-	for k, v := range txn.Plan.ConfigFiles {
-		planCopy.ConfigFiles[k] = v
-	}
+	maps.Copy(planCopy.ConfigFiles, txn.Plan.ConfigFiles)
 	planCopy.ConfigFiles["mirrors.tsv"] = mirrorRef
 	next.Plan = &planCopy
 	if err := run.stageCandidateBlobs(&next, blobs); err != nil {

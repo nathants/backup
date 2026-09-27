@@ -23,7 +23,7 @@ type dedupIndex struct {
 }
 
 func newDedupIndex(path string, maximumEntries uint64) (*dedupIndex, error) {
-	if maximumEntries > (uint64(^uint64(0)>>1)/dedupSlotBytes)/2 {
+	if maximumEntries > (^uint64(0)>>1)/dedupSlotBytes/2 {
 		return nil, fmt.Errorf("deduplication index is not representable")
 	}
 	capacity := uint64(2)
@@ -40,7 +40,7 @@ func newDedupIndex(path string, maximumEntries uint64) (*dedupIndex, error) {
 	}
 	file := os.NewFile(uintptr(fd), path)
 	length := capacity * dedupSlotBytes
-	if length > uint64(^uint64(0)>>1) {
+	if length > ^uint64(0)>>1 {
 		_ = file.Close()
 		return nil, fmt.Errorf("deduplication index length is not representable")
 	}

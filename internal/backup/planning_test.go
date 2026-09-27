@@ -357,7 +357,7 @@ func TestTransactionControlDoesNotEmbedPlanOrCatalogRows(t *testing.T) {
 	if _, err := initializePublished(ctx, harness.options, harness.publicKey); err != nil {
 		t.Fatal(err)
 	}
-	for index := 0; index < 100; index++ {
+	for index := range 100 {
 		name := fmt.Sprintf("distinct-plan-path-%03d", index)
 		if err := os.WriteFile(filepath.Join(harness.root, name), []byte(name), 0o600); err != nil {
 			t.Fatal(err)
@@ -390,7 +390,7 @@ func TestCaptureWarningsRemainBoundedAndOmissionsSurviveResume(t *testing.T) {
 	if _, err := initializePublished(ctx, harness.options, harness.publicKey); err != nil {
 		t.Fatal(err)
 	}
-	for index := 0; index < 105; index++ {
+	for index := range 105 {
 		path := filepath.Join(harness.root, fmt.Sprintf("warning-%03d", index))
 		if err := os.WriteFile(path, []byte("before"), 0o600); err != nil {
 			t.Fatal(err)
@@ -408,7 +408,7 @@ func TestCaptureWarningsRemainBoundedAndOmissionsSurviveResume(t *testing.T) {
 	if _, err := Add(ctx, harness.options, false); err != nil {
 		t.Fatal(err)
 	}
-	for index := 0; index < 105; index++ {
+	for index := range 105 {
 		path := filepath.Join(harness.root, fmt.Sprintf("warning-%03d", index))
 		if err := os.WriteFile(path, []byte("after"), 0o600); err != nil {
 			t.Fatal(err)

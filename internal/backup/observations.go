@@ -36,7 +36,7 @@ func newObservationIndex(ctx context.Context, path string, rows *os.File) (_ *ob
 	}
 	capacity := uint64(2)
 	for capacity/2 < count {
-		if capacity > uint64(^uint64(0)>>1)/observationSlotBytes/2 {
+		if capacity > (^uint64(0)>>1)/observationSlotBytes/2 {
 			return nil, fmt.Errorf("observation index is not representable")
 		}
 		capacity *= 2
@@ -66,7 +66,7 @@ func newObservationIndex(ctx context.Context, path string, rows *os.File) (_ *ob
 		if err != nil {
 			return err
 		}
-		if len(row) > format.DefaultLimits().MaxLineBytes+1 || offset > uint64(^uint64(0)>>1)-uint64(len(row)) {
+		if len(row) > format.DefaultLimits().MaxLineBytes+1 || offset > (^uint64(0)>>1)-uint64(len(row)) {
 			return fmt.Errorf("observation row is not representable")
 		}
 		if entry.Kind == format.KindFile {
@@ -117,7 +117,7 @@ func (index *observationIndex) lookup(path string) (*format.IndexEntry, error) {
 			continue
 		}
 		offset := binary.BigEndian.Uint64(record[32:40])
-		if length > uint32(format.DefaultLimits().MaxLineBytes+1) || offset > uint64(^uint64(0)>>1)-uint64(length) {
+		if length > uint32(format.DefaultLimits().MaxLineBytes+1) || offset > (^uint64(0)>>1)-uint64(length) {
 			return nil, fmt.Errorf("invalid observation index record")
 		}
 		row := make([]byte, int(length))

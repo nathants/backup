@@ -631,7 +631,7 @@ func (repo *Managed) StatusAgainst(state State) (WorktreeStatus, error) {
 }
 
 func checkStatusBlob(path string, expectedSize uint64, expectedHash string) error {
-	if expectedSize > uint64(^uint64(0)>>1) || expectedHash == "" {
+	if expectedSize > ^uint64(0)>>1 || expectedHash == "" {
 		return fmt.Errorf("invalid expected worktree blob identity")
 	}
 	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
@@ -708,8 +708,7 @@ func (repo *Managed) WriteBundle(base, tip string, output io.Writer) error {
 	stderr := &boundedBuffer{limit: maximumGitErrorBytes}
 	command.Stdout, command.Stderr = output, stderr
 	if err := command.Run(); err != nil {
-		var exit *exec.ExitError
-		if errors.As(err, &exit) {
+		if exit, ok := errors.AsType[*exec.ExitError](err); ok {
 			return &GitExitError{Operation: "bundle", ExitCode: exit.ExitCode(), Detail: strings.TrimSpace(stderr.buffer.String())}
 		}
 		return fmt.Errorf("stream Git bundle: %w", err)
@@ -824,8 +823,7 @@ func (repo *Managed) runReader(input io.Reader, limit int64, identity bool, argu
 	stderr := &boundedBuffer{limit: maximumGitErrorBytes}
 	command.Stdout, command.Stderr = stdout, stderr
 	if err := command.Run(); err != nil {
-		var exit *exec.ExitError
-		if errors.As(err, &exit) {
+		if exit, ok := errors.AsType[*exec.ExitError](err); ok {
 			return nil, &GitExitError{Operation: arguments[0], ExitCode: exit.ExitCode(), Detail: strings.TrimSpace(stderr.buffer.String())}
 		}
 		return nil, err

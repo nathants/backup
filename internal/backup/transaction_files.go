@@ -203,7 +203,7 @@ func (run *runtime) readStagedRef(ref stagedFileRef, maximum int64) ([]byte, err
 }
 
 func (run *runtime) validateStagedRef(ref stagedFileRef) error {
-	if ref.RelativePath == "" || ref.Size > uint64(^uint64(0)>>1) {
+	if ref.RelativePath == "" || ref.Size > ^uint64(0)>>1 {
 		return fmt.Errorf("invalid staged file reference")
 	}
 	file, err := run.openStaged(ref.RelativePath)

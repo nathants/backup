@@ -64,7 +64,7 @@ func TestFilesystemBackupRestoreFullVerifyAndRecovery(t *testing.T) {
 	if err := os.Symlink("file with spaces", filepath.Join(h.root, "link")); err != nil {
 		t.Fatal(err)
 	}
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		if _, err := Add(ctx, h.options, false); err != nil {
 			t.Fatal(err)
 		}

@@ -113,7 +113,7 @@ func FuzzRepairDataPartRecords(f *testing.F) {
 	f.Add([]byte("[]\n"))
 	f.Add([]byte("[null]"))
 	f.Add([]byte("[{}"))
-	f.Fuzz(func(t *testing.T, data []byte) {
+	f.Fuzz(func(_ *testing.T, data []byte) {
 		_, _ = walkDataPartRecords(bytes.NewReader(data), nil)
 	})
 }

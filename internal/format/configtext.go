@@ -62,10 +62,7 @@ func readConfigLines(input io.Reader, limits Limits) ([]string, error) {
 	tracked := &trackedReader{r: input, max: limits.MaxFileBytes}
 	scanner := bufio.NewScanner(tracked)
 	scanner.Split(splitLF)
-	initial := limits.MaxLineBytes
-	if initial > 64<<10 {
-		initial = 64 << 10
-	}
+	initial := min(limits.MaxLineBytes, 64<<10)
 	scanner.Buffer(make([]byte, initial), limits.MaxLineBytes+1)
 	lines := make([]string, 0)
 	for scanner.Scan() {

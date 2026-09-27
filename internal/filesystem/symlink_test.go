@@ -116,7 +116,7 @@ func TestSymlinkClassificationRaceClosesTargetDescriptor(t *testing.T) {
 	if err := os.Symlink("target", link); err != nil {
 		t.Fatal(err)
 	}
-	for attempt := 0; attempt < 3; attempt++ {
+	for range 3 {
 		_, _, err := root.scanSymlink(root.fd, "link", "./link", before)
 		if !errors.Is(err, errCaptureRace) {
 			t.Fatalf("expected classification race, got %v", err)

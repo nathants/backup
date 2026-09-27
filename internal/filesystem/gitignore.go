@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"golang.org/x/sys/unix"
@@ -41,12 +42,7 @@ func (diagnostic *gitIgnoreDiagnostic) Write(data []byte) (int, error) {
 }
 
 func gitMetadataPath(path string) bool {
-	for _, component := range strings.Split(filepath.ToSlash(path), "/") {
-		if component == ".git" {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(strings.Split(filepath.ToSlash(path), "/"), ".git")
 }
 
 func hasGitMarker(directoryFD int, path string) (bool, error) {

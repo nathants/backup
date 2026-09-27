@@ -274,7 +274,7 @@ func ValidatePath(value string) error {
 	if path.Clean(relative) != relative {
 		return fmt.Errorf("noncanonical path")
 	}
-	for _, component := range strings.Split(relative, "/") {
+	for component := range strings.SplitSeq(relative, "/") {
 		if component == "" || component == "." || component == ".." {
 			return fmt.Errorf("invalid path component")
 		}
@@ -552,13 +552,4 @@ func SortIndex(entries []IndexEntry) {
 
 func SortObjects(entries []ObjectEntry) {
 	sort.Slice(entries, func(left, right int) bool { return entries[left].PlaintextHash < entries[right].PlaintextHash })
-}
-
-func SortPacks(entries []PackEntry) {
-	sort.Slice(entries, func(left, right int) bool {
-		if entries[left].PackHash != entries[right].PackHash {
-			return entries[left].PackHash < entries[right].PackHash
-		}
-		return entries[left].PartNumber < entries[right].PartNumber
-	})
 }

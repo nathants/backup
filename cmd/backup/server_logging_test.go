@@ -106,7 +106,7 @@ func TestCLILoggingServerRequestsAndTLSErrors(t *testing.T) {
 		t.Fatalf("server log missing output or exposing credentials: %q", disk)
 	}
 	var requestLogged, handshakeLogged bool
-	for _, line := range strings.Split(strings.TrimSpace(disk), "\n") {
+	for line := range strings.SplitSeq(strings.TrimSpace(disk), "\n") {
 		if strings.Contains(line, "http: TLS handshake error") {
 			handshakeLogged = true
 			continue

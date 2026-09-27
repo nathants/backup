@@ -152,7 +152,7 @@ func TestScanUsesActualAbsoluteSymlinkSemantics(t *testing.T) {
 
 func TestWalkReadsAllDirectoryBatches(t *testing.T) {
 	rootPath := t.TempDir()
-	for index := 0; index < 300; index++ {
+	for index := range 300 {
 		mustWrite(t, filepath.Join(rootPath, fmt.Sprintf("file-%03d", index)), nil, 0o600)
 	}
 	root, err := OpenRoot(rootPath)

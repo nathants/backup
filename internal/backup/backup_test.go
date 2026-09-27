@@ -2250,7 +2250,7 @@ func testStateBlobs(t *testing.T, state repository.State) map[string][]byte {
 	blobs := make(map[string][]byte, len(repository.RequiredBlobNames))
 	for _, name := range repository.RequiredBlobNames {
 		size := state.BlobSizes[name]
-		if size > uint64(^uint64(0)>>1) {
+		if size > ^uint64(0)>>1 {
 			t.Fatalf("test metadata blob %s is not representable", name)
 		}
 		data, err := state.ReadBlob(name, int64(size))

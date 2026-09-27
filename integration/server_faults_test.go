@@ -36,9 +36,7 @@ func TestDockerServerConcurrentCreateRetryLostResponseAndPagination(t *testing.T
 	errors := make(chan error, contenders)
 	var wait sync.WaitGroup
 	for range contenders {
-		wait.Add(1)
-		go func() {
-			defer wait.Done()
+		wait.Go(func() {
 			response, err := h.client.Do(h.putRequest(key, payload))
 			if err != nil {
 				errors <- err
@@ -55,7 +53,7 @@ func TestDockerServerConcurrentCreateRetryLostResponseAndPagination(t *testing.T
 				return
 			}
 			statuses <- response.StatusCode
-		}()
+		})
 	}
 	wait.Wait()
 	close(statuses)
@@ -121,7 +119,7 @@ func TestDockerServerConcurrentCreateRetryLostResponseAndPagination(t *testing.T
 	closeBody(t, response)
 
 	wantKeys := []string{key, lostKey}
-	for index := 0; index < 5; index++ {
+	for index := range 5 {
 		body := []byte(fmt.Sprintf("pagination-%d", index))
 		listedKey := objectKey(body, byte(30+index))
 		wantKeys = append(wantKeys, listedKey)

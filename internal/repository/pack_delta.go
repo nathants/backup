@@ -144,7 +144,7 @@ func ValidateCatalogStateForSnapshot(snapshot, alternate State) error {
 		if !rightNext || len(right.Fields()) != 8 || comparePackFields(right.Fields(), left.Fields()) != 0 {
 			return fmt.Errorf("alternate catalog lacks pack %s part %s", left.Fields()[0], left.Fields()[1])
 		}
-		for index := 0; index < 7; index++ {
+		for index := range 7 {
 			if left.Fields()[index] != right.Fields()[index] {
 				return fmt.Errorf("alternate catalog changes immutable fields for pack %s part %s", left.Fields()[0], left.Fields()[1])
 			}

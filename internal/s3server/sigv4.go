@@ -43,7 +43,7 @@ func parseAuthorization(value string) (parsedAuthorization, error) {
 		return parsedAuthorization{}, fmt.Errorf("unsupported authorization algorithm")
 	}
 	fields := make(map[string]string, 3)
-	for _, raw := range strings.Split(strings.TrimPrefix(value, prefix), ",") {
+	for raw := range strings.SplitSeq(strings.TrimPrefix(value, prefix), ",") {
 		pair := strings.SplitN(strings.TrimSpace(raw), "=", 2)
 		if len(pair) != 2 || pair[0] == "" || pair[1] == "" {
 			return parsedAuthorization{}, fmt.Errorf("malformed authorization field")

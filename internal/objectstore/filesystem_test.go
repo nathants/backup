@@ -74,7 +74,7 @@ func TestFilesystemStoreRoundTripAndImmutableConflict(t *testing.T) {
 	if result := store.PutFile(ctx, key, filesystemSource(t, []byte("wrong")), HashBytes([]byte("wrong"))); result.Disposition != CreateFailed {
 		t.Fatalf("key substitution: %+v", result)
 	}
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		keys, err := store.List(ctx, "objects/")
 		if err != nil || len(keys) != 1 || keys[0] != key {
 			t.Fatalf("list: %v %v", keys, err)
@@ -286,9 +286,8 @@ func TestFilesystemConcurrentCreatesAndStaleTemps(t *testing.T) {
 	}
 	var wg sync.WaitGroup
 	results := make(chan CreateResult, 8)
-	for i := 0; i < 8; i++ {
-		wg.Add(1)
-		go func() { defer wg.Done(); results <- store.PutFile(ctx, key, source, object) }()
+	for range 8 {
+		wg.Go(func() { results <- store.PutFile(ctx, key, source, object) })
 	}
 	wg.Wait()
 	close(results)
@@ -298,6 +297,8 @@ func TestFilesystemConcurrentCreatesAndStaleTemps(t *testing.T) {
 		case CreateAcknowledged:
 			created++
 		case CreateConflict:
+		case CreateFailed, CreateAmbiguous:
+			fallthrough
 		default:
 			t.Fatalf("create: %+v", result)
 		}
@@ -313,7 +314,7 @@ func TestFilesystemConcurrentCreatesAndStaleTemps(t *testing.T) {
 func TestFilesystemManifestListingAndBounds(t *testing.T) {
 	store, _, _ := filesystemFixture(t)
 	ctx := context.Background()
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		data := []byte(fmt.Sprintf("manifest %d", i))
 		object := HashBytes(data)
 		key, err := format.MetadataManifestKey(strings.Repeat(fmt.Sprint(i), 64), object.BLAKE2b, strings.Repeat("b", 32))

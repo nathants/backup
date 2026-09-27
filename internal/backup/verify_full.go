@@ -99,7 +99,7 @@ func (run *runtime) verifyFullPacks(ctx context.Context, client objectstore.Stor
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if part.PartSize > uint64(^uint64(0)>>1)-1-size {
+		if part.PartSize > (^uint64(0)>>1)-1-size {
 			return fmt.Errorf("full verification pack size overflows")
 		}
 		size += part.PartSize

@@ -21,7 +21,7 @@ import (
 )
 
 const (
-	maximumTarMemberSize = uint64(^uint64(0) >> 1)
+	maximumTarMemberSize = ^uint64(0) >> 1
 	canonicalZstdWindow  = 8 << 20
 )
 
@@ -99,7 +99,7 @@ func ReadArchive(input io.Reader, expected map[string]uint64, consume func(hash 
 		maximumBytes += size + 4096
 		remaining[hash] = size
 	}
-	if maximumBytes > uint64(^uint64(0)>>1)-1 {
+	if maximumBytes > (^uint64(0)>>1)-1 {
 		return fmt.Errorf("expected archive is too large")
 	}
 	originalDigest, _ := blake2b.New512(nil)
@@ -198,7 +198,7 @@ func DecryptAndRead(ciphertext io.Reader, expectedHash string, expectedSize uint
 	if len(expectedHash) != 128 || stringsToLower(expectedHash) != expectedHash {
 		return fmt.Errorf("invalid expected ciphertext hash")
 	}
-	if expectedSize > uint64(^uint64(0)>>1) {
+	if expectedSize > ^uint64(0)>>1 {
 		return fmt.Errorf("ciphertext is too large")
 	}
 	expectedDigest, err := hex.DecodeString(expectedHash)

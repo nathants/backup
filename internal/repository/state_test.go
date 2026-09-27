@@ -229,7 +229,7 @@ func mustBytes(t *testing.T, data []byte, err error) []byte {
 func TestSharedMaximumRecipientChainIsAccepted(t *testing.T) {
 	blobs := validGenesisBlobs(t)
 	var generations []string
-	for i := 0; i < libsodium.MaxKeyGenerations; i++ {
+	for i := range libsodium.MaxKeyGenerations {
 		generations = append(generations, fmt.Sprintf("%064x", i+1))
 	}
 	blobs[".publickeys"] = []byte(strings.Join(generations, ":") + "\n")

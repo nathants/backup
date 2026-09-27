@@ -136,10 +136,7 @@ func SortFiles(workspace string, inputs []string, output string, options Options
 	for len(runs) > 1 {
 		var next []string
 		for start := 0; start < len(runs); start += options.MaxOpenFiles {
-			end := start + options.MaxOpenFiles
-			if end > len(runs) {
-				end = len(runs)
-			}
+			end := min(start+options.MaxOpenFiles, len(runs))
 			path := filepath.Join(stage, fmt.Sprintf("merge-%04d-%08d", pass, len(next)))
 			if err := mergeRuns(runs[start:end], path, options); err != nil {
 				return err
@@ -248,16 +245,18 @@ type mergeNode struct {
 
 type mergeHeap []mergeNode
 
-func (items mergeHeap) Len() int { return len(items) }
-func (items mergeHeap) Less(left, right int) bool {
-	comparison := bytes.Compare(items[left].record.key, items[right].record.key)
+func (items *mergeHeap) Len() int { return len(*items) }
+func (items *mergeHeap) Less(left, right int) bool {
+	comparison := bytes.Compare((*items)[left].record.key, (*items)[right].record.key)
 	if comparison != 0 {
 		return comparison < 0
 	}
-	return bytes.Compare(items[left].record.data, items[right].record.data) < 0
+	return bytes.Compare((*items)[left].record.data, (*items)[right].record.data) < 0
 }
-func (items mergeHeap) Swap(left, right int) { items[left], items[right] = items[right], items[left] }
-func (items *mergeHeap) Push(value any)      { *items = append(*items, value.(mergeNode)) }
+func (items *mergeHeap) Swap(left, right int) {
+	(*items)[left], (*items)[right] = (*items)[right], (*items)[left]
+}
+func (items *mergeHeap) Push(value any) { *items = append(*items, value.(mergeNode)) }
 func (items *mergeHeap) Pop() any {
 	old := *items
 	last := old[len(old)-1]

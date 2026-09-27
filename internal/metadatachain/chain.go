@@ -45,7 +45,7 @@ func encrypt(input io.Reader, recipients libsodium.KeyChains, output io.Writer) 
 }
 
 func Decrypt(ciphertext io.Reader, expectedHash string, expectedSize uint64, secretKey *libsodium.Keyring, output io.Writer) error {
-	if expectedSize > uint64(^uint64(0)>>1)-1 || len(expectedHash) != 128 {
+	if expectedSize > (^uint64(0)>>1)-1 || len(expectedHash) != 128 {
 		return fmt.Errorf("invalid encrypted metadata identity")
 	}
 	expectedDigest, err := hex.DecodeString(expectedHash)

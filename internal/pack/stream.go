@@ -53,7 +53,7 @@ func NewStreamBuilder(recipients libsodium.KeyChains, stagingDirectory string, p
 	if len(recipients) == 0 || consume == nil {
 		return nil, fmt.Errorf("streaming pack requires recipients and a part consumer")
 	}
-	if partSize == 0 || partSize > uint64(^uint64(0)>>1) {
+	if partSize == 0 || partSize > ^uint64(0)>>1 {
 		return nil, fmt.Errorf("invalid part size %d", partSize)
 	}
 	if err := os.MkdirAll(stagingDirectory, 0o700); err != nil {
@@ -233,7 +233,7 @@ func writeStreamPartRecord(output io.Writer, part StreamPart) error {
 
 // WalkParts reads the file-backed physical catalog for a completed pack. The
 // stream builder retains a fixed amount of memory regardless of part count.
-func (created Created) WalkParts(visit func(format.PackEntry) error) (returnErr error) {
+func (created *Created) WalkParts(visit func(format.PackEntry) error) (returnErr error) {
 	if created.PartCount == 0 || created.partsPath == "" || len(created.partsHash) != 128 || visit == nil {
 		return fmt.Errorf("completed pack has no readable part catalog")
 	}

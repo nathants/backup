@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -106,6 +107,8 @@ func createAndAuditCloudProbe(ctx context.Context, kind string, client objectsto
 			case objectstore.CreateAmbiguous:
 				auditCandidate = true
 				lastErr = created.Err
+			case objectstore.CreateFailed:
+				fallthrough
 			default:
 				lastErr = created.Err
 			}
@@ -420,12 +423,12 @@ func runR2LockProtectionContract(t *testing.T, ctx context.Context, config cloud
 	bucketEndpoint := strings.TrimSuffix(endpoint, "/lock")
 	// Even a valid token-creation request confined to this bucket must fail:
 	// ordinary object credentials must not acquire credential-issuing authority.
-	tokenBody, err := json.Marshal(map[string]interface{}{
+	tokenBody, err := json.Marshal(map[string]any{
 		"name": "backup-testing-contract-token-" + randomContractHex(t, 8),
-		"policies": []interface{}{map[string]interface{}{
+		"policies": []any{map[string]any{
 			"effect":            "allow",
 			"resources":         map[string]string{"com.cloudflare.edge.r2.bucket." + accountID + "_" + environmentOrDefault("BACKUP_R2_CONTRACT_JURISDICTION", "default") + "_" + config.bucket: "*"},
-			"permission_groups": []interface{}{map[string]string{"id": "2efd5506f9c8494dacb1fa10a3e7d5b6"}},
+			"permission_groups": []any{map[string]string{"id": "2efd5506f9c8494dacb1fa10a3e7d5b6"}},
 		}},
 	})
 	if err != nil {
@@ -626,15 +629,13 @@ func requireCloudHTTPStatus(t *testing.T, operation string, err error, allowed .
 	if !ok {
 		t.Fatalf("%s did not return a provider HTTP rejection: %v", operation, err)
 	}
-	for _, expected := range allowed {
-		if status == expected {
-			if status == http.StatusForbidden {
-				requireCloudClientRejection(t, operation, err)
-			} else {
-				t.Logf("denied %s: HTTP %d", operation, status)
-			}
-			return
+	if slices.Contains(allowed, status) {
+		if status == http.StatusForbidden {
+			requireCloudClientRejection(t, operation, err)
+		} else {
+			t.Logf("denied %s: HTTP %d", operation, status)
 		}
+		return
 	}
 	t.Fatalf("%s returned HTTP %d, expected one of %v: %v", operation, status, allowed, err)
 }

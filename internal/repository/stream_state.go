@@ -51,7 +51,7 @@ func (source fileStateSource) withBlob(name string, visit func(io.Reader) error)
 	if !ok {
 		return fmt.Errorf("metadata source lacks blob %q", name)
 	}
-	if blob.Size > uint64(^uint64(0)>>1) {
+	if blob.Size > ^uint64(0)>>1 {
 		return fmt.Errorf("metadata blob %q size is not representable", name)
 	}
 	fd, err := unix.Open(blob.Path, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)

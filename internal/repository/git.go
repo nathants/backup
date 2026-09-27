@@ -155,7 +155,7 @@ func parseRootTree(data []byte) (map[string]treeEntry, error) {
 	if len(data) == 0 || data[len(data)-1] != 0 {
 		return nil, fmt.Errorf("git tree listing is empty or not NUL-terminated")
 	}
-	for _, record := range bytes.Split(data[:len(data)-1], []byte{0}) {
+	for record := range bytes.SplitSeq(data[:len(data)-1], []byte{0}) {
 		tab := bytes.IndexByte(record, '\t')
 		if tab <= 0 || tab == len(record)-1 {
 			return nil, fmt.Errorf("malformed Git tree record")
@@ -313,8 +313,7 @@ func runStandaloneGit(limit int64, arguments ...string) ([]byte, error) {
 		return nil, fmt.Errorf("git %s output exceeded %d bytes", arguments[0], limit)
 	}
 	if err != nil {
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) {
+		if exitErr, ok := errors.AsType[*exec.ExitError](err); ok {
 			return nil, &GitExitError{Operation: arguments[0], ExitCode: exitErr.ExitCode(), Detail: strings.TrimSpace(stderr.buffer.String())}
 		}
 		return nil, fmt.Errorf("start git %s: %w", arguments[0], err)
@@ -383,8 +382,7 @@ func (validator Validator) withGitBlob(objectID string, declared int64, visit fu
 	}
 	waitErr := command.Wait()
 	if waitErr != nil {
-		var exitErr *exec.ExitError
-		if errors.As(waitErr, &exitErr) {
+		if exitErr, ok := errors.AsType[*exec.ExitError](waitErr); ok {
 			return &GitExitError{Operation: "cat-file", ExitCode: exitErr.ExitCode(), Detail: strings.TrimSpace(stderr.buffer.String())}
 		}
 		return fmt.Errorf("wait for git cat-file: %w", waitErr)
@@ -412,8 +410,7 @@ func (validator Validator) gitOutput(limit int64, arguments ...string) ([]byte, 
 		return nil, fmt.Errorf("git %s output exceeded %d bytes", arguments[0], limit)
 	}
 	if err != nil {
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) {
+		if exitErr, ok := errors.AsType[*exec.ExitError](err); ok {
 			return nil, &GitExitError{Operation: arguments[0], ExitCode: exitErr.ExitCode(), Detail: strings.TrimSpace(stderr.buffer.String())}
 		}
 		return nil, fmt.Errorf("start git %s: %w", arguments[0], err)

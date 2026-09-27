@@ -405,7 +405,7 @@ func TestDockerRealClientTwoMirrorBackupSyncRestoreAndRecover(t *testing.T) {
 	}
 
 	packHash, partNumber := firstPackPart(t, source, secondCommit)
-	repairOutput := runEnv(t, "", clientEnvironment, binary, "repair", "data", "--root", source, "--config", config, "--source", "a", packHash, strconv.FormatUint(uint64(partNumber), 10))
+	repairOutput := runEnv(t, "", clientEnvironment, binary, "repair", "data", "--root", source, "--config", config, "--source", "a", packHash, strconv.FormatUint(partNumber, 10))
 	repairCommit := outputField(t, repairOutput, "commit")
 	if repairCommit == secondCommit || outputField(t, repairOutput, "old-object-id") == outputField(t, repairOutput, "new-object-id") {
 		t.Fatalf("unexpected data repair output:\n%s", repairOutput)
@@ -914,9 +914,9 @@ func firstPackPart(t *testing.T, root, revision string) (string, uint64) {
 func outputField(t *testing.T, output, name string) string {
 	t.Helper()
 	prefix := name + "\t"
-	for _, line := range strings.Split(output, "\n") {
-		if strings.HasPrefix(line, prefix) {
-			return strings.TrimPrefix(line, prefix)
+	for line := range strings.SplitSeq(output, "\n") {
+		if after, ok := strings.CutPrefix(line, prefix); ok {
+			return after
 		}
 	}
 	t.Fatalf("output lacks field %q:\n%s", name, output)

@@ -335,6 +335,10 @@ func (root *Root) scanDirectory(directoryFD int, relative string, parentMount ui
 					result.SkippedBrokenSymlinks++
 				case EventOutsideSymlink:
 					result.SkippedOutsideSymlinks++
+				case EventMountEntered, EventGitIgnored, EventGitIgnoreFallback, EventSpecialSkipped, EventPermissionSkipped, EventFileChanged:
+					fallthrough
+				default:
+					return fmt.Errorf("source symlink %q reported unexpected skip %q", indexPath, skipKind)
 				}
 				report(reporter, Event{Kind: skipKind, Path: indexPath})
 			default:
@@ -532,7 +536,7 @@ func symlinkTargetOutsideRoot(rootPath, indexPath, target string) bool {
 }
 
 func (root *Root) CapturePath(planned format.IndexEntry, spool *Spool, reserveBytes uint64) (CaptureResult, error) {
-	for attempt := 0; attempt < 3; attempt++ {
+	for range 3 {
 		captured, err := root.capturePathOnce(planned, spool, reserveBytes)
 		if !errors.Is(err, errCaptureRace) {
 			return captured, err
@@ -638,8 +642,7 @@ func (root *Root) captureRegular(parentFD int, name string, planned format.Index
 	limited := &io.LimitedReader{R: sourceReader{Reader: source}, N: int64(identity.Size)}
 	count, err := io.CopyBuffer(io.MultiWriter(temporary.File, hash), limited, make([]byte, 1<<20))
 	if err != nil {
-		var readErr *sourceReadError
-		if errors.As(err, &readErr) {
+		if _, ok := errors.AsType[*sourceReadError](err); ok {
 			return captureSourceFailure(fmt.Errorf("read planned source %q: %w", planned.Path, err))
 		}
 		return CaptureResult{}, fmt.Errorf("capture planned source %q: %w", planned.Path, err)
@@ -697,7 +700,7 @@ func identityFromStat(stat unix.Stat_t) (Identity, error) {
 		return Identity{}, fmt.Errorf("ctime: %w", err)
 	}
 	return Identity{
-		Device: uint64(stat.Dev), Inode: stat.Ino, Size: uint64(stat.Size), Mode: stat.Mode & 0o777,
+		Device: uint64(stat.Dev), Inode: stat.Ino, Size: uint64(stat.Size), Mode: stat.Mode & 0o777, //nolint:unconvert // Stat_t.Dev is uint32 on linux/mips64 and mips64le.
 		MtimeSec: stat.Mtim.Sec, MtimeNS: stat.Mtim.Nsec, CtimeSec: stat.Ctim.Sec, CtimeNS: stat.Ctim.Nsec,
 	}, nil
 }

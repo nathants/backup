@@ -34,7 +34,7 @@ func TestCanonicalTarGoldenAndRead(t *testing.T) {
 	}
 	expected := map[string]uint64{name: uint64(len(data))}
 	seen := 0
-	if err := ReadArchive(bytes.NewReader(archive), expected, func(hash string, size uint64, reader io.Reader) error {
+	if err := ReadArchive(bytes.NewReader(archive), expected, func(_ string, _ uint64, reader io.Reader) error {
 		data, err := io.ReadAll(reader)
 		if err == nil && string(data) != "alpha" {
 			t.Fatalf("data=%q", data)

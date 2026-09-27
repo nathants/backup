@@ -485,11 +485,8 @@ func chooseCiphertextPartSize(configured, reserveBytes, availableBytes, availabl
 	if availableBytes <= reserveBytes {
 		return 0, fmt.Errorf("ciphertext staging has %d available bytes, not enough to retain the %d-byte reserve", availableBytes, reserveBytes)
 	}
-	safe := availableBytes - reserveBytes
-	if configured < safe {
-		safe = configured
-	}
-	if safe == 0 || safe > uint64(^uint64(0)>>1) {
+	safe := min(configured, availableBytes-reserveBytes)
+	if safe == 0 || safe > ^uint64(0)>>1 {
 		return 0, fmt.Errorf("safe ciphertext part size %d is not representable", safe)
 	}
 	return safe, nil

@@ -81,7 +81,7 @@ func (options Options) normalized() (Options, error) {
 		}
 		options.SpoolDirectory = spool
 	}
-	if options.PackTarget == 0 || options.PartSize == 0 || options.MetadataPartSize == 0 || options.PartSize > uint64(^uint64(0)>>1) || options.MetadataPartSize > uint64(^uint64(0)>>1) {
+	if options.PackTarget == 0 || options.PartSize == 0 || options.MetadataPartSize == 0 || options.PartSize > ^uint64(0)>>1 || options.MetadataPartSize > ^uint64(0)>>1 {
 		return Options{}, fmt.Errorf("pack and part sizes must be positive and representable")
 	}
 	if options.Stdout == nil {
@@ -288,7 +288,7 @@ type transaction struct {
 	Capture         *captureProgress           `json:"capture,omitempty"`
 	CandidateFiles  map[string]stagedFileRef   `json:"candidate_files,omitempty"`
 	CandidateHashes map[string]string          `json:"candidate_hashes"`
-	DataPartsFile   stagedFileRef              `json:"data_parts_file,omitempty"`
+	DataPartsFile   stagedFileRef              `json:"data_parts_file"`
 	DataPartCount   uint64                     `json:"-"`
 	LocalCommit     string                     `json:"local_commit"`
 	LocalAccepted   bool                       `json:"local_accepted"`

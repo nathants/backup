@@ -75,7 +75,7 @@ func TestAWSGitRemoteKeychains(t *testing.T) {
 	}
 	command("init")
 	latest := ""
-	for generation := 0; generation < 2; generation++ {
+	for generation := range 2 {
 		ptext, err := pub.MarshalText()
 		if err != nil {
 			t.Fatal(err)
@@ -106,7 +106,7 @@ func TestAWSGitRemoteKeychains(t *testing.T) {
 		t.Fatal(err)
 	}
 	command("restore", "--target", target, `^\./generation-`, latest)
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		data, err := os.ReadFile(filepath.Join(target, fmt.Sprintf("generation-%d", i)))
 		if err != nil || string(data) != fmt.Sprintf("generation %d", i) {
 			t.Fatalf("bad restored generation %d: %v", i, err)

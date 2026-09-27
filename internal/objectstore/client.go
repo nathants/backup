@@ -82,7 +82,7 @@ func rejectAWSEndpointEnvironment() error {
 	return nil
 }
 
-func rejectAWSSharedConfigEndpoints(sources []interface{}) error {
+func rejectAWSSharedConfigEndpoints(sources []any) error {
 	for _, source := range sources {
 		var shared *awsconfig.SharedConfig
 		switch value := source.(type) {
@@ -341,10 +341,7 @@ func (client *Client) ListLimited(ctx context.Context, logicalPrefix string, max
 	seenContinuations := make(map[string]struct{})
 	for {
 		before := len(result)
-		pageSize := maximum - len(result) + 1
-		if pageSize > 1000 {
-			pageSize = 1000
-		}
+		pageSize := min(maximum-len(result)+1, 1000)
 		output, err := client.client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{Bucket: &client.bucket, Prefix: &prefix, ContinuationToken: continuation, MaxKeys: aws.Int32(int32(pageSize))})
 		if err != nil {
 			return nil, err
@@ -379,7 +376,7 @@ func (client *Client) ListLimited(ctx context.Context, logicalPrefix string, max
 }
 
 func (object Object) validate() error {
-	if object.Size > uint64(^uint64(0)>>1)-1 {
+	if object.Size > (^uint64(0)>>1)-1 {
 		return fmt.Errorf("object is too large")
 	}
 	for label, value := range map[string]string{"BLAKE2b": object.BLAKE2b, "SHA-256": object.SHA256, "MD5": object.MD5} {
@@ -428,7 +425,7 @@ func (client *Client) listPrefix(logical string) (string, error) {
 }
 
 func safeLogicalComponents(value string) bool {
-	for _, component := range strings.Split(value, "/") {
+	for component := range strings.SplitSeq(value, "/") {
 		if component == "" || component == "." || component == ".." {
 			return false
 		}
@@ -464,12 +461,10 @@ func digestBase64(value string, size int) (string, error) {
 }
 
 func responseStatus(err error) int {
-	var responseError *smithyhttp.ResponseError
-	if errors.As(err, &responseError) {
+	if responseError, ok := errors.AsType[*smithyhttp.ResponseError](err); ok {
 		return responseError.HTTPStatusCode()
 	}
-	var apiError smithy.APIError
-	if errors.As(err, &apiError) {
+	if apiError, ok := errors.AsType[smithy.APIError](err); ok {
 		switch apiError.ErrorCode() {
 		case "PreconditionFailed":
 			return http.StatusPreconditionFailed
