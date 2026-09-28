@@ -11,7 +11,7 @@ region=${AWS_REGION:-${AWS_DEFAULT_REGION:-}}
 [[ $LIBAWS_TEST_ACCOUNT =~ ^[0-9]{12}$ && $region =~ ^[a-z0-9-]+$ ]] || {
   echo 'invalid account guard or missing region' >&2; exit 1;
 }
-for tool in aws libaws go git python3 timeout; do
+for tool in aws libaws go git timeout; do
   command -v "$tool" >/dev/null || { echo "missing $tool" >&2; exit 1; }
 done
 # Pin provider routing; the tests intentionally receive scratch account access.
@@ -24,11 +24,10 @@ unset GIT_REMOTE_AWS_PUBLICKEY GIT_REMOTE_AWS_SECRETKEY GIT_REMOTE_AWS_SECRETKEY
 export AWS_CONFIG_FILE=/dev/null AWS_SHARED_CREDENTIALS_FILE=/dev/null AWS_EC2_METADATA_DISABLED=true
 export AWS_REGION=$region AWS_DEFAULT_REGION=$region AWS_IGNORE_CONFIGURED_ENDPOINT_URLS=true
 export AWS_USE_FIPS_ENDPOINT=false AWS_USE_DUALSTACK_ENDPOINT=false AWS_PAGER=''
-aws_call() { timeout --kill-after=10s 2m aws "$@"; }
-[[ $(aws_call sts get-caller-identity --query Account --output text) == "$LIBAWS_TEST_ACCOUNT" ]] || {
+[[ $(timeout --kill-after=10s 2m aws sts get-caller-identity --query Account --output text) == "$LIBAWS_TEST_ACCOUNT" ]] || {
   echo 'wrong scratch account' >&2; exit 1;
 }
-# Fail before provisioning if the sibling helper checkout does not build.
+# Fail before creating resources if the sibling helper checkout does not build.
 (cd "$repo/../git-remote-aws"; GOFLAGS= go build -o /dev/null .)
 echo "git-remote-aws helper: $(git -C "$repo/../git-remote-aws" describe --always --dirty)"
 
@@ -38,42 +37,10 @@ if [[ -n ${BACKUP_CONTRACT_EVIDENCE_DIR:-} ]]; then
 else
   workspace=$(mktemp -d "${TMPDIR:-/tmp}/backup-git-primary.XXXXXXXX")
 fi
-name="backup-git-test-$(tr -d '-' </proc/sys/kernel/random/uuid)"
-printf '%s\n' "$name" > "$workspace/resource"
-echo "Git-primary scratch bucket/table: $name; evidence: $workspace"
-# Establish absence in the guarded account before recording create intent.
-aws_call s3api list-buckets --output json > "$workspace/buckets-before.json"
-aws_call dynamodb list-tables --output json > "$workspace/tables-before.json"
-python3 -I - "$workspace" "$name" <<'PY'
-import json, pathlib, sys
-root, name = pathlib.Path(sys.argv[1]), sys.argv[2]
-if (name in [x['Name'] for x in json.loads((root/'buckets-before.json').read_text())['Buckets']]
-        or name in json.loads((root/'tables-before.json').read_text())['TableNames']):
-    sys.exit('refusing to reuse an existing scratch resource')
-PY
-bucket_requested=false
-table_requested=false
+echo "Git-primary evidence: $workspace"
 cleanup() {
   status=$?
   trap - EXIT INT TERM
-  set +e
-  # Inventory proves ownership/absence even after a lost create response.
-  if $bucket_requested; then
-    if aws_call s3api list-buckets --query "Buckets[?Name=='$name'].Name" --output text > "$workspace/bucket-owned"; then
-      if [[ -s $workspace/bucket-owned ]]; then
-        # The helper enables versioning, so every version and delete marker must go.
-        timeout --kill-after=10s 10m libaws s3-rm-bucket "$name" > "$workspace/bucket-cleanup.log" 2>&1 || status=1
-      fi
-    else status=1; fi
-  fi
-  if $table_requested; then
-    if aws_call dynamodb list-tables --query "TableNames[?@=='$name']" --output text > "$workspace/table-owned"; then
-      if [[ -s $workspace/table-owned ]]; then
-        aws_call dynamodb delete-table --table-name "$name" > "$workspace/table-cleanup.log" 2>&1 &&
-          aws_call dynamodb wait table-not-exists --table-name "$name" >> "$workspace/table-cleanup.log" 2>&1 || status=1
-      fi
-    else status=1; fi
-  fi
   if [[ $status == 0 && -z ${BACKUP_CONTRACT_EVIDENCE_DIR:-} ]]; then
     rm -rf -- "$workspace"
   else
@@ -84,15 +51,7 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
-bucket_requested=true
-args=(s3api create-bucket --bucket "$name")
-if [[ $region != us-east-1 ]]; then args+=(--create-bucket-configuration "LocationConstraint=$region"); fi
-aws_call "${args[@]}" > "$workspace/bucket-create.json"
-table_requested=true
-aws_call dynamodb create-table --table-name "$name" --billing-mode PAY_PER_REQUEST \
-  --attribute-definitions AttributeName=id,AttributeType=S --key-schema AttributeName=id,KeyType=HASH > "$workspace/table-create.json"
-aws_call dynamodb wait table-exists --table-name "$name"
-export GIT_REMOTE_AWS_TEST_ACCOUNT=$LIBAWS_TEST_ACCOUNT GIT_REMOTE_AWS_TEST_BUCKET=$name GIT_REMOTE_AWS_TEST_TABLE=$name
+# Each run creates and deletes its own scratch bucket and table.
 for mode in normal race; do
   flags=''
   if [[ $mode == race ]]; then flags=-race; fi
@@ -101,4 +60,4 @@ for mode in normal race; do
     > "$workspace/backup-$mode.log" 2>&1 || { tail -40 "$workspace/backup-$mode.log"; exit 1; }
   grep -q '^--- PASS: TestAWSGitRemoteKeychains ' "$workspace/backup-$mode.log" || { echo 'backup Git-primary contract did not run' >&2; exit 1; }
 done
-echo 'Git-primary contracts passed; cleaning scratch resources.'
+echo 'Git-primary contracts passed.'

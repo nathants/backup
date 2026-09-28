@@ -5,13 +5,13 @@ contract and Git-primary contract have different permissions and resources; neit
 substitutes for the other. Do not give the immutable mirror credential DynamoDB or
 broader S3 permissions to make this test work.
 
-The checked-in `integration/git-remote.sh` provisions one fresh private scratch S3
-bucket and one DynamoDB table under a random `backup-git-test-` name. It runs the
-real backup CLI against that primary and a local TLS object server, with a helper
-built from the current sibling `../git-remote-aws` checkout, whose revision it
-prints. It repeats the run with `GOFLAGS=-race`, instrumenting newly built child
-binaries as well as test processes. An explicit PASS check prevents the contract
-from silently skipping.
+The checked-in `integration/git-remote.sh` runs the real backup CLI against an AWS
+Git primary and a local TLS object server, with a helper built from the current
+sibling `../git-remote-aws` checkout, whose revision it prints. Each test run
+creates one fresh private scratch S3 bucket and one DynamoDB table under a random
+`backup-git-test-` name through the helper's `ensure=y` setup. The runner repeats
+the run with `GOFLAGS=-race`, instrumenting newly built child binaries as well as
+test processes. An explicit PASS check prevents the contract from silently skipping.
 
 Readability of data written by older helpers is git-remote-aws's own contract,
 covered by its live gate. This clean-break project has no such data.
@@ -19,8 +19,9 @@ covered by its live gate. This clean-break project has no such data.
 Requirements:
 
 1. The sibling source checkouts, Go/libsodium and normal project check tools.
-2. AWS CLI, libaws, Git, GNU timeout, and Python 3.8 or newer (also needed by the
-   cloud-free executable/PTY secret-loader regressions). Nothing is auto-installed.
+2. AWS CLI, libaws, Git, and GNU timeout; the cloud-free executable/PTY
+   secret-loader regressions in `make check` also need Python 3.8 or newer.
+   Nothing is auto-installed.
 3. Explicit scratch-account AWS access-key environment credentials, an optional
    session token, region, and an independent `LIBAWS_TEST_ACCOUNT` guard. The runner
    verifies STS identity and disables ambient endpoint overrides/profile fallback.
@@ -35,18 +36,17 @@ make integration-git-remote
 
 The Make target first runs cloud-free `make check`. For a focused rerun after that
 passes, execute `./integration/git-remote.sh` with the same environment. The runner
-prints the exact bucket/table name and evidence directory before mutation. Test
-logs and resource inventories are private; do not publish them indiscriminately.
+prints its evidence directory, and each test logs its exact bucket/table name
+before creating it. Test logs are private; do not publish them indiscriminately.
 
-The runner establishes resource absence in the guarded account before create
-intent and cleans up its bucket and table after success or failure, including
-ambiguous create outcomes through fresh ownership inventory. The helper enables
-bucket versioning on push, so cleanup deletes every object version and delete
-marker before the bucket. Cleanup errors fail the gate and retain evidence. A host
-crash/SIGKILL can bypass traps: use the printed resource name and preserved
-inventories for targeted cleanup, never a broad deletion of similarly named
-resources. Independent account inventory should confirm removal after the gate.
-These are disposable test resources, not immutable production mirrors or retained
+Test cleanup permanently deletes the bucket, including every object version and
+delete marker, and the table after success or failure. Setup is retried only while
+the bucket is still absent, because the helper never retries an uncertain
+CreateBucket. Cleanup errors fail the gate and retain evidence. An interrupted,
+killed, or timed-out test skips cleanup: delete exactly the bucket and table named
+in its retained log, never a broad deletion of similarly named resources.
+Independent account inventory should confirm removal after the gate. These are
+disposable test resources, not immutable production mirrors or retained
 ransomware probes.
 
 A successful test proves real backup/helper interoperability, committed recipient
