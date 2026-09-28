@@ -752,7 +752,7 @@ R2 rejects a wrong full-object SHA-256, persists and returns a valid digest thro
 
 These are deployment acceptance gates, not implementation prerequisites or new features. The first production revision is not accepted until all have succeeded:
 
-1. Complete `make integration`, the separate [AWS Git-primary gate](git-primary-contract.md) (`make integration-git-remote`), and the exact-production contract runbook above for every configured cloud backend; retain and recheck each immutable probe. The Git-primary gate uses a helper built from the sibling git-remote-aws checkout and provisions/cleans its own guarded scratch S3/DynamoDB resources, without expanding mirror credentials.
+1. Complete `make integration`, the separate [AWS Git-primary gate](git-primary-contract.md) (`make integration-git-remote`), and the exact-production contract runbook above for every configured cloud backend; retain and recheck each immutable probe. The Git-primary gate uses a helper built from a clean sibling git-remote-aws checkout and records its commit. Require separate passing evidence from the helper's full live AWS gate at that same commit; backup's interoperability test does not replace it. The backup gate provisions through `ensure=y` and owns guarded, bounded cleanup of its scratch S3/DynamoDB resources, without expanding mirror credentials.
 2. Complete the revision on at least two individual mirrors when two are configured.
 3. Verify each configured mirror using its backend-appropriate trustworthy checksum path.
 4. Perform full local decrypt/decompress/plaintext verification.

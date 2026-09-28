@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -20,11 +21,15 @@ import (
 	"github.com/nathants/go-libsodium"
 )
 
-// Creates a fresh scratch bucket and table and deletes them afterwards. Never
-// enable this with credentials for a production account.
+// The runner checks resource absence and owns cleanup, including after this
+// process is killed. Never enable this with production-account credentials.
 func TestAWSGitRemoteKeychains(t *testing.T) {
 	if os.Getenv("BACKUP_GIT_REMOTE_CONTRACT") != "1" {
 		t.Skip("requires explicit scratch Git-remote contract")
+	}
+	scratch := os.Getenv("BACKUP_GIT_REMOTE_RESOURCE")
+	if !regexp.MustCompile(`^backup-git-test-[0-9a-f]{32}$`).MatchString(scratch) {
+		t.Fatal("run through integration/git-remote.sh: runner-owned scratch resource required")
 	}
 	account := os.Getenv("LIBAWS_TEST_ACCOUNT")
 	if account == "" {
@@ -60,7 +65,7 @@ func TestAWSGitRemoteKeychains(t *testing.T) {
 	awsConfig := filepath.Join(workspace, "aws-config")
 	writeFile(t, awsConfig, []byte("[default]\nregion = "+region+"\n"), 0600)
 	path := workspace + string(os.PathListSeparator) + os.Getenv("PATH")
-	scratch := createGitRemoteResources(t, account, cleanEnvironment(map[string]string{"PATH": path, "AWS_SHARED_CREDENTIALS_FILE": credentials, "AWS_CONFIG_FILE": awsConfig, "AWS_EC2_METADATA_DISABLED": "true", "ensure": "y"}))
+	createGitRemoteResources(t, account, scratch, cleanEnvironment(map[string]string{"PATH": path, "AWS_SHARED_CREDENTIALS_FILE": credentials, "AWS_CONFIG_FILE": awsConfig, "AWS_EC2_METADATA_DISABLED": "true", "ensure": "y"}))
 	root := filepath.Join(workspace, "source")
 	if err := os.Mkdir(root, 0700); err != nil {
 		t.Fatal(err)
@@ -122,22 +127,12 @@ func TestAWSGitRemoteKeychains(t *testing.T) {
 	command("verify")
 }
 
-// createGitRemoteResources creates a fresh bucket and table of the same name
-// through the helper's ensure=y setup and, after the test, permanently deletes
-// both, including every object version and delete marker. The helper never
-// retries an uncertain CreateBucket, so setup is retried only while the bucket,
-// which it creates first, is still absent.
-func createGitRemoteResources(t *testing.T, account string, env []string) string {
+// The runner has confirmed absence and recorded cleanup intent for this name.
+// The helper never retries an uncertain CreateBucket, so setup is retried only
+// while the bucket, which it creates first, is still absent.
+func createGitRemoteResources(t *testing.T, account, name string, env []string) {
 	t.Helper()
-	name := "backup-git-test-" + randomContractHex(t, 16)
 	t.Logf("scratch bucket and table: %s", name)
-	t.Cleanup(func() {
-		for _, arguments := range [][]string{{"s3-rm-bucket", name}, {"dynamodb-rm", name}} {
-			if output, err := exec.Command("libaws", arguments...).CombinedOutput(); err != nil {
-				t.Errorf("libaws %v: %v: %s", arguments, err, output)
-			}
-		}
-	})
 	loaded, err := awsconfig.LoadDefaultConfig(t.Context())
 	if err != nil {
 		t.Fatal(err)
@@ -150,7 +145,7 @@ func createGitRemoteResources(t *testing.T, account string, env []string) string
 		setup.Dir, setup.Env = directory, env
 		output, err := setup.CombinedOutput()
 		if err == nil {
-			return name
+			return
 		}
 		_, headErr := client.HeadBucket(t.Context(), &s3.HeadBucketInput{Bucket: aws.String(name), ExpectedBucketOwner: aws.String(account)})
 		if status, _ := cloudHTTPStatus(headErr); attempt == 3 || status != http.StatusNotFound {
