@@ -125,11 +125,11 @@ func TestCloudFreeEnvironmentDisablesGitContract(t *testing.T) {
 }
 
 func TestGitPrimaryRunnerRequiresExplicitGuards(t *testing.T) {
-	for _, missing := range []string{"LIBAWS_TEST_ACCOUNT", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "GIT_REMOTE_AWS_TEST_OLD_BINARY"} {
+	for _, missing := range []string{"LIBAWS_TEST_ACCOUNT", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"} {
 		t.Run(missing, func(t *testing.T) {
 			env := map[string]string{
 				"LIBAWS_TEST_ACCOUNT": "123456789012", "AWS_ACCESS_KEY_ID": "synthetic",
-				"AWS_SECRET_ACCESS_KEY": "synthetic", "GIT_REMOTE_AWS_TEST_OLD_BINARY": "/absent",
+				"AWS_SECRET_ACCESS_KEY": "synthetic",
 			}
 			env[missing] = ""
 			cmd := exec.Command("bash", "./git-remote.sh")

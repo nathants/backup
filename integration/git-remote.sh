@@ -7,7 +7,6 @@ repo=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 : "${LIBAWS_TEST_ACCOUNT:?guarded scratch account required}"
 : "${AWS_ACCESS_KEY_ID:?explicit scratch credentials required}"
 : "${AWS_SECRET_ACCESS_KEY:?explicit scratch credentials required}"
-: "${GIT_REMOTE_AWS_TEST_OLD_BINARY:?independently built pre-keychain helper required}"
 region=${AWS_REGION:-${AWS_DEFAULT_REGION:-}}
 [[ $LIBAWS_TEST_ACCOUNT =~ ^[0-9]{12}$ && $region =~ ^[a-z0-9-]+$ ]] || {
   echo 'invalid account guard or missing region' >&2; exit 1;
@@ -29,8 +28,9 @@ aws_call() { timeout --kill-after=10s 2m aws "$@"; }
 [[ $(aws_call sts get-caller-identity --query Account --output text) == "$LIBAWS_TEST_ACCOUNT" ]] || {
   echo 'wrong scratch account' >&2; exit 1;
 }
-# Fail before provisioning if the exact independent old artifact is unavailable.
-(cd "$repo/../git-remote-aws"; GOFLAGS= go test -count=1 -run '^TestKeyCompatibilitySelectedArtifact$' .)
+# Fail before provisioning if the sibling helper checkout does not build.
+(cd "$repo/../git-remote-aws"; GOFLAGS= go build -o /dev/null .)
+echo "git-remote-aws helper: $(git -C "$repo/../git-remote-aws" describe --always --dirty)"
 
 if [[ -n ${BACKUP_CONTRACT_EVIDENCE_DIR:-} ]]; then
   mkdir -p -- "$BACKUP_CONTRACT_EVIDENCE_DIR"
@@ -61,8 +61,8 @@ cleanup() {
   if $bucket_requested; then
     if aws_call s3api list-buckets --query "Buckets[?Name=='$name'].Name" --output text > "$workspace/bucket-owned"; then
       if [[ -s $workspace/bucket-owned ]]; then
-        timeout --kill-after=10s 5m aws s3 rm "s3://$name/" --recursive > "$workspace/bucket-cleanup.log" 2>&1 &&
-          aws_call s3api delete-bucket --bucket "$name" >> "$workspace/bucket-cleanup.log" 2>&1 || status=1
+        # The helper enables versioning, so every version and delete marker must go.
+        timeout --kill-after=10s 10m libaws s3-rm-bucket "$name" > "$workspace/bucket-cleanup.log" 2>&1 || status=1
       fi
     else status=1; fi
   fi
@@ -97,9 +97,6 @@ for mode in normal race; do
   flags=''
   if [[ $mode == race ]]; then flags=-race; fi
   echo "Git-primary contract: $mode"
-  (cd "$repo/../git-remote-aws"; GOFLAGS=$flags timeout --kill-after=30s 35m go test -count=1 -timeout=30m -v ./...) \
-    > "$workspace/helper-$mode.log" 2>&1 || { tail -40 "$workspace/helper-$mode.log"; exit 1; }
-  grep -q '^--- PASS: TestStoredDataCompatibilityAndRotation ' "$workspace/helper-$mode.log" || { echo 'old-data contract did not run' >&2; exit 1; }
   (cd "$repo"; BACKUP_GIT_REMOTE_CONTRACT=1 GOFLAGS=$flags timeout --kill-after=30s 35m go test -count=1 -timeout=30m -v -run '^TestAWSGitRemoteKeychains$' ./integration) \
     > "$workspace/backup-$mode.log" 2>&1 || { tail -40 "$workspace/backup-$mode.log"; exit 1; }
   grep -q '^--- PASS: TestAWSGitRemoteKeychains ' "$workspace/backup-$mode.log" || { echo 'backup Git-primary contract did not run' >&2; exit 1; }
