@@ -20,7 +20,8 @@ make
 # equivalently: make build
 ```
 
-Metadata hosting uses [git-remote-aws](https://github.com/nathants/git-remote-aws).
+Metadata hosting uses the latest
+[git-remote-aws](https://github.com/nathants/git-remote-aws).
 
 ## Prepare and back up
 
@@ -126,6 +127,9 @@ Keep the restore destination exclusively controlled. Use operator-enforced resou
 limits for potentially malicious backups, including metadata recovery and listing.
 
 ## Development
+
+Checks require the real sibling `../git-remote-aws` checkout and Python 3.8+.
+Cloud-resource tests additionally require the explicit scratch-account guards.
 
 ```sh
 make check  # lint, coverage, race detector, vet

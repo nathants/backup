@@ -37,9 +37,9 @@ of the two gates' evidence.
 Requirements:
 
 1. The sibling source checkouts, Go/libsodium and normal project check tools.
-2. AWS CLI, libaws, Git, and GNU timeout; the cloud-free runner and executable/PTY
-   secret-loader regressions in `make check` also need Python 3.8 or newer.
-   Nothing is auto-installed.
+2. AWS CLI, libaws, Git, GNU timeout, and Python 3.8 or newer. Nothing is
+   auto-installed. Cloud-free process-lifecycle checks build and execute the real
+   sibling helper and Git; provider behavior is tested only by the live gate.
 3. Explicit scratch-account AWS access-key environment credentials, an optional
    session token, region, and an independent `LIBAWS_TEST_ACCOUNT` guard. The runner
    verifies STS identity and disables ambient endpoint overrides/profile fallback.
@@ -65,13 +65,19 @@ Only after both absence checks does it record create intent in `resources.tsv`
 and pass the name to the helper test. Setup is retried only while the bucket is
 still absent, because the helper never retries an uncertain CreateBucket.
 
-Runner cleanup stops remaining test processes and then inventories and permanently
-deletes its resources, including every S3 object version and delete marker, after
-success, failure, test timeout, SIGINT, or SIGTERM. Each cleanup command has a
-bounded deadline; bucket cleanup failure does not prevent table cleanup or cleanup
-of the other test run. Fresh ownership inventory also covers ambiguous creation
-outcomes. Cleanup errors fail the gate and retain evidence. Test logs, inventories,
-and cleanup logs are private; do not publish them indiscriminately.
+A Linux child subreaper drains remaining test descendants, including those that
+created separate process groups or sessions, after success, failure, test timeout,
+SIGINT, or SIGTERM. It sends TERM, escalates to KILL after 30 seconds, and allows
+10 more seconds to confirm exit. Without confirmed drainage the gate fails and
+retains resources for operator inspection rather than racing a surviving writer.
+
+Once descendants have exited, runner cleanup inventories and permanently deletes
+its resources, including every S3 object version and delete marker. Each cleanup
+command has a bounded deadline; bucket cleanup failure does not prevent table
+cleanup or cleanup of the other test run. Fresh ownership inventory also covers
+ambiguous creation outcomes. Cleanup errors fail the gate and retain evidence.
+Test logs, inventories, and cleanup logs are private; do not publish them
+indiscriminately.
 
 A host crash or SIGKILL of the runner can still bypass cleanup. Use its retained
 `resources.tsv` and inventories to inspect and delete only that run's exact bucket

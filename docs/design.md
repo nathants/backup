@@ -594,7 +594,7 @@ Disk logging is best-effort: setup, cleanup, write, and close failures warn on s
 
 ## Testing requirements
 
-Cloud-free executable/PTY secret-loader regressions require Python 3.8 or newer; they use synthetic keys and exercise both actual CLIs. Parser-only key-chain cases live in go-libsodium; backup tests its metadata and application boundaries.
+Cloud-free executable/PTY secret-loader regressions require Python 3.8 or newer; they use synthetic keys and exercise both actual CLIs. Git-primary process-lifecycle regressions require the real sibling `../git-remote-aws` checkout and exercise Git/helper descendants across separate process groups and sessions. They do not mock provider commands or require a cloud account. Parser-only key-chain cases live in go-libsodium; backup tests its metadata and application boundaries.
 
 Shared backup workflow fixtures use 1 MiB pack/data-part/metadata-part limits. Splitting, partial-progress, relocation, and recovery tests select smaller limits explicitly and assert the required multipart or incomplete-progress setup. Keep those scenarios explicit rather than imposing tiny-object overhead on every workflow test; production sizing and durability are unchanged.
 

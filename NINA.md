@@ -55,6 +55,8 @@ Prefer boring files and explicit invariants over new abstractions or compatibili
 ## Build and validation
 
 Linux 5.8+, Go 1.27+, Git 2.36+ with SHA-256 support, and libsodium are required.
+Use the latest [git-remote-aws](https://github.com/nathants/git-remote-aws) for metadata
+hosting; integration checks require its real sibling checkout at `../git-remote-aws`.
 `make` or `make build` builds `./backup`. Use published dependencies pinned in
 `go.mod`; remove temporary local replacements before committing published updates.
 

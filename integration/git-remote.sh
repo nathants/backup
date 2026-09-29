@@ -11,7 +11,7 @@ region=${AWS_REGION:-${AWS_DEFAULT_REGION:-}}
 [[ $LIBAWS_TEST_ACCOUNT =~ ^[0-9]{12}$ && $region =~ ^[a-z0-9-]+$ ]] || {
   echo 'invalid account guard or missing region' >&2; exit 1;
 }
-for tool in aws libaws go git timeout; do
+for tool in aws libaws go git python3 timeout; do
   command -v "$tool" >/dev/null || { echo "missing $tool" >&2; exit 1; }
 done
 # Pin provider routing; the tests intentionally receive scratch account access.
@@ -45,6 +45,7 @@ printf '%s\n' "$helper_revision" > "$workspace/helper-revision"
 echo "Git-primary evidence: $workspace"
 resources=()
 contract_pid=''
+drain_markers=()
 
 inventory_bucket() { aws_call s3api list-buckets --query "Buckets[?Name=='$1'].Name" --output text; }
 inventory_table() { aws_call dynamodb list-tables --query "TableNames[?@=='$1']" --output text; }
@@ -78,22 +79,29 @@ cleanup_resource() {
 }
 
 cleanup() {
-  local status=$? name
+  local status=$? name marker drained=true
   trap - EXIT
-  trap ':' INT TERM
+  trap '' INT TERM
   if [[ -n $contract_pid ]]; then
-    # GNU timeout forwards TERM and enforces --kill-after for an unresponsive
-    # child. Drain that group before deleting anything it could still publish.
+    # The subreaper adopts and drains orphans, including separate process groups.
     kill -TERM "$contract_pid" 2>/dev/null || true
     wait "$contract_pid" 2>/dev/null || true
-    kill -KILL -- "-$contract_pid" 2>/dev/null || true
   fi
-  for name in "${resources[@]}"; do
-    if ! cleanup_resource "$name"; then
-      echo "Git-primary cleanup failed: $name" >&2
+  for marker in "${drain_markers[@]}"; do
+    if [[ ! -f $marker ]]; then
+      echo "Process cleanup unconfirmed; retaining scratch resources: $marker" >&2
+      drained=false
       if [[ $status == 0 ]]; then status=1; fi
     fi
   done
+  if $drained; then
+    for name in "${resources[@]}"; do
+      if ! cleanup_resource "$name"; then
+        echo "Git-primary cleanup failed: $name" >&2
+        if [[ $status == 0 ]]; then status=1; fi
+      fi
+    done
+  fi
   if [[ $status == 0 && -z ${BACKUP_CONTRACT_EVIDENCE_DIR:-} ]]; then
     rm -rf -- "$workspace"
   else
@@ -119,11 +127,13 @@ for mode in normal race; do
   resources+=("$name")
   flags=''
   if [[ $mode == race ]]; then flags=-race; fi
+  marker="$workspace/backup-$mode.drained"
+  drain_markers+=("$marker")
   # Defer interruption until the child's identity is available to cleanup.
   signal_status=0
   trap 'signal_status=130' INT
   trap 'signal_status=143' TERM
-  (cd "$repo"; BACKUP_GIT_REMOTE_CONTRACT=1 BACKUP_GIT_REMOTE_RESOURCE=$name GOFLAGS=$flags exec timeout --kill-after=30s 35m go test -count=1 -timeout=30m -v -run '^TestAWSGitRemoteKeychains$' ./integration) \
+  (cd "$repo"; BACKUP_GIT_REMOTE_CONTRACT=1 BACKUP_GIT_REMOTE_RESOURCE=$name GOFLAGS=$flags exec python3 -I "$repo/integration/reap.py" --timeout 2100 --drained "$marker" -- go test -count=1 -timeout=30m -v -run '^TestAWSGitRemoteKeychains$' ./integration) \
     > "$workspace/backup-$mode.log" 2>&1 &
   contract_pid=$!
   trap 'exit 130' INT
@@ -131,9 +141,8 @@ for mode in normal race; do
   if [[ $signal_status != 0 ]]; then exit "$signal_status"; fi
   test_status=0
   wait "$contract_pid" || test_status=$?
-  # A Go test timeout can leave child helpers after the test process exits.
-  kill -KILL -- "-$contract_pid" 2>/dev/null || true
   contract_pid=''
+  if [[ ! -f $marker ]]; then echo 'test descendants were not drained' >&2; exit 1; fi
   if [[ $test_status != 0 ]]; then tail -40 "$workspace/backup-$mode.log"; exit "$test_status"; fi
   grep -q '^--- PASS: TestAWSGitRemoteKeychains ' "$workspace/backup-$mode.log" || { echo 'backup Git-primary contract did not run' >&2; exit 1; }
 done
