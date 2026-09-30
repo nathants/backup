@@ -65,7 +65,7 @@ func TestAWSGitRemoteKeychains(t *testing.T) {
 	awsConfig := filepath.Join(workspace, "aws-config")
 	writeFile(t, awsConfig, []byte("[default]\nregion = "+region+"\n"), 0600)
 	path := workspace + string(os.PathListSeparator) + os.Getenv("PATH")
-	createGitRemoteResources(t, account, scratch, cleanEnvironment(map[string]string{"PATH": path, "AWS_SHARED_CREDENTIALS_FILE": credentials, "AWS_CONFIG_FILE": awsConfig, "AWS_EC2_METADATA_DISABLED": "true", "ensure": "y"}))
+	createGitRemoteResources(t, account, scratch, cleanEnvironment(t, map[string]string{"PATH": path, "AWS_SHARED_CREDENTIALS_FILE": credentials, "AWS_CONFIG_FILE": awsConfig, "AWS_EC2_METADATA_DISABLED": "true", "ensure": "y"}))
 	root := filepath.Join(workspace, "source")
 	if err := os.Mkdir(root, 0700); err != nil {
 		t.Fatal(err)
@@ -80,7 +80,7 @@ func TestAWSGitRemoteKeychains(t *testing.T) {
 	}
 	secretFile, loader := filepath.Join(workspace, "secret"), filepath.Join(workspace, "loader")
 	writeFile(t, loader, []byte("#!/bin/sh\n[ \"$1\" = '"+remote+"' ] || exit 2\ncat '"+secretFile+"'\n"), 0700)
-	env := cleanEnvironment(map[string]string{"PATH": path, "AWS_SHARED_CREDENTIALS_FILE": credentials, "AWS_CONFIG_FILE": awsConfig, "AWS_EC2_METADATA_DISABLED": "true", "GIT_REMOTE_AWS_SECRETKEY_CMD": loader})
+	env := cleanEnvironment(t, map[string]string{"PATH": path, "AWS_SHARED_CREDENTIALS_FILE": credentials, "AWS_CONFIG_FILE": awsConfig, "AWS_EC2_METADATA_DISABLED": "true", "GIT_REMOTE_AWS_SECRETKEY_CMD": loader})
 	command := func(name string, args ...string) string {
 		t.Helper()
 		return runEnv(t, "", env, binary, append([]string{name, "--root", root, "--config", config}, args...)...)
@@ -172,7 +172,7 @@ func TestGitPrimaryRunnerRequiresExplicitGuards(t *testing.T) {
 			}
 			env[missing] = ""
 			cmd := exec.Command("bash", "./git-remote.sh")
-			cmd.Env = cleanEnvironment(env)
+			cmd.Env = cleanEnvironment(t, env)
 			output, err := cmd.CombinedOutput()
 			if err == nil || !strings.Contains(string(output), missing) {
 				t.Fatalf("missing guard %s did not fail before AWS access: %v: %s", missing, err, output)

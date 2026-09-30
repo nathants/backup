@@ -147,6 +147,110 @@ func TestInitAddDiffCommitAndNoOp(t *testing.T) {
 	if err != nil || !commitResult.NoChanges || commitResult.CommitID == "" {
 		t.Fatalf("no-op commit: %#v %v", commitResult, err)
 	}
+	// Content already in the base or repeated within the plan counts once.
+	for name, data := range map[string]string{"beta": "alpha", "gamma": "gamma!", "delta": "gamma!"} {
+		if err := os.WriteFile(filepath.Join(harness.root, name), []byte(data), 0o640); err != nil {
+			t.Fatal(err)
+		}
+	}
+	addResult, err = Add(ctx, harness.options, false)
+	if err != nil || addResult.UniqueNewObjects != 1 || addResult.NewBytes != uint64(len("gamma!")) {
+		t.Fatalf("add with duplicate content: %#v %v", addResult, err)
+	}
+}
+
+// An operator commits an ignore edit in the metadata checkout instead of
+// leaving it for backup. Commit and replan refuse before changing anything and
+// suggest add only while add can replace the transaction. The manual recovery
+// publishes the edit without the stray commit.
+func TestCommitRejectsMovedMetadataBranchBeforeCapture(t *testing.T) {
+	for _, captureStarted := range []bool{false, true} {
+		t.Run(fmt.Sprintf("capture-started=%t", captureStarted), func(t *testing.T) {
+			testMovedMetadataBranch(t, captureStarted)
+		})
+	}
+}
+
+func testMovedMetadataBranch(t *testing.T, captureStarted bool) {
+	harness := newIntegrationHarness(t)
+	ctx := context.Background()
+	if _, err := initializePublished(ctx, harness.options, harness.publicKey); err != nil {
+		t.Fatal(err)
+	}
+	repo := harness.options.repositoryPath()
+	ignorePath := filepath.Join(repo, "ignore")
+	ignore := []byte("^\\./secret$\n")
+	for name, data := range map[string][]byte{ignorePath: ignore, filepath.Join(harness.root, "alpha"): []byte("alpha"), filepath.Join(harness.root, "secret"): []byte("secret")} {
+		if err := os.WriteFile(name, data, 0o640); err != nil {
+			t.Fatal(err)
+		}
+	}
+	added, err := Add(ctx, harness.options, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if captureStarted {
+		interrupted := harness.options
+		interrupted.failurePoint = func(point string) error {
+			if point == "commit-capture-started" {
+				return fmt.Errorf("simulated process stop")
+			}
+			return nil
+		}
+		if _, err := Commit(ctx, interrupted); err == nil || !strings.Contains(err.Error(), "checkpoint commit-capture-started") {
+			t.Fatalf("commit was not stopped once capture started: %v", err)
+		}
+	}
+	runGit(t, "-C", repo, "-c", "user.name=operator", "-c", "user.email=operator@example.com", "-c", "commit.gpgsign=false",
+		"-c", "core.hooksPath=/dev/null", "commit", "--all", "--quiet", "--message", "manual ignore edit")
+	operations := map[string]func() error{"commit": func() error { _, err := Commit(ctx, harness.options); return err }}
+	if !captureStarted {
+		operations["replan"] = func() error { _, err := Replan(ctx, harness.options); return err }
+	}
+	for name, operation := range operations {
+		err := operation()
+		if err == nil || !strings.Contains(err.Error(), "not pending transaction base "+added.BaseCommit) {
+			t.Fatalf("%s on a moved metadata branch: %v", name, err)
+		}
+		if suggestsAdd := strings.Contains(err.Error(), "run add"); suggestsAdd == captureStarted {
+			t.Fatalf("%s guidance with capture-started=%t: %v", name, captureStarted, err)
+		}
+	}
+	// The guidance withholds add because add refuses commit progress.
+	if captureStarted {
+		if _, err := Add(ctx, harness.options, false); err == nil || !strings.Contains(err.Error(), "commit progress already exists") {
+			t.Fatalf("add replaced a transaction with commit progress: %v", err)
+		}
+	}
+	run, err := openRuntime(harness.options, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	txn, err := run.loadTransaction()
+	_ = run.close()
+	if err != nil || txn == nil || (txn.Capture != nil) != captureStarted || txn.LocalCommit != "" || txn.BaseCommit != added.BaseCommit {
+		t.Fatalf("moved metadata branch changed the transaction: %+v %v", txn, err)
+	}
+	runGit(t, "-C", repo, "reset", "--soft", "--quiet", added.BaseCommit)
+	if data, err := os.ReadFile(ignorePath); err != nil || !bytes.Equal(data, ignore) {
+		t.Fatalf("recovery lost the ignore edit: %q %v", data, err)
+	}
+	result, err := Commit(ctx, harness.options)
+	if err != nil {
+		t.Fatalf("commit after restoring the base: %v", err)
+	}
+	if parent := strings.TrimSpace(runGit(t, "-C", repo, "rev-parse", result.CommitID+"^")); parent != added.BaseCommit {
+		t.Fatalf("published revision parent %s, want base %s", parent, added.BaseCommit)
+	}
+	if primary := strings.TrimSpace(runGit(t, "--git-dir", harness.bare, "rev-parse", "refs/heads/main")); primary != result.CommitID {
+		t.Fatalf("primary at %s, want %s", primary, result.CommitID)
+	}
+	if published := runGit(t, "-C", repo, "show", result.CommitID+":ignore"); published != string(ignore) {
+		t.Fatalf("published ignore %q, want %q", published, ignore)
+	}
+	if files := runGit(t, "-C", repo, "show", result.CommitID+":index.tsv"); !strings.Contains(files, "./alpha") || strings.Contains(files, "./secret") {
+		t.Fatalf("published index does not apply the ignore edit:\n%s", files)
+	}
 }
 
 func TestMirrorTopologyCanBeAddedAndRemovedWithoutRebinding(t *testing.T) {

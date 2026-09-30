@@ -122,7 +122,7 @@ func (run *runtime) addInitial(ctx context.Context, allowEmpty bool) (AddResult,
 		return AddResult{}, err
 	}
 	config := map[string][]byte{"ignore": blobs["ignore"], ".publickeys": blobs[".publickeys"], "mirrors.tsv": blobs["mirrors.tsv"]}
-	scan, plan, unique, packs, _, err := run.buildAddPlan(ctx, root, base.Ignore, config, base, allowEmpty, nil)
+	scan, plan, content, _, err := run.buildAddPlan(ctx, root, base.Ignore, config, base, allowEmpty, nil)
 	if err != nil {
 		return AddResult{}, err
 	}
@@ -137,7 +137,7 @@ func (run *runtime) addInitial(ctx context.Context, allowEmpty bool) (AddResult,
 	if err := run.checkpoint("candidate-transaction-recorded"); err != nil {
 		return AddResult{}, err
 	}
-	return AddResult{Entries: plan.Entries, UniqueNewObjects: unique, NewPacks: packs, Scan: scan}, nil
+	return AddResult{Entries: plan.Entries, UniqueNewObjects: content.Objects, NewBytes: content.Bytes, NewPacks: content.Packs, Scan: scan}, nil
 }
 
 func (run *runtime) diffInitial(txn *transaction, visit func(Diff) error) (uint64, error) {
@@ -167,7 +167,7 @@ func (run *runtime) diffInitial(txn *transaction, visit func(Diff) error) (uint6
 // startGenesis durably hands the initial path plan to the existing publication
 // state machine. Only the previously absent mirror topology is filled from
 // trusted configuration; ignore/recipients must still equal the add-time bytes.
-func (run *runtime) startGenesis(txn *transaction) error {
+func (run *runtime) startGenesis(ctx context.Context, txn *transaction) error {
 	if txn == nil || txn.Kind != "initial" || txn.Plan == nil {
 		return fmt.Errorf("run add before the first commit")
 	}
@@ -212,6 +212,9 @@ func (run *runtime) startGenesis(txn *transaction) error {
 		return fmt.Errorf("initial mirrors do not match trusted configuration")
 	}
 	blobs["mirrors.tsv"] = mirrorBytes
+	if err := run.requireWritableFilesystemMirrors(ctx, config.Mirrors); err != nil {
+		return err
+	}
 	// Persist the authority before touching origin, so interrupted binding cannot
 	// be resumed with a different destination or branch.
 	run.preparation.GitRemote, run.preparation.Branch = config.GitRemote, config.Branch
@@ -274,7 +277,7 @@ func (run *runtime) commitInitial(ctx context.Context, txn *transaction) (*trans
 		return nil, fmt.Errorf("run add before the first commit")
 	}
 	if txn.Kind == "initial" {
-		if err := run.startGenesis(txn); err != nil {
+		if err := run.startGenesis(ctx, txn); err != nil {
 			return nil, err
 		}
 	}

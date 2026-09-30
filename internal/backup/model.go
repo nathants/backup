@@ -123,6 +123,7 @@ type AddResult struct {
 	BaseCommit       string
 	Entries          int
 	UniqueNewObjects int
+	NewBytes         uint64
 	NewPacks         int
 	NoChanges        bool
 	Scan             filesystem.Result

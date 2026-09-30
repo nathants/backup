@@ -276,7 +276,7 @@ func TestDockerRealClientTwoMirrorBackupSyncRestoreAndRecover(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	clientEnvironment := cleanEnvironment(map[string]string{
+	clientEnvironment := cleanEnvironment(t, map[string]string{
 		"AWS_SHARED_CREDENTIALS_FILE": credentials,
 		"AWS_CONFIG_FILE":             awsConfig,
 		"AWS_EC2_METADATA_DISABLED":   "true",
@@ -932,11 +932,15 @@ func outputUintField(t *testing.T, output, name string) uint64 {
 	return value
 }
 
-func cleanEnvironment(overrides map[string]string) []string {
-	environment := make([]string, 0, len(os.Environ())+len(overrides))
+// cleanEnvironment drops the developer's cloud, backup, and helper settings and
+// gives launched processes a private HOME, so CLI debug logs and other home
+// state never reach the developer's real home directory.
+func cleanEnvironment(t *testing.T, overrides map[string]string) []string {
+	t.Helper()
+	environment := make([]string, 0, len(os.Environ())+len(overrides)+1)
 	for _, entry := range os.Environ() {
 		name, _, _ := strings.Cut(entry, "=")
-		if strings.HasPrefix(name, "AWS_") || strings.HasPrefix(name, "BACKUP_") || strings.HasPrefix(name, "GIT_REMOTE_AWS_") {
+		if name == "HOME" || strings.HasPrefix(name, "AWS_") || strings.HasPrefix(name, "BACKUP_") || strings.HasPrefix(name, "GIT_REMOTE_AWS_") {
 			continue
 		}
 		if _, replaced := overrides[name]; replaced {
@@ -944,6 +948,7 @@ func cleanEnvironment(overrides map[string]string) []string {
 		}
 		environment = append(environment, entry)
 	}
+	environment = append(environment, "HOME="+t.TempDir())
 	for name, value := range overrides {
 		environment = append(environment, name+"="+value)
 	}

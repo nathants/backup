@@ -79,7 +79,7 @@ func Replan(ctx context.Context, options Options) (AddResult, error) {
 	if err := run.cleanupAddBuilds(); err != nil {
 		return AddResult{}, err
 	}
-	scan, plan, unique, packs, noChanges, err := run.buildAddPlan(ctx, root, ignore, config, base, txn.Plan.AllowEmpty, txn.Plan)
+	scan, plan, content, noChanges, err := run.buildAddPlan(ctx, root, ignore, config, base, txn.Plan.AllowEmpty, txn.Plan)
 	if err != nil {
 		return AddResult{}, err
 	}
@@ -99,7 +99,7 @@ func Replan(ctx context.Context, options Options) (AddResult, error) {
 	if err := run.cleanupPlanGenerations(plan); err != nil {
 		return AddResult{}, err
 	}
-	return AddResult{BaseCommit: txn.BaseCommit, Entries: plan.Entries, UniqueNewObjects: unique, NewPacks: packs, NoChanges: noChanges, Scan: scan}, nil
+	return AddResult{BaseCommit: txn.BaseCommit, Entries: plan.Entries, UniqueNewObjects: content.Objects, NewBytes: content.Bytes, NewPacks: content.Packs, NoChanges: noChanges, Scan: scan}, nil
 }
 
 func (run *runtime) replanBase(txn *transaction) (repository.State, func(), error) {
@@ -121,7 +121,7 @@ func (run *runtime) replanBase(txn *transaction) (repository.State, func(), erro
 		return repository.State{}, noop, err
 	}
 	if head != txn.BaseCommit {
-		return repository.State{}, noop, fmt.Errorf("metadata HEAD changed since add; run add to refresh the base")
+		return repository.State{}, noop, run.movedBaseError(head, txn)
 	}
 	history, err := run.historyValidator().ValidateHistory(txn.BaseCommit)
 	if err != nil {

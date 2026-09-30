@@ -41,7 +41,7 @@ func Add(ctx context.Context, options Options, allowEmpty bool) (AddResult, erro
 	}
 	if txn, err := run.loadTransaction(); err != nil {
 		return AddResult{}, err
-	} else if txn != nil && (txn.Plan == nil || txn.Capture != nil || len(txn.CandidateFiles) != 0 || txn.DataPartCount != 0 || txn.LocalCommit != "" || txn.PushAttempted) {
+	} else if txn != nil && !txn.replaceableByAdd() {
 		return AddResult{}, fmt.Errorf("commit progress already exists; finish commit or reset before replacing the add plan")
 	} else if txn != nil {
 		if err := run.cleanupPlanGenerations(txn.Plan); err != nil {
@@ -96,7 +96,7 @@ func Add(ctx context.Context, options Options, allowEmpty bool) (AddResult, erro
 		return AddResult{}, err
 	}
 	defer func() { _ = root.Close() }()
-	scan, plan, uniqueNew, newPacks, noChanges, err := run.buildAddPlan(ctx, root, ignore, configBlobs, head.State, allowEmpty, nil)
+	scan, plan, content, noChanges, err := run.buildAddPlan(ctx, root, ignore, configBlobs, head.State, allowEmpty, nil)
 	if err != nil {
 		return AddResult{}, err
 	}
@@ -113,21 +113,27 @@ func Add(ctx context.Context, options Options, allowEmpty bool) (AddResult, erro
 	if err := run.checkpoint("candidate-transaction-recorded"); err != nil {
 		return AddResult{}, err
 	}
-	return AddResult{BaseCommit: head.CommitID, Entries: plan.Entries, UniqueNewObjects: uniqueNew, NewPacks: newPacks, NoChanges: noChanges, Scan: scan}, nil
+	return AddResult{BaseCommit: head.CommitID, Entries: plan.Entries, UniqueNewObjects: content.Objects, NewBytes: content.Bytes, NewPacks: content.Packs, NoChanges: noChanges, Scan: scan}, nil
 }
 
-func (run *runtime) buildAddPlan(ctx context.Context, root *filesystem.Root, ignore format.Ignore, configBlobs map[string][]byte, base repository.State, allowEmpty bool, prior *stagedPlan) (filesystem.Result, *stagedPlan, int, int, bool, error) {
+// replaceableByAdd reports whether add may replace this transaction: it holds
+// an add plan without commit progress.
+func (txn *transaction) replaceableByAdd() bool {
+	return txn.Plan != nil && txn.Capture == nil && len(txn.CandidateFiles) == 0 && txn.DataPartCount == 0 && txn.LocalCommit == "" && !txn.PushAttempted
+}
+
+func (run *runtime) buildAddPlan(ctx context.Context, root *filesystem.Root, ignore format.Ignore, configBlobs map[string][]byte, base repository.State, allowEmpty bool, prior *stagedPlan) (filesystem.Result, *stagedPlan, provisionalContent, bool, error) {
 	ignore, err := run.filesystemScanIgnore(ignore)
 	if err != nil {
-		return filesystem.Result{}, nil, 0, 0, false, err
+		return filesystem.Result{}, nil, provisionalContent{}, false, err
 	}
 	buildDirectory, err := os.MkdirTemp(run.options.statePath(), ".add-build-")
 	if err != nil {
-		return filesystem.Result{}, nil, 0, 0, false, err
+		return filesystem.Result{}, nil, provisionalContent{}, false, err
 	}
 	if err := os.Chmod(buildDirectory, 0o700); err != nil {
 		_ = removeTreeIfPresent(buildDirectory)
-		return filesystem.Result{}, nil, 0, 0, false, err
+		return filesystem.Result{}, nil, provisionalContent{}, false, err
 	}
 	buildRemoved := false
 	defer func() {
@@ -144,12 +150,12 @@ func (run *runtime) buildAddPlan(ctx context.Context, root *filesystem.Root, ign
 		}
 		rows, err := run.openStaged(ref.RelativePath)
 		if err != nil {
-			return filesystem.Result{}, nil, 0, 0, false, err
+			return filesystem.Result{}, nil, provisionalContent{}, false, err
 		}
 		defer func() { _ = rows.Close() }()
 		index, err := newObservationIndex(ctx, filepath.Join(buildDirectory, "observations.index"), rows)
 		if err != nil {
-			return filesystem.Result{}, nil, 0, 0, false, err
+			return filesystem.Result{}, nil, provisionalContent{}, false, err
 		}
 		defer func() { _ = index.file.Close() }()
 		reuse = func(path string) (*format.IndexEntry, error) {
@@ -164,12 +170,12 @@ func (run *runtime) buildAddPlan(ctx context.Context, root *filesystem.Root, ign
 	rawHashesPath := filepath.Join(buildDirectory, "hashes.raw")
 	rawIndex, err := os.OpenFile(rawIndexPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
-		return filesystem.Result{}, nil, 0, 0, false, err
+		return filesystem.Result{}, nil, provisionalContent{}, false, err
 	}
 	rawHashes, err := os.OpenFile(rawHashesPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		_ = rawIndex.Close()
-		return filesystem.Result{}, nil, 0, 0, false, err
+		return filesystem.Result{}, nil, provisionalContent{}, false, err
 	}
 	indexWriter := bufio.NewWriterSize(rawIndex, 256<<10)
 	hashWriter := bufio.NewWriterSize(rawHashes, 256<<10)
@@ -213,14 +219,14 @@ func (run *runtime) buildAddPlan(ctx context.Context, root *filesystem.Root, ign
 	indexCloseErr := closeBuildFile(indexWriter, rawIndex)
 	hashCloseErr := closeBuildFile(hashWriter, rawHashes)
 	if walkErr != nil || reportErr != nil || indexCloseErr != nil || hashCloseErr != nil {
-		return filesystem.Result{}, nil, 0, 0, false, errors.Join(walkErr, reportErr, indexCloseErr, hashCloseErr)
+		return filesystem.Result{}, nil, provisionalContent{}, false, errors.Join(walkErr, reportErr, indexCloseErr, hashCloseErr)
 	}
 	if scan.Entries > uint64(^uint(0)>>1) {
-		return filesystem.Result{}, nil, 0, 0, false, fmt.Errorf("scan entry count is not representable")
+		return filesystem.Result{}, nil, provisionalContent{}, false, fmt.Errorf("scan entry count is not representable")
 	}
 	entries := int(scan.Entries)
 	if entries == 0 && !allowEmpty {
-		return filesystem.Result{}, nil, 0, 0, false, fmt.Errorf("scan produced an empty snapshot plan; use --allow-empty to accept it")
+		return filesystem.Result{}, nil, provisionalContent{}, false, fmt.Errorf("scan produced an empty snapshot plan; use --allow-empty to accept it")
 	}
 
 	run.options.progress.detailf("selected paths=%d hashed files=%d reused files=%d", scan.Entries, scan.HashedFiles, scan.ReusedFiles)
@@ -234,76 +240,76 @@ func (run *runtime) buildAddPlan(ctx context.Context, root *filesystem.Root, ign
 	}
 	sortedIndexPath := filepath.Join(buildDirectory, "index.tsv")
 	if err := extsort.SortFiles(buildDirectory, []string{rawIndexPath}, sortedIndexPath, extsort.Options{Unique: true, Key: firstField}); err != nil {
-		return filesystem.Result{}, nil, 0, 0, false, fmt.Errorf("sort add plan: %w", err)
+		return filesystem.Result{}, nil, provisionalContent{}, false, fmt.Errorf("sort add plan: %w", err)
 	}
 	sortedHashesPath := filepath.Join(buildDirectory, "hashes.tsv")
 	if err := extsort.SortFiles(buildDirectory, []string{rawHashesPath}, sortedHashesPath, extsort.Options{Key: firstField}); err != nil {
-		return filesystem.Result{}, nil, 0, 0, false, fmt.Errorf("sort provisional content hashes: %w", err)
+		return filesystem.Result{}, nil, provisionalContent{}, false, fmt.Errorf("sort provisional content hashes: %w", err)
 	}
 
 	if ^uint64(0)-base.ObjectCount < scan.Entries {
-		return filesystem.Result{}, nil, 0, 0, false, fmt.Errorf("deduplication entry count overflow")
+		return filesystem.Result{}, nil, provisionalContent{}, false, fmt.Errorf("deduplication entry count overflow")
 	}
 	dedup, err := newDedupIndex(filepath.Join(buildDirectory, "dedup.index"), base.ObjectCount+scan.Entries)
 	if err != nil {
-		return filesystem.Result{}, nil, 0, 0, false, err
+		return filesystem.Result{}, nil, provisionalContent{}, false, err
 	}
 	defer func() { _ = dedup.Close() }()
 	if err := base.WalkObjects(format.DefaultLimits(), func(object format.ObjectEntry) error {
 		return dedup.Insert(object.PlaintextHash, object.PlaintextSize)
 	}); err != nil {
-		return filesystem.Result{}, nil, 0, 0, false, err
+		return filesystem.Result{}, nil, provisionalContent{}, false, err
 	}
-	uniqueNew, newPacks, err := countProvisionalObjects(sortedHashesPath, dedup, run.options.PackTarget)
+	content, err := countProvisionalObjects(sortedHashesPath, dedup, run.options.PackTarget)
 	if err != nil {
-		return filesystem.Result{}, nil, 0, 0, false, err
+		return filesystem.Result{}, nil, provisionalContent{}, false, err
 	}
 
 	if err := ensurePrivateDirectory(run.options.transactionFilesPath()); err != nil {
-		return filesystem.Result{}, nil, 0, 0, false, err
+		return filesystem.Result{}, nil, provisionalContent{}, false, err
 	}
 	generation, err := randomHex(8)
 	if err != nil {
-		return filesystem.Result{}, nil, 0, 0, false, err
+		return filesystem.Result{}, nil, provisionalContent{}, false, err
 	}
 	prefix := filepath.Join("plans", generation)
 	generationPath, err := run.stagedPath(prefix)
 	if err != nil {
-		return filesystem.Result{}, nil, 0, 0, false, err
+		return filesystem.Result{}, nil, provisionalContent{}, false, err
 	}
 	if err := ensurePrivateDirectory(filepath.Dir(generationPath)); err != nil {
-		return filesystem.Result{}, nil, 0, 0, false, err
+		return filesystem.Result{}, nil, provisionalContent{}, false, err
 	}
 	if err := ensurePrivateDirectory(generationPath); err != nil {
-		return filesystem.Result{}, nil, 0, 0, false, err
+		return filesystem.Result{}, nil, provisionalContent{}, false, err
 	}
 	plan := &stagedPlan{Entries: entries, AllowEmpty: allowEmpty, ConfigFiles: make(map[string]stagedFileRef, 3)}
 	indexSource, err := os.Open(sortedIndexPath)
 	if err != nil {
-		return filesystem.Result{}, nil, 0, 0, false, err
+		return filesystem.Result{}, nil, provisionalContent{}, false, err
 	}
 	indexRelative := filepath.Join(prefix, "index.tsv")
 	indexDestination, _ := run.stagedPath(indexRelative)
 	copyErr := atomicWritePrivateFrom(indexDestination, indexSource)
 	closeErr := indexSource.Close()
 	if copyErr != nil || closeErr != nil {
-		return filesystem.Result{}, nil, 0, 0, false, errors.Join(copyErr, closeErr)
+		return filesystem.Result{}, nil, provisionalContent{}, false, errors.Join(copyErr, closeErr)
 	}
 	plan.IndexFile, err = run.referenceStagedFile(indexRelative)
 	if err != nil {
-		return filesystem.Result{}, nil, 0, 0, false, err
+		return filesystem.Result{}, nil, provisionalContent{}, false, err
 	}
 	for _, name := range []string{"ignore", ".publickeys", "mirrors.tsv"} {
 		relative := filepath.Join(prefix, stagedMetadataName(name))
 		ref, err := run.ensureStagedBytes(relative, configBlobs[name], stagedFileRef{})
 		if err != nil {
-			return filesystem.Result{}, nil, 0, 0, false, err
+			return filesystem.Result{}, nil, provisionalContent{}, false, err
 		}
 		plan.ConfigFiles[name] = ref
 	}
 	if prior != nil {
 		if err := run.stageObservations(ctx, prior, plan, buildDirectory); err != nil {
-			return filesystem.Result{}, nil, 0, 0, false, err
+			return filesystem.Result{}, nil, provisionalContent{}, false, err
 		}
 	}
 	noChanges := plan.IndexFile.Size == base.BlobSizes["index.tsv"] && plan.IndexFile.BLAKE2b == base.BlobHashes["index.tsv"]
@@ -312,13 +318,13 @@ func (run *runtime) buildAddPlan(ctx context.Context, root *filesystem.Root, ign
 		noChanges = noChanges && identity.Size == base.BlobSizes[name] && identity.BLAKE2b == base.BlobHashes[name]
 	}
 	if err := dedup.Close(); err != nil {
-		return filesystem.Result{}, nil, 0, 0, false, err
+		return filesystem.Result{}, nil, provisionalContent{}, false, err
 	}
 	if err := removeTreeIfPresent(buildDirectory); err != nil {
-		return filesystem.Result{}, nil, 0, 0, false, fmt.Errorf("clean add-plan build workspace: %w", err)
+		return filesystem.Result{}, nil, provisionalContent{}, false, fmt.Errorf("clean add-plan build workspace: %w", err)
 	}
 	buildRemoved = true
-	return scan, plan, uniqueNew, newPacks, noChanges, nil
+	return scan, plan, content, noChanges, nil
 }
 
 func (run *runtime) cleanupAddBuilds() error {
@@ -397,40 +403,52 @@ func (run *runtime) cleanupPlanGenerations(plan *stagedPlan) error {
 	return syncDirectory(plansPath)
 }
 
-func countProvisionalObjects(path string, dedup *dedupIndex, target uint64) (int, int, error) {
+// provisionalContent counts plan content that the base catalog lacks. Sizes
+// come from add-time observations; commit captures the current bytes.
+type provisionalContent struct {
+	Objects int
+	Packs   int
+	Bytes   uint64
+}
+
+func countProvisionalObjects(path string, dedup *dedupIndex, target uint64) (provisionalContent, error) {
 	file, err := os.Open(path)
 	if err != nil {
-		return 0, 0, err
+		return provisionalContent{}, err
 	}
 	defer func() { _ = file.Close() }()
 	scanner := bufio.NewScanner(file)
 	scanner.Buffer(make([]byte, 512), 1024)
-	unique, packs := 0, 0
+	var content provisionalContent
 	var packSize uint64
 	packMembers := 0
 	for scanner.Scan() {
 		fields := strings.Split(scanner.Text(), "\t")
 		if len(fields) != 2 {
-			return 0, 0, fmt.Errorf("invalid generated provisional hash row")
+			return provisionalContent{}, fmt.Errorf("invalid generated provisional hash row")
 		}
 		size, err := strconv.ParseUint(fields[1], 10, 64)
 		if err != nil || strconv.FormatUint(size, 10) != fields[1] {
-			return 0, 0, fmt.Errorf("invalid generated provisional size")
+			return provisionalContent{}, fmt.Errorf("invalid generated provisional size")
 		}
 		exists, err := dedup.Contains(fields[0], size)
 		if err != nil {
-			return 0, 0, err
+			return provisionalContent{}, err
 		}
 		if exists {
 			continue
 		}
 		if err := dedup.Insert(fields[0], size); err != nil {
-			return 0, 0, err
+			return provisionalContent{}, err
 		}
-		unique++
+		content.Objects++
+		if ^uint64(0)-content.Bytes < size {
+			return provisionalContent{}, fmt.Errorf("provisional content size overflow")
+		}
+		content.Bytes += size
 		wouldExceed := size > target || packSize > target-size || packMembers >= pack.MaximumMembersPerPack
 		if packMembers == 0 || wouldExceed {
-			packs++
+			content.Packs++
 			packSize, packMembers = 0, 0
 		}
 		if ^uint64(0)-packSize < size {
@@ -441,9 +459,9 @@ func countProvisionalObjects(path string, dedup *dedupIndex, target uint64) (int
 		packMembers++
 	}
 	if err := scanner.Err(); err != nil {
-		return 0, 0, err
+		return provisionalContent{}, err
 	}
-	return unique, packs, nil
+	return content, nil
 }
 
 func configurationByteLimit(name string) int64 {

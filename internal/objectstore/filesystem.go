@@ -213,6 +213,28 @@ func (store *Filesystem) check() error {
 	return nil
 }
 
+// RequireWritable rejects a store whose root or existing fixed write
+// directories deny this process write access, such as a disk whose directories
+// were made read-only between operations. Per-object directories are not
+// walked; a later create in one still fails.
+func (store *Filesystem) RequireWritable() error {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if err := store.check(); err != nil {
+		return err
+	}
+	for _, name := range []string{".", "objects", "metadata", "metadata/parts", "metadata/manifests"} {
+		err := unix.Faccessat(int(store.root.Fd()), name, unix.W_OK|unix.X_OK, unix.AT_EACCESS|unix.AT_SYMLINK_NOFOLLOW)
+		if errors.Is(err, unix.ENOENT) {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("filesystem mirror directory %s is not writable: %w", filepath.Join(store.directory, name), err)
+		}
+	}
+	return nil
+}
+
 func regularAt(parent int, name string) (*os.File, error) {
 	fd, err := unix.Openat(parent, name, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
 	if err != nil {

@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"log/slog"
+	"math"
 	"net"
 	"net/http"
 	"os"
@@ -154,7 +155,7 @@ func runAdd(ctx context.Context, arguments []string, stdout, stderr io.Writer) e
 	flags := flag.NewFlagSet("add", flag.ContinueOnError)
 	common := addCommon(flags)
 	allowEmpty := flags.Bool("allow-empty", false, "permit a zero-entry snapshot")
-	if err := parseFlags(flags, arguments, stdout, "[OPTIONS]", "Build a provisional path plan without uploading content; commit captures only these paths."); err != nil {
+	if err := parseFlags(flags, arguments, stdout, "[OPTIONS]", "Build a provisional path plan without uploading content; commit captures only these paths.\n\n"+addSummaryText); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 {
@@ -168,11 +169,25 @@ func runAdd(ctx context.Context, arguments []string, stdout, stderr io.Writer) e
 }
 
 func printAddResult(stdout io.Writer, result backupapp.AddResult) error {
-	if _, err := fmt.Fprintf(stdout, "base\t%s\nentries\t%d\nnew-objects\t%d\nnew-packs\t%d\nno-changes\t%t\n", result.BaseCommit, result.Entries, result.UniqueNewObjects, result.NewPacks, result.NoChanges); err != nil {
+	if _, err := fmt.Fprintf(stdout, "base\t%s\nentries\t%d\nnew-objects\t%d\nnew-size\t%s\nnew-packs\t%d\nno-changes\t%t\n", result.BaseCommit, result.Entries, result.UniqueNewObjects, humanBytes(result.NewBytes), result.NewPacks, result.NoChanges); err != nil {
 		return err
 	}
 	_, err := fmt.Fprintf(stdout, "skipped-special\t%d\nskipped-broken-symlinks\t%d\nskipped-outside-symlinks\t%d\nskipped-permission-denied\t%d\nmounts-entered\t%d\n", result.Scan.SkippedSpecial, result.Scan.SkippedBrokenSymlinks, result.Scan.SkippedOutsideSymlinks, result.Scan.SkippedPermissionDenied, result.Scan.MountsEntered)
 	return err
+}
+
+// humanBytes renders a byte count with binary units, such as "1.5 GiB".
+func humanBytes(n uint64) string {
+	if n < 1024 {
+		return fmt.Sprintf("%d B", n)
+	}
+	value, unit := float64(n)/1024, 0
+	// Advance while one-decimal rounding would print 1024.0 or more.
+	for unit < 5 && math.Round(value*10) >= 10240 {
+		value /= 1024
+		unit++
+	}
+	return fmt.Sprintf("%.1f %ciB", value, "KMGTPE"[unit])
 }
 
 func runDiff(arguments []string, stdout, stderr io.Writer) error {

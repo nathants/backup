@@ -41,7 +41,7 @@ func TestReplanCLI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"entries\t2\n", "reused-files\t1\n", "hashed-files\t1\n", "observations\tprovisional\n"} {
+	for _, want := range []string{"entries\t2\n", "new-size\t6 B\n", "reused-files\t1\n", "hashed-files\t1\n", "observations\tprovisional\n"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("summary missing %q: %s", want, output)
 		}

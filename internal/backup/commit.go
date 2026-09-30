@@ -31,6 +31,25 @@ func Commit(ctx context.Context, options Options) (SnapshotResult, error) {
 	if txn != nil {
 		run.options.progress.phasef("loading saved transaction: kind=%s capture-started=%t local-commit=%t push-confirmed=%t", txn.Kind, txn.Capture != nil, txn.LocalCommit != "", txn.PushConfirmed)
 	}
+	// Acceptance requires the branch at the transaction base. Check before the
+	// expensive capture and upload rather than rejecting their result.
+	if txn != nil && txn.BaseCommit != "" && txn.LocalCommit == "" {
+		head, err := run.repo.Head()
+		if err != nil {
+			return SnapshotResult{}, err
+		}
+		if head != txn.BaseCommit {
+			return SnapshotResult{}, run.movedBaseError(head, txn)
+		}
+	}
+	// Refuse a reachable read-only disk before capture or any upload. An
+	// unpinned first publication has no trusted mirrors loaded yet;
+	// startGenesis repeats this check once it loads them, before binding.
+	if txn != nil || run.preparation != nil {
+		if err := run.requireWritableFilesystemMirrors(ctx, run.config.Mirrors); err != nil {
+			return SnapshotResult{}, err
+		}
+	}
 	if run.preparation != nil {
 		txn, err = run.commitInitial(ctx, txn)
 		if err != nil {

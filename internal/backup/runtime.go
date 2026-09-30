@@ -723,6 +723,44 @@ func (run *runtime) client(ctx context.Context, mirror localconfig.Mirror) (obje
 	return client, nil
 }
 
+// requireWritableFilesystemMirrors fails when a reachable filesystem mirror is
+// read-only, such as a disk left locked between operations, even if another
+// mirror could complete the revision. An unreachable disk keeps its ordinary
+// lagging-mirror handling.
+func (run *runtime) requireWritableFilesystemMirrors(ctx context.Context, mirrors []localconfig.Mirror) error {
+	for _, mirror := range mirrors {
+		if mirror.Canonical.Kind != format.MirrorFilesystem {
+			continue
+		}
+		client, err := run.client(ctx, mirror)
+		if err != nil {
+			continue
+		}
+		if store, ok := client.(*objectstore.Filesystem); ok {
+			if err := store.RequireWritable(); err != nil {
+				return fmt.Errorf("mirror %s: %w", mirror.Canonical.Name, err)
+			}
+		}
+	}
+	return nil
+}
+
+// movedBaseError reports a metadata branch that no longer names the pending
+// transaction base. Backup cannot tell whether the new history is published,
+// so the guidance starts with preservation and inspection, and limits rewinding
+// to the operator's own unpublished commits. The checkout is named as data;
+// the message prints no shell commands built from its path.
+func (run *runtime) movedBaseError(head string, txn *transaction) error {
+	rest := "If they are published backup revisions, run add to plan against them. Otherwise investigate before changing anything"
+	if !txn.replaceableByAdd() {
+		rest = "Otherwise investigate before changing anything; this transaction has commit progress, so add cannot replace it"
+	}
+	return fmt.Errorf("metadata branch %s in checkout %q is at %s, not pending transaction base %s; nothing was changed. "+
+		"Preserve the checkout and inspect the commits after the base before acting. "+
+		"If you confirm they are only your own unpublished commits, soft-reset the branch to the base so their edits stay in the working tree, then retry. %s",
+		run.config.Branch, run.repo.Directory, head, txn.BaseCommit, rest)
+}
+
 func (run *runtime) mirror(name string) (localconfig.Mirror, bool) {
 	for _, mirror := range run.config.Mirrors {
 		if mirror.Canonical.Name == name {

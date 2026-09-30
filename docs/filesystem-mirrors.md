@@ -171,6 +171,13 @@ rechecked for each operation; a missing disk, wrong identity, changed directory,
 or missing required mount is unavailable, not conclusive object corruption.
 Normal incident/quarantine rules still apply to missing or corrupt required
 objects on a successfully identified store.
+Before it captures, uploads, or binds a first publication, `commit` fails when
+a reachable filesystem store's root, `objects`, `metadata`, `metadata/parts`,
+or `metadata/manifests` directory is not writable, for example a disk left
+locked between operations, even if another mirror could complete the revision.
+Make the store writable and rerun `commit`; deeper directories are not
+prechecked. See the
+[design exception](design.md#mirrors-and-self-contained-metadata).
 
 Listings use bounded batched traversal and sorted logical keys, without a
 persistent database or full-tree startup index. A listing is capped at one

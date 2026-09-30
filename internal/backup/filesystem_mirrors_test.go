@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -54,6 +55,102 @@ func newFilesystemHarness(t *testing.T) (*integrationHarness, string) {
 	t.Setenv("AWS_ENDPOINT_URL", "http://invalid.example")
 	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", filepath.Join(t.TempDir(), "absent"))
 	return h, identity
+}
+
+// A locked disk vetoes commit even when a healthy network mirror could carry
+// the revision: for the first publication, for later ones, and when resuming.
+func TestCommitRejectsLockedFilesystemMirrorBeforePublication(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses directory permissions")
+	}
+	h := newIntegrationHarness(t)
+	h.options.SpaceReserveBytes = 1
+	disk := privateTempDir(t)
+	identity, err := objectstore.InitializeFilesystem(disk, "-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := fmt.Sprintf("git-remote\t%s\nbranch\tmain\nmirror\tdisk\tfilesystem\t%s\t-\t-\t%s\t-\nmirror\tlocal\tbackup-server\ts3://backup-test/repository\t%s\tus-east-1\t-\t-\n", h.bare, identity, disk, h.http.URL)
+	if err := os.WriteFile(h.configPath, []byte(config), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	network := h.options.ClientFactory
+	h.options.ClientFactory = func(ctx context.Context, mirror localconfig.Mirror) (objectstore.Store, error) {
+		if mirror.Canonical.Kind == format.MirrorFilesystem {
+			return objectstore.OpenFilesystem(mirror.Directory, mirror.Mount, mirror.Canonical.S3URL, 1)
+		}
+		return network(ctx, mirror)
+	}
+	// Lock every store directory, as the operator's between-run guard does.
+	setWritable := func(writable bool) {
+		t.Helper()
+		mode := os.FileMode(0o500)
+		if writable {
+			mode = 0o700
+		}
+		if err := filepath.WalkDir(disk, func(path string, entry fs.DirEntry, err error) error {
+			if err != nil || !entry.IsDir() {
+				return err
+			}
+			return os.Chmod(path, mode)
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(func() { setWritable(true) })
+	ctx := context.Background()
+	if _, err := initWithKeys(ctx, h.options, h.publicKey); err != nil {
+		t.Fatal(err)
+	}
+	for _, kind := range []string{"initial", "ordinary"} {
+		if err := os.WriteFile(filepath.Join(h.root, kind), []byte(kind), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Add(ctx, h.options, false); err != nil {
+			t.Fatal(err)
+		}
+		primary := runGit(t, "--git-dir", h.bare, "for-each-ref")
+		setWritable(false)
+		if _, err := Commit(ctx, h.options); err == nil || !strings.Contains(err.Error(), "is not writable") {
+			t.Fatalf("%s commit with a locked disk: %v", kind, err)
+		}
+		if after := runGit(t, "--git-dir", h.bare, "for-each-ref"); after != primary {
+			t.Fatalf("%s commit with a locked disk published to the primary: %q -> %q", kind, primary, after)
+		}
+		run, err := openRuntime(h.options, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		txn, err := run.loadTransaction()
+		_ = run.close()
+		if err != nil || txn == nil || txn.Kind != kind || txn.Capture != nil || txn.LocalCommit != "" {
+			t.Fatalf("%s commit with a locked disk advanced its transaction: %+v %v", kind, txn, err)
+		}
+		setWritable(true)
+		// A run stopped after the primary push resumes only with the disk
+		// writable, although the network mirror alone could complete it.
+		stopped := false
+		interrupted := h.options
+		interrupted.failurePoint = func(point string) error {
+			if point == "git-push-confirmed" && !stopped {
+				stopped = true
+				return fmt.Errorf("simulated process stop")
+			}
+			return nil
+		}
+		if _, err := Commit(ctx, interrupted); err == nil || !stopped {
+			t.Fatalf("%s commit was not stopped after the primary push: %v", kind, err)
+		}
+		setWritable(false)
+		if _, err := Commit(ctx, h.options); err == nil || !strings.Contains(err.Error(), "is not writable") {
+			t.Fatalf("resumed %s commit with a locked disk: %v", kind, err)
+		}
+		setWritable(true)
+		result, err := Commit(ctx, h.options)
+		if err != nil || strings.Join(result.CompleteMirrors, ",") != "disk,local" {
+			t.Fatalf("%s commit after unlocking: %#v %v", kind, result, err)
+		}
+	}
 }
 
 func TestFilesystemBackupRestoreFullVerifyAndRecovery(t *testing.T) {

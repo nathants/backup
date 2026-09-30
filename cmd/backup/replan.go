@@ -12,7 +12,7 @@ import (
 func runReplan(ctx context.Context, arguments []string, stdout, stderr io.Writer) error {
 	flags := flag.NewFlagSet("replan", flag.ContinueOnError)
 	common := addCommon(flags)
-	if err := parseFlags(flags, arguments, stdout, "[OPTIONS]", "Refresh an existing add plan using current ignore rules and directory traversal.\nDiscover newly eligible paths; hash only files without a saved regular-file observation.\nKnown content, size, mode, and mtime remain provisional, even when changed on disk.\nSymlinks are resolved afresh. Commit captures current content; add refreshes all observations.\nPreserves the saved base and --allow-empty choice, without fetching or uploading.\nOnly ignore may change; recipient/topology edits require add. Refuses commit progress."); err != nil {
+	if err := parseFlags(flags, arguments, stdout, "[OPTIONS]", "Refresh an existing add plan using current ignore rules and directory traversal.\nDiscover newly eligible paths; hash only files without a saved regular-file observation.\nKnown content, size, mode, and mtime remain provisional, even when changed on disk.\nSymlinks are resolved afresh. Commit captures current content; add refreshes all observations.\nPreserves the saved base and --allow-empty choice, without fetching or uploading.\nOnly ignore may change; recipient/topology edits require add. Refuses commit progress.\n\n"+addSummaryText); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 {

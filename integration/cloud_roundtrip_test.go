@@ -57,7 +57,7 @@ func runCloudRoundTrip(t *testing.T, config cloudContractConfig, filesystemFirst
 		if err := os.Mkdir(disk, 0o700); err != nil {
 			t.Fatal(err)
 		}
-		identity := outputField(t, run(t, "", binary, "mirror-init", "--directory", disk), "store")
+		identity := outputField(t, runEnv(t, "", cleanEnvironment(t, nil), binary, "mirror-init", "--directory", disk), "store")
 		diskRow = "disk\tfilesystem\t" + identity + "\t-\t-"
 		diskBinding = "mirror\t" + diskRow + "\t" + disk + "\t-\n"
 		writeFile(t, configPath, []byte(baseConfig+diskBinding), 0o600)
@@ -70,7 +70,7 @@ func runCloudRoundTrip(t *testing.T, config cloudContractConfig, filesystemFirst
 		t.Fatal(err)
 	}
 	writeFile(t, filepath.Join(workspace, "recovery.secret"), []byte(hex.EncodeToString(secret)+"\n"), 0o600)
-	environment := cleanEnvironment(map[string]string{
+	environment := cleanEnvironment(t, map[string]string{
 		"AWS_SHARED_CREDENTIALS_FILE": credentialPath,
 		"AWS_CONFIG_FILE":             "/dev/null", "AWS_EC2_METADATA_DISABLED": "true",
 		"GIT_REMOTE_AWS_SECRETKEY": hex.EncodeToString(secret),

@@ -375,6 +375,8 @@ A backup revision succeeds when **at least one individual mirror** contains ever
 
 Unavailable mirrors do not block success once this invariant is met. They are reported as lagging.
 
+Exception: a reachable but read-only filesystem mirror vetoes `commit` instead of lagging. The operator unlocks the one disk mounted for a commit and relocks it afterwards, so a locked store means a forgotten unlock, not an outage. Before `commit` captures, uploads, or binds a first publication, every identified filesystem store's root, `objects`, `metadata`, `metadata/parts`, and `metadata/manifests` directories must allow writes; otherwise it fails, even when another mirror could complete the revision. The precheck does not walk the per-object directories below those; a write failure found there later leaves that mirror lagging like any other upload failure. A missing, unmounted, or unidentified disk remains an ordinary lagging mirror.
+
 Every object mirror is independently recoverable through an immutable Git-bundle chain:
 
 1. The first completed metadata revision on a mirror is a full encrypted Git bundle; each later revision is an encrypted incremental bundle for exactly `previous_commit..new_commit`.

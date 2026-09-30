@@ -52,7 +52,7 @@ func TestGitPrimaryProcessLifecycle(t *testing.T) {
 				wantStatus = 137
 			}
 			command := exec.CommandContext(t.Context(), "python3", "-I", "./reap.py", "--timeout", deadline, "--kill-after", "0.2", "--drained", marker, "--", binary, "-test.run=^TestGitPrimaryProcessTree$")
-			command.Env = cleanEnvironment(map[string]string{
+			command.Env = cleanEnvironment(t, map[string]string{
 				"BACKUP_REAP_SCENARIO": scenario, "BACKUP_REAP_DIRECTORY": directory,
 				"BACKUP_REAP_HELPER": helper, "GIT_REMOTE_AWS_PUBLICKEY": hex.EncodeToString(public),
 			})
@@ -212,7 +212,7 @@ func TestGitPrimaryContractRequiresRunner(t *testing.T) {
 	}
 	for _, resource := range []string{"", "production-bucket"} {
 		command := exec.CommandContext(t.Context(), binary, "-test.run=^TestAWSGitRemoteKeychains$")
-		command.Env = cleanEnvironment(map[string]string{
+		command.Env = cleanEnvironment(t, map[string]string{
 			"BACKUP_GIT_REMOTE_CONTRACT": "1", "BACKUP_GIT_REMOTE_RESOURCE": resource,
 			"LIBAWS_TEST_ACCOUNT": "123456789012", "PATH": t.TempDir(),
 		})

@@ -18,6 +18,11 @@ const resourceSafetyText = `untrusted-backup safety:
   Cover temporary and destination storage, including TMPDIR; the binary does
   not enforce these resource limits.`
 
+const addSummaryText = `summary:
+  new-objects and new-size count unique content absent from the base. new-size
+  is plaintext bytes observed while planning, before compression and encryption;
+  commit captures current bytes, so the upload can differ.`
+
 const decryptionHelpText = `decryption:
   Configure exactly one nonempty GIT_REMOTE_AWS_SECRETKEY,
   GIT_REMOTE_AWS_SECRETKEY_FILE, or GIT_REMOTE_AWS_SECRETKEY_CMD source with an

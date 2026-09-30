@@ -60,7 +60,7 @@ func TestRecoveryRestoreRunbook(t *testing.T) {
 	loader := filepath.Join(workspace, "loader")
 	writeFile(t, secretFile, []byte(hex.EncodeToString(secret)), 0600)
 	writeFile(t, loader, []byte("#!/bin/sh\n[ \"$1\" = '"+remote+"' ] || exit 2\ncat '"+secretFile+"'\n"), 0700)
-	environment := cleanEnvironment(map[string]string{
+	environment := cleanEnvironment(t, map[string]string{
 		"AWS_SHARED_CREDENTIALS_FILE": credentials, "AWS_CONFIG_FILE": "/dev/null",
 		"AWS_EC2_METADATA_DISABLED": "true", "GIT_REMOTE_AWS_SECRETKEY_CMD": loader,
 	})
@@ -266,14 +266,22 @@ func recoveryRestoreRunbook(t *testing.T) string {
 	return block
 }
 
-func TestCleanEnvironmentRemovesRecipientSources(t *testing.T) {
+func TestCleanEnvironmentIsolatesDeveloperState(t *testing.T) {
 	for _, name := range []string{"GIT_REMOTE_AWS_SECRETKEY", "GIT_REMOTE_AWS_SECRETKEY_FILE", "GIT_REMOTE_AWS_SECRETKEY_CMD"} {
 		t.Setenv(name, "synthetic-secret")
 	}
-	for _, entry := range cleanEnvironment(nil) {
+	var homes []string
+	for _, entry := range cleanEnvironment(t, nil) {
 		if strings.HasPrefix(entry, "GIT_REMOTE_AWS_") {
 			t.Fatal("recipient source leaked into fixture environment")
 		}
+		if home, ok := strings.CutPrefix(entry, "HOME="); ok {
+			homes = append(homes, home)
+		}
+	}
+	// The CLI writes debug logs under HOME; they must not reach the real home.
+	if len(homes) != 1 || homes[0] == os.Getenv("HOME") {
+		t.Fatalf("fixture environment lacks one private HOME: %q", homes)
 	}
 }
 
